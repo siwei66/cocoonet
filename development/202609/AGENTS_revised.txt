@@ -1,0 +1,358 @@
+# AGENTS.md
+
+## Project Overview
+
+Cocoonet is a distributed engine for large-scale evaluation of machine-learning models across independent, heterogeneous worker nodes.
+
+A primary dataset is synchronized to workers separately from evaluation tasks. The root coordinator then dispatches model definitions or recipes, hyperparameters, evaluation directives, and execution metadata. Workers evaluate tasks independently and return serialized reports such as predictions, metrics, and execution metadata.
+
+Supported workloads include scikit-learn-compatible estimators, PyTorch models through a defined execution contract, and evaluation strategies such as K-fold, grouped K-fold, Leave-One-Out (LOO), Leave-One-Group-Out (LOGO), and train/test splits.
+
+Correctness, reproducibility, auditability, failure transparency, and deterministic behavior take precedence over implementation convenience or premature optimization.
+
+---
+
+## Sources of Truth
+
+Use repository guidance in this order:
+
+1. Explicit user instructions for the current task.
+2. Applicable `AGENTS.md` files.
+3. `architecture.md` and protocol/schema specifications.
+4. `roadmap.md`.
+5. Tests.
+6. Existing implementation.
+
+If authoritative sources conflict, identify the conflict instead of silently choosing one.
+
+Do not infer new architecture from existing implementation alone.
+
+---
+
+## Development Workflow
+
+### Documentation First
+
+Before changing externally visible behavior, architecture, protocols, schemas, or persistent formats, verify that the intended behavior is documented.
+
+If documentation is missing but the design is already clear, update the relevant documentation before implementing it.
+
+If an architectural decision remains unresolved, stop at that boundary and ask the user to decide.
+
+### Small, Reviewable Change Units — Mandatory Approval Gate
+
+All implementation must proceed one change unit at a time, even when the user provides a high-level request covering an entire feature.
+
+Codex may decompose and describe the full implementation plan, but it must implement only the first unapproved change unit.
+
+A change unit is normally one of:
+
+* one production function;
+* one class method;
+* one narrowly scoped schema, declaration, configuration, or documentation change.
+
+The same unit may also include only the directly corresponding:
+
+* tests;
+* type annotations;
+* docstrings or documentation; and
+* minimal edits required to keep that unit valid.
+
+Do not include another production function, method, unrelated refactor, or future implementation step in the same unit.
+
+If one function depends on a new helper, implement and obtain approval for the helper first. Implement the caller in a later approved unit.
+
+After each change unit:
+
+1. Run the focused validation applicable to that unit.
+2. Report:
+
+   * what changed;
+   * files changed;
+   * tests/checks run and their results;
+   * any remaining concern; and
+   * the next proposed change unit.
+3. Stop.
+
+Do not begin the next change unit until the user explicitly approves continuation.
+
+A high-level implementation request, approval of an implementation plan, or approval of an earlier unit does not authorize later units automatically.
+
+When the user says `continue`, `approved`, or equivalent, implement only the next proposed unit and stop again.
+
+### No Unsolicited Scope Expansion
+
+Do not introduce unrelated:
+
+* dependencies;
+* abstractions;
+* utilities;
+* protocols;
+* framework support;
+* refactors; or
+* infrastructure.
+
+If additional scope is necessary, explain why and leave it for a later approved change unit.
+
+### Inspect Before Editing
+
+Before modifying a component, inspect:
+
+* the applicable `AGENTS.md`;
+* relevant architecture or protocol documentation;
+* the current implementation;
+* relevant tests; and
+* affected callers or consumers when changing a contract.
+
+---
+
+## Architecture Invariants
+
+### Independent Workers
+
+Workers must execute tasks independently without:
+
+* worker-to-worker communication;
+* shared distributed mutable state;
+* peer synchronization; or
+* worker consensus.
+
+Coordination belongs to the root coordinator.
+
+### Minimal Network Transfer
+
+Datasets should be synchronized separately from routine evaluation tasks.
+
+Task dispatch should contain only information needed to identify and execute the task, such as:
+
+* task and dataset identity;
+* model or model recipe;
+* hyperparameters;
+* evaluation directives;
+* seeds; and
+* protocol metadata.
+
+### Task Idempotency
+
+Every logical task must have a stable identity independent of worker assignment, retry attempt, connection, or process lifetime.
+
+Retries and duplicate execution must not:
+
+* create duplicate logical results;
+* corrupt coordinator state;
+* silently overwrite conflicting results; or
+* count the same task more than once.
+
+Logical task identity and execution-attempt identity must remain distinct.
+
+### Disk-First Report Ingestion
+
+Do not deserialize arbitrary report payloads in the active network event loop.
+
+Incoming reports should be:
+
+1. validated at the protocol boundary where possible;
+2. streamed asynchronously to staging storage;
+3. integrity-checked;
+4. finalized atomically; and
+5. deserialized only in an authorized processing context when required.
+
+### Explicit Failures
+
+Timeouts, transport failures, worker failures, serialization errors, invalid reports, and incompatibilities must not appear as successful empty results.
+
+Use explicit task/report status and error information.
+
+### Backpressure
+
+Network ingestion, task assignment, evaluation, and artifact persistence must use bounded concurrency or another explicit backpressure mechanism.
+
+Do not create unbounded tasks, queues, buffers, or transfers.
+
+---
+
+## Security and Trust
+
+`pickle`, `dill`, and equivalent Python-object formats are trusted-code serialization mechanisms, not safe untrusted-data formats.
+
+Do not deserialize Python objects from outside the documented trust boundary.
+
+Do not:
+
+* commit credentials or secrets;
+* log secrets;
+* place real credentials in tests;
+* assume TLS alone establishes application-level authorization; or
+* weaken execution isolation implicitly.
+
+Validate identifiers, protocol versions, sizes, checksums, and other metadata before expensive processing or deserialization where practical.
+
+---
+
+## Reproducibility
+
+Every evaluation must preserve enough machine-readable metadata to explain and reproduce the result where mathematically possible.
+
+Record as applicable:
+
+* logical task and attempt IDs;
+* dataset identity or fingerprint;
+* model/configuration identity;
+* evaluation and split configuration;
+* random seeds;
+* relevant runtime/package versions;
+* worker identity;
+* result artifact identity/checksum;
+* execution status; and
+* failure information.
+
+Random-number generators must be explicitly seeded where deterministic behavior is possible.
+
+Do not claim deterministic execution where the underlying framework or operation cannot guarantee it.
+
+Logs may supplement reproducibility metadata but must not be its only source.
+
+---
+
+## Protocol and Compatibility
+
+Treat these as compatibility-sensitive contracts:
+
+* task schemas;
+* report schemas;
+* protocol messages;
+* serialization formats;
+* identifiers;
+* dataset identity rules;
+* retry semantics;
+* persistent artifact layouts; and
+* public APIs.
+
+Do not silently change their meaning.
+
+Breaking changes require explicit documentation, versioning, tests, and defined migration or rejection behavior.
+
+Unsupported protocol or schema versions must fail explicitly rather than being interpreted heuristically.
+
+---
+
+## Technical Stack
+
+* Python 3.10+
+* `asyncio`
+* `aiofiles`
+* HTTP/WebSocket-based networking as defined by the architecture
+* `dill` / `pickle` where trusted Python-object serialization is required
+* `black`
+* `ruff`
+* `mypy` strict mode
+* `pytest`
+* `pytest-asyncio`
+
+Prefer existing dependencies and the Python standard library. New dependencies require a concrete project need.
+
+---
+
+## Code Standards
+
+### Typing
+
+New and modified code must be fully typed.
+
+Avoid unnecessary `Any`, broad ignores, unchecked casts, and suppressions that hide real errors.
+
+### Documentation
+
+Use NumPy-style docstrings for public APIs and non-obvious components.
+
+Document contracts, side effects, lifecycle requirements, and important exceptions where relevant.
+
+Do not add verbose comments or docstrings that merely restate the code.
+
+### Comments
+
+Use comments for non-obvious rationale, especially around:
+
+* concurrency;
+* retries;
+* idempotency;
+* artifact finalization;
+* protocol validation; and
+* reproducibility.
+
+### Structure
+
+* Maximum line length: 120 characters.
+* Keep functions focused.
+* Reconsider functions substantially exceeding about 100 lines.
+* Reconsider modules that become difficult to navigate because they contain unrelated responsibilities.
+
+Do not split code solely to satisfy numeric limits.
+
+### Exceptions and Cancellation
+
+Catch exceptions only to recover, translate them, add useful context, or perform necessary cleanup.
+
+Do not hide unexpected failures.
+
+Async code must preserve correct cancellation behavior and must not convert cancellation into success.
+
+---
+
+## Testing
+
+Every behavioral change unit must include or update the tests required to validate that unit.
+
+Prioritize tests for:
+
+* normal execution;
+* invalid input;
+* deterministic behavior;
+* duplicate task/result handling;
+* retries and timeouts;
+* worker disconnects;
+* partial artifact transfer;
+* incompatible protocol versions; and
+* scientific split/metric correctness where applicable.
+
+For async tests, prefer explicit synchronization such as events, queues, or futures over arbitrary sleeps.
+
+Do not weaken tests or quality configuration merely to make validation pass.
+
+---
+
+## Validation
+
+Before presenting a change unit for approval, run the narrowest relevant checks available in the repository.
+
+Where applicable, validate:
+
+* focused tests;
+* formatting;
+* linting;
+* static typing.
+
+Use repository-defined commands rather than inventing alternatives.
+
+If a required check cannot be run, report:
+
+* which check was skipped;
+* why it could not run; and
+* what validation was performed instead.
+
+Never claim that an unexecuted check passed.
+
+---
+
+## Definition of Done for One Change Unit
+
+A change unit is ready for user review only when:
+
+* the unit implements only its approved scope;
+* relevant tests are included and pass where executable;
+* applicable formatting, linting, and typing checks pass;
+* architecture and compatibility requirements are preserved;
+* no unrelated changes are included; and
+* validation results are reported.
+
+After reaching this point, stop and wait for explicit user approval before implementing the next unit.

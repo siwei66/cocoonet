@@ -1,0 +1,788 @@
+# 3. Other needed sections for `AGENTS.md`
+
+I recommend adding the following sections. I have intentionally kept each one in a **separate quoted text block** so you can decide individually whether to insert it.
+
+## A. Repository Sources of Truth
+
+> ## Repository Sources of Truth
+>
+> Agents must distinguish normative project documents from descriptive or historical documents.
+>
+> Unless more-specific repository documentation states otherwise, use the following precedence:
+>
+> 1. Explicit user requirements for the current task.
+> 2. Applicable `AGENTS.md` instructions.
+> 3. `architecture.md` for architectural invariants and component boundaries.
+> 4. Protocol/schema specifications for wire and persistence contracts.
+> 5. `roadmap.md` for planned scope and sequencing.
+> 6. Tests for currently enforced behavior.
+> 7. Implementation code for current mechanics.
+> 8. Comments, examples, and historical notes.
+>
+> If two normative sources conflict, do not silently choose one based on implementation convenience. Identify the conflict and resolve the governing contract before introducing new behavior.
+>
+> Tests that contradict an explicitly documented architecture may indicate either a regression or stale documentation; investigate rather than automatically treating either source as authoritative.
+
+### Why this section is needed
+
+Your current file has a documentation-first rule referencing `architecture.md` and `roadmap.md`, but it does not define what happens when documentation, tests, and code disagree.
+
+That ambiguity becomes particularly problematic for Codex because it can see several apparently authoritative sources at once. Giving it an explicit hierarchy materially reduces accidental “fixes” that actually violate the intended architecture.
+
+OpenAI itself recommends using `AGENTS.md` as persistent repository guidance and, for larger agent-oriented repositories, treating it more like a map into structured documentation than an encyclopedia containing every detail. ([OpenAI][2])
+
+---
+
+## B. Security and Trust Boundaries
+
+> ## Security and Trust Boundaries
+>
+> Cocoonet executes and transports Python model objects and therefore must explicitly distinguish trusted code from untrusted data.
+>
+> ### Serialized Python Objects
+>
+> `pickle`, `dill`, or equivalent Python-object serialization must never be treated as a safe untrusted-input format.
+>
+> Do not deserialize a model, task payload, result artifact, or other Python object unless its source is within the explicitly documented trust boundary.
+>
+> ### Authentication and Integrity
+>
+> Network protocol design must provide a way to establish:
+>
+> * worker/coordinator identity;
+> * authorization to submit or execute work;
+> * integrity of task and report payloads; and
+> * correspondence between an artifact and its expected task.
+>
+> Do not assume that transport encryption alone establishes application-level trust.
+>
+> ### Secrets
+>
+> Never:
+>
+> * commit credentials, access tokens, private keys, or passwords;
+> * include secrets in task/report payloads unless explicitly required;
+> * write secrets to structured logs;
+> * expose secrets in exception messages; or
+> * include real credentials in tests or examples.
+>
+> ### Resource Isolation
+>
+> Model execution must be considered arbitrary user-code execution unless the project defines a narrower trusted execution model.
+>
+> New functionality must not implicitly weaken process, filesystem, environment, network, or resource isolation assumptions.
+>
+> ### Input and Artifact Validation
+>
+> Validate protocol metadata, identifiers, declared lengths, checksums, supported protocol versions, and resource limits before expensive processing or deserialization where practical.
+
+### Why this section is needed
+
+For this project, this is not optional hardening. A distributed ML system carrying pickled/dilled model objects creates a direct code-execution trust boundary.
+
+Python's documentation states that unpickling untrusted or tampered data can execute arbitrary code. ([Python documentation][1])
+
+Your architecture therefore needs a conscious answer to questions such as:
+
+* Is every worker fully trusted?
+* Is the root fully trusted by workers?
+* Can users submit arbitrary models?
+* Can worker-produced `.dill` reports ever be untrusted?
+* How are workers authenticated?
+* How is artifact tampering detected?
+
+`AGENTS.md` does not need to answer all of these, but it should prevent Codex from accidentally implementing a design that assumes they do not matter.
+
+---
+
+## C. Task Identity, State, and Idempotency Contract
+
+> ## Task Identity, State, and Idempotency Contract
+>
+> Every distributed task must have a stable logical identity that is independent of a particular network connection, worker assignment, retry attempt, or process lifetime.
+>
+> Unless the architecture explicitly defines otherwise:
+>
+> * retries preserve logical task identity;
+> * execution attempts have distinct attempt identities;
+> * duplicate successful reports for the same logical task must be detectable;
+> * conflicting successful reports must not be silently accepted;
+> * coordinator restart must not change the logical identity of existing tasks.
+>
+> Task lifecycle transitions must be explicit and validated.
+>
+> A typical lifecycle may distinguish states such as:
+>
+> * pending;
+> * assigned;
+> * running;
+> * succeeded;
+> * failed;
+> * retryable;
+> * cancelled; and
+> * expired.
+>
+> Do not introduce a new state or state transition without updating the documented task lifecycle.
+>
+> State transitions must not depend solely on in-memory process state if coordinator restart/recovery is expected to preserve correctness.
+
+### Why this section is needed
+
+The current file says jobs must be idempotent, but idempotency is not an implementation property that emerges automatically. 
+
+You need explicit semantics around:
+
+**logical task → attempt → result**
+
+Otherwise Codex could implement retry handling differently in multiple locations and create race conditions such as:
+
+* task A times out;
+* task A is reassigned;
+* old worker finishes;
+* new worker also finishes;
+* both reports arrive;
+* coordinator records two successes.
+
+That is one of the central correctness problems of this architecture.
+
+---
+
+## D. Protocol and Artifact Contract
+
+> ## Protocol and Artifact Contract
+>
+> Wire messages and persisted artifacts are compatibility-sensitive interfaces.
+>
+> Every protocol object should have an explicit schema or documented structural contract.
+>
+> Protocol-level metadata should include sufficient information to identify:
+>
+> * message or artifact type;
+> * schema/protocol version;
+> * logical task;
+> * execution attempt where applicable;
+> * dataset identity;
+> * payload length or framing information where applicable; and
+> * integrity information where required.
+>
+> Do not infer protocol semantics from Python class layout alone.
+>
+> ### Versioning
+>
+> Readers must reject unsupported protocol/schema versions explicitly rather than attempting best-effort interpretation.
+>
+> Compatible schema extensions should be designed intentionally.
+>
+> Breaking changes require:
+>
+> 1. an explicit version change;
+> 2. documentation;
+> 3. compatibility tests; and
+> 4. migration or rejection behavior.
+>
+> ### Artifact Finalization
+>
+> Incoming artifacts must not appear as successfully committed artifacts until transfer and required integrity checks complete.
+>
+> Prefer staging followed by atomic finalization so readers never observe partially written successful artifacts.
+
+### Why this section is needed
+
+Your system relies on persistent serialized evaluation reports and remote task dispatch. That means your wire protocol and artifact layout effectively become APIs.
+
+Without this section, Codex may naturally evolve Python classes while accidentally changing:
+
+* serialized report structures;
+* retry compatibility;
+* persisted files;
+* worker/coordinator compatibility.
+
+This tends to become expensive to correct later.
+
+---
+
+## E. Reproducibility Manifest
+
+> ## Reproducibility Manifest
+>
+> Every completed evaluation must be attributable to a reproducibility record or equivalent structured metadata.
+>
+> The record should contain, where applicable:
+>
+> * logical task ID;
+> * execution attempt ID;
+> * dataset ID and content fingerprint/version;
+> * model/recipe identity;
+> * complete evaluation parameters;
+> * split strategy and split identity;
+> * random seed values;
+> * relevant package versions;
+> * Python version;
+> * platform/runtime metadata relevant to numerical behavior;
+> * worker identity;
+> * execution timestamps;
+> * result artifact identities/checksums;
+> * task status; and
+> * error metadata for failed execution.
+>
+> For PyTorch or other frameworks where exact deterministic execution cannot be guaranteed, record relevant determinism settings and document known limitations.
+>
+> Reproducibility metadata must be machine-readable.
+>
+> Logs may supplement this metadata but must not be the sole source of information necessary to identify an evaluation.
+
+### Why this section is needed
+
+The current file correctly requires seeding and structured logging. 
+
+For scientific research, however, a random seed alone is not sufficient. Reproducing an experiment often depends on:
+
+`dataset + split + model/config + seed + environment + code/protocol version`
+
+Making this an explicit data structure is much stronger than hoping all necessary facts can later be reconstructed from logs.
+
+---
+
+## F. Async and Concurrency Invariants
+
+> ## Async and Concurrency Invariants
+>
+> Asynchronous code must preserve event-loop responsiveness and explicit ownership of mutable state.
+>
+> ### Event-Loop Safety
+>
+> Do not perform blocking filesystem, CPU-heavy, model-evaluation, compression, hashing of very large payloads, or deserialization work directly on the active event-loop path unless the operation is demonstrably bounded and negligible.
+>
+> ### Cancellation
+>
+> Cancellation is part of normal asynchronous control flow.
+>
+> Code must:
+>
+> * preserve cancellation rather than accidentally swallowing it;
+> * perform required cleanup;
+> * avoid leaving partially committed coordinator state; and
+> * avoid representing cancellation as successful execution.
+>
+> ### Shared State
+>
+> Mutable coordinator state accessed by concurrent coroutines must have an explicit ownership or synchronization strategy.
+>
+> Do not add locks automatically. Prefer designs with clear state ownership and minimized shared mutation.
+>
+> ### Backpressure
+>
+> Network ingestion, task assignment, and artifact persistence must have bounded concurrency or another explicit backpressure mechanism.
+>
+> Do not create unbounded tasks, queues, buffers, or concurrent file transfers.
+
+### Why this section is needed
+
+Your architecture is explicitly based on `asyncio`, asynchronous workers, and asynchronous report ingestion. 
+
+That makes event-loop blocking, cancellation, backpressure, and shared coordinator state first-class architecture concerns.
+
+This section is likely to prevent more real bugs than generic style rules.
+
+---
+
+## G. Testing Strategy and Test Boundaries
+
+> ## Testing Strategy
+>
+> Tests must be classified according to the behavior they verify.
+>
+> ### Unit Tests
+>
+> Unit tests should validate deterministic local behavior without requiring live external infrastructure.
+>
+> ### Protocol Tests
+>
+> Protocol tests should verify:
+>
+> * serialization/framing;
+> * schema validation;
+> * version handling;
+> * malformed input handling; and
+> * compatibility expectations.
+>
+> ### Async/Concurrency Tests
+>
+> Prefer explicit synchronization primitives over sleeps.
+>
+> Tests must not rely on arbitrary timing delays to establish ordering when deterministic coordination can be used.
+>
+> ### Distributed Failure Tests
+>
+> Important coordinator/worker behavior should test scenarios including:
+>
+> * duplicate task delivery;
+> * duplicate result delivery;
+> * worker disconnect;
+> * timeout;
+> * retry;
+> * coordinator restart where supported;
+> * partial artifact upload;
+> * malformed report metadata; and
+> * incompatible protocol versions.
+>
+> ### Scientific Correctness Tests
+>
+> Evaluation implementations should validate:
+>
+> * split membership;
+> * absence of unintended data leakage;
+> * deterministic split generation where applicable;
+> * metric correctness; and
+> * equivalence to a trusted local reference implementation where practical.
+>
+> ### Integration Tests
+>
+> Integration tests involving multiple coordinator/worker processes must remain isolated, reproducible, and suitable for automated execution.
+
+### Why this section is needed
+
+The existing file asks for granular unit tests, but Cocoonet's highest-risk defects are not ordinary single-function defects. They are likely to involve:
+
+* retries,
+* duplicated messages,
+* partial transfers,
+* async scheduling,
+* split correctness,
+* process boundaries.
+
+A testing section should tell Codex which failure modes matter rather than only telling it to write tests incrementally.
+
+---
+
+## H. Validation Commands
+
+> ## Validation Commands
+>
+> Repository commands listed here must reflect the actual project configuration. Do not invent commands that the repository does not support.
+>
+> Before completing a code change, run the narrowest applicable validation first and then the broader repository checks required for the changed scope.
+>
+> Once the repository exposes canonical commands, document them here for:
+>
+> * environment/bootstrap installation;
+> * formatting;
+> * linting;
+> * static type checking;
+> * unit tests;
+> * integration tests;
+> * complete test suite; and
+> * documentation validation, if applicable.
+>
+> If a required command cannot be executed in the current environment:
+>
+> 1. state which command was not run;
+> 2. state why;
+> 3. report the validation that was performed instead; and
+> 4. do not claim the unavailable check passed.
+>
+> Agents must never modify tests, lint configuration, typing configuration, or quality thresholds merely to make validation pass unless the requested task specifically concerns those configurations.
+
+### Why this section is needed
+
+This is particularly useful for Codex. OpenAI recommends putting repository navigation, testing commands, and project practices in `AGENTS.md`, and says Codex should make a best effort to run programmatic checks specified there after changes. ([OpenAI][3])
+
+I have deliberately **not invented actual commands** such as `uv run pytest` or `poetry run mypy`, because the uploaded source does not establish whether you use `uv`, Poetry, pip, Hatch, Make, tox, or another runner.
+
+Once the repository structure is known, this should become one of the most concrete sections in the file.
+
+---
+
+## I. Definition of Done
+
+> ## Definition of Done
+>
+> A code task is complete only when all applicable conditions are satisfied:
+>
+> * requested behavior is implemented;
+> * implementation conforms to documented architecture;
+> * affected tests are added or updated;
+> * relevant tests pass;
+> * formatting passes;
+> * linting passes;
+> * static type checking passes;
+> * public or compatibility-sensitive behavior is documented;
+> * no unrelated changes are included;
+> * error and cancellation behavior has been considered;
+> * reproducibility requirements are satisfied where applicable;
+> * compatibility implications have been considered; and
+> * any validation that could not be executed is reported explicitly.
+>
+> Passing tests alone does not establish completion if the implementation violates an architectural invariant.
+
+### Why this section is needed
+
+It gives Codex an explicit termination condition. Without one, coding agents can interpret “finished” as “the requested function exists,” even if type checking, protocol compatibility, documentation, or failure behavior remains unresolved.
+
+---
+
+# 4. Reasons for the new sections as a whole
+
+The proposed additions fall into four categories.
+
+**Repository governance:** “Sources of Truth,” “Validation Commands,” and “Definition of Done” tell Codex how to reason about the repository rather than simply how to format code.
+
+**Distributed-systems correctness:** “Task Identity,” “Protocol and Artifact Contract,” and “Async and Concurrency Invariants” address the failure modes created specifically by your root/worker design. The existing document already establishes independent workers, asynchronous execution, minimal network transfer, and idempotency; the new sections make those principles operational. 
+
+**Scientific correctness:** “Reproducibility Manifest” and the scientific portions of “Testing Strategy” make auditability enforceable as structured data and tests rather than only an aspiration.
+
+**Security:** “Security and Trust Boundaries” is necessary because model serialization is not ordinary data serialization. Python explicitly states that unpickling untrusted data can lead to arbitrary code execution. ([Python documentation][1])
+
+If you want to keep the root `AGENTS.md` short, I would prioritize these five additions:
+
+1. **Repository Sources of Truth**
+2. **Security and Trust Boundaries**
+3. **Task Identity, State, and Idempotency Contract**
+4. **Validation Commands**
+5. **Definition of Done**
+
+Then move the longer protocol, reproducibility, and testing specifications into dedicated files under `docs/` and link to them from `AGENTS.md`.
+
+That approach is also consistent with OpenAI's current guidance from its own agent-oriented engineering experience: use `AGENTS.md` principally as a concise map and keep deeper system knowledge in structured repository documentation. ([OpenAI][2])
+
+---
+
+# 5. Important tips for planning and implementation with Codex
+
+For this particular project, I recommend using Codex in **architecture-sized increments rather than file-sized increments**.
+
+### 1. Make `AGENTS.md` the rules, not the specification database
+
+Keep stable operating constraints in `AGENTS.md`:
+
+* where Codex should look;
+* what it must never violate;
+* commands it must run;
+* definition of done;
+* compatibility/security rules.
+
+Put detailed designs elsewhere:
+
+```text
+AGENTS.md
+architecture.md
+roadmap.md
+docs/
+├── protocol/
+│   ├── task-protocol.md
+│   ├── report-protocol.md
+│   └── versioning.md
+├── design/
+│   ├── coordinator.md
+│   ├── worker.md
+│   ├── dataset-sync.md
+│   └── artifact-storage.md
+├── reproducibility.md
+└── testing.md
+```
+
+OpenAI's own guidance now specifically describes a pattern in which `AGENTS.md` serves as the map and the deeper repository knowledge lives in structured documentation. ([OpenAI][2])
+
+### 2. Design your protocol before implementing networking
+
+For Cocoonet, I would not start by asking Codex to “implement the coordinator” or “implement WebSockets.”
+
+First define:
+
+```text
+DatasetIdentity
+WorkerIdentity
+
+TaskId
+AttemptId
+TaskDescriptor
+TaskStatus
+TaskFailure
+
+ReportDescriptor
+ArtifactDescriptor
+
+ProtocolVersion
+SchemaVersion
+```
+
+Then define their invariants.
+
+Networking becomes substantially easier once these contracts are stable.
+
+### 3. Separate logical task identity from execution attempt identity
+
+This is probably the most important distributed-systems design decision in the project.
+
+For example:
+
+```text
+logical task T123
+    attempt A1 -> worker W1 -> timeout
+    attempt A2 -> worker W2 -> succeeds
+    attempt A1 -> late success
+```
+
+The coordinator needs deterministic rules for what happens to that late success.
+
+Do not defer this decision until retry logic is implemented.
+
+### 4. Build a local reference execution path before distributed execution
+
+Before remote workers are involved, implement a single-process reference path that can perform:
+
+```text
+dataset
+  ↓
+split specification
+  ↓
+model
+  ↓
+fit/evaluate
+  ↓
+EvaluationReport
+```
+
+Then distributed execution becomes a mechanism for executing the same semantic task elsewhere.
+
+This gives you an excellent oracle for integration testing:
+
+```text
+local evaluation ≈ distributed evaluation
+```
+
+for deterministic models and workloads.
+
+### 5. Implement vertical slices
+
+A good Codex task should be something like:
+
+> Implement TaskId parsing and validation according to `docs/protocol/task-protocol.md`. Add focused unit tests. Do not modify the network layer.
+
+Then:
+
+> Implement TaskDescriptor validation using the existing TaskId implementation. Add corresponding tests.
+
+Then:
+
+> Implement coordinator persistence for accepted TaskDescriptors.
+
+This produces far more reliable output than:
+
+> Build the coordinator.
+
+### 6. Give Codex explicit acceptance criteria
+
+For every task, specify:
+
+```text
+Goal
+In scope
+Out of scope
+Relevant documentation
+Invariants
+Expected files
+Tests required
+Validation commands
+Compatibility constraints
+```
+
+The “out of scope” section is particularly valuable for this project because otherwise an agent may opportunistically redesign protocol or abstractions while solving a small problem.
+
+### 7. Ask Codex to inspect before changing
+
+For implementation prompts, make the first requirement something like:
+
+> Inspect the applicable AGENTS.md, architecture documentation, implementation, tests, and callers before editing. Do not change code until the current contract and affected dependencies have been identified.
+
+Codex supports repository-scoped `AGENTS.md` instructions, and more deeply nested `AGENTS.md` files can apply more specific guidance to subtrees. ([OpenAI][4])
+
+That means later you could use:
+
+```text
+AGENTS.md
+src/
+├── coordinator/
+│   └── AGENTS.md
+├── worker/
+│   └── AGENTS.md
+└── protocol/
+    └── AGENTS.md
+```
+
+Only do this where subdirectory rules genuinely differ. Otherwise a single root file is easier to maintain.
+
+### 8. Make test commands deterministic and explicit
+
+Once your package tooling is chosen, put exact commands in `AGENTS.md`, for example conceptually:
+
+```text
+focused unit test
+type checking
+linting
+format check
+full test suite
+integration tests
+```
+
+Use the **actual commands from your repository**, not generic ones.
+
+Codex performs better when the repository has a configured development environment and reliable test setup, and OpenAI explicitly recommends putting navigation/testing guidance in `AGENTS.md`. ([OpenAI][3])
+
+### 9. Test failure paths earlier than usual
+
+For this architecture, I would prioritize failure tests almost immediately after the happy path:
+
+```text
+normal completion
+duplicate completion
+timeout + retry
+late result
+connection drop during result transfer
+partial artifact
+invalid checksum
+worker dies
+coordinator restarts
+unsupported protocol version
+corrupt serialized object
+```
+
+Distributed-system error behavior is substantially harder to retrofit after the happy-path protocol has solidified.
+
+### 10. Avoid sleep-driven async tests
+
+A test such as:
+
+```python
+await asyncio.sleep(0.1)
+assert task.finished
+```
+
+is inherently fragile.
+
+Prefer explicit signals such as:
+
+```python
+asyncio.Event
+Queue
+Future
+mock transport completion
+barrier-like helpers
+```
+
+Then the test verifies causality rather than machine speed.
+
+### 11. Establish backpressure before load testing
+
+Do not let Codex naturally evolve code into patterns such as:
+
+```python
+for request in requests:
+    asyncio.create_task(process(request))
+```
+
+without a bounded lifecycle.
+
+Define limits for:
+
+* concurrent task execution;
+* pending assignments;
+* report uploads;
+* artifact writes;
+* memory buffering.
+
+Otherwise a system that works beautifully with 10 tasks may collapse at 100,000.
+
+### 12. Treat `pickle`/`dill` execution as a trust decision
+
+Do not ask Codex simply to:
+
+> deserialize the model and execute it.
+
+First define whether models come from trusted users and whether workers are trusted execution environments.
+
+Python explicitly warns against unpickling untrusted content because deserialization can execute arbitrary code. ([Python documentation][1])
+
+For model objects, that security question is inseparable from the architecture.
+
+### 13. Keep scientific metadata separate from operational logs
+
+Structured logs are valuable, but they should not be the only place from which an experiment can be reconstructed.
+
+I recommend having a first-class object conceptually similar to:
+
+```text
+EvaluationManifest
+├── task identity
+├── dataset fingerprint
+├── model/config fingerprint
+├── split definition
+├── seeds
+├── runtime versions
+├── worker metadata
+├── artifact hashes
+└── status
+```
+
+Persist that next to or inside the evaluation report.
+
+### 14. Let Codex change docs and implementation together when the design is already determined
+
+I would avoid the current rule requiring:
+
+> update docs → commit → new task → implement.
+
+That creates process overhead without necessarily improving design quality.
+
+A better distinction is:
+
+**Unresolved design:** stop at the design decision.
+
+**Resolved design but undocumented:** update documentation first, then implement it in the same coherent change if requested.
+
+That still gives you documentation-first development without artificial session boundaries.
+
+### 15. Have Codex report evidence, not merely completion
+
+A useful final response from Codex should state:
+
+```text
+Changed
+Why
+Tests added/changed
+Commands run
+Results
+Commands not run and why
+Compatibility impact
+Remaining risks
+```
+
+Avoid accepting only:
+
+> Implemented successfully.
+
+For a scientific/distributed system, evidence of validation is much more useful.
+
+### 16. Preserve human review at protocol and security boundaries
+
+Codex is well suited to implementation, testing, refactoring, and review, but OpenAI still recommends reviewing and validating agent-generated code before integration. ([OpenAI][3])
+
+I would require especially careful human review for:
+
+* task identity semantics;
+* retry/state transitions;
+* authentication;
+* `pickle`/`dill` boundaries;
+* artifact integrity;
+* dataset fingerprinting;
+* protocol versioning;
+* cancellation handling;
+* concurrency primitives;
+* scientific split logic.
+
+Those are the places where a locally reasonable implementation can create a subtle system-level error.
+
+[1]: https://docs.python.org/3.11/library/pickle.html?utm_source=chatgpt.com "pickle — Python object serialization — Python 3.11.16 documentation"
+[2]: https://openai.com/index/harness-engineering/?utm_source=chatgpt.com "Harness engineering: leveraging Codex in an agent-first world | OpenAI"
+[3]: https://openai.com/index/introducing-codex/?utm_source=chatgpt.com "Introducing Codex | OpenAI"
+[4]: https://openai.com/index/unrolling-the-codex-agent-loop/?utm_source=chatgpt.com "Unrolling the Codex agent loop | OpenAI"
