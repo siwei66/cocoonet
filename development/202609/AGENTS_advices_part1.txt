@@ -1,0 +1,99 @@
+The repository is a scaffold: no source or test files were found outside the excluded `/development` directory, `pyproject.toml` is empty, and `README.md` contains only a title. `docs/architecture.md` and `docs/roadmap.md` exist; their contents were not reviewed. No files were changed.
+
+**[Project Overview](E:/swectral_new/cocoonet/AGENTS.md:3)**
+- **Model support has no clear execution boundary.** `fit`/`predict` compatibility and PyTorch support do not establish responsibility for training, preprocessing, device selection, or evaluation. Implementations could make incompatible assumptions.
+- **Task granularity and evaluation correctness are unspecified.** A task could mean an entire evaluation, one fold, or one sample. There are no explicit invariants around data leakage, sample identity, or prediction alignment, creating risks to scientific validity. Detailed evaluation contracts belong in later architecture documentation.
+
+```text
+MY ADVICES about model support and task of workers:
+
+* The input for the workers:
+1. The dataset
+2. Models:
+- The sklearn-like model (model with fit/predict methods for regressor and fit/predict/predict_proba for classifier)
+- Torch model configuration/hyperparameter info and optional initial weights
+
+* The expected output for classifiers of the workers:
+1. X for training samples for every fold
+2. y and y_proba for test samples for every fold
+3. Validation results:
+- For k-fold / groupped k-fold / LOO / LOGO the validation results including all samples
+- For train-test-split, the validation results including all test samples
+- Including sample ID, sample label (User provided), true label, predicted label, predicted probability of each class of the samples
+4. Performance Report (Performance metrics for classification):
+- Confusion matrix and Precision
+- Class (class name), Recall, F1-score, Accuracy (Accuracy = (TP+TN)/sample_size) and AUC (Area Under Curve)
+- Macro- and micro-averages of all these metrics (non-macro avg for TP/TN/FP/FN, so the macro-average of TP/TN/FP/FN is None)
+5. Residual Report:
+- Sample ID, sample label (User provided), Residuals of probabilities of each class, z-score of probabilities, sum of absolute residual, root sum of squared residual, Shannon entropy of absolute residual, Mahalanobis distance of residual along with true label, and predicted probabilities of each class
+6. Visualization data:
+- Data for plotting ROC Curve including AUC of each class (not plot itself to reduce data transferring load)
+7. Optional Sample Influence Report:
+- A optional generalized Cook’s distance-like incluence measure using leave-one-out approach for all samples for each class, the formula is:
+D_i=  (∑_(j=1)^n (ŷ_j-ŷ_j(i))^2)/(p∙MSE), in which p is the number of predictors, computed for probability per class, ŷ_j is the predicted probability for sample j using entire training set, ŷ_j(i) is the predicted probability using the training set without sample i, D_i is the resulting sample influence measure for sample i, ∑_(j=1)^n is the symbol for adding from j=1 to j=n.
+- Including sample ID, sample label (User provided), true label (label of classes), predicted label (label of classes), above-mentioned incluence measure of each class
+- Sample label is the sample name provided by the user, the label of true label as well as the predicted label refers to the class label as target variable values
+
+* The expected output for regressors of the workers:
+1. X for training samples for every fold
+2. y for test samples for every fold
+3. Validation results:
+- For k-fold / groupped k-fold / LOO / LOGO the validation results including all samples
+- For train-test-split, the validation results including all test samples
+- Including sample ID, sample label (User provided), true target value (true y), predicted target value (predicted y)
+4. Performance Report (Performance metrics for regression):
+Mean_Error, SDE (Standard_Deviation_of_Error), MAE (Mean_Absolute_Error), Normalized_MAE, CV_MAE, MSE (Mean_Squared_Error), RMSE (Root_Mean_Squared_Error), Normalized_RMSE, CV_RMSE, RPD (Residual_Prediction_Deviation), R2 (Coefficient of determination)
+5. Residual Report:
+sample ID, sample label (User provided), true y, predicted y, Residual, Standardized Residual
+6. Visualization data:
+- Data for plotting scatter plot of true target value and predicted target value (Scatter Plot)
+- Data for plotting scatter plot of predicted target value and residuals (Residual Plot)
+7. Optional Sample Influence Report:
+- A optional generalized Cook’s distance-like incluence measure using leave-one-out approach for all samples, the formula is:
+D_i=  (∑_(j=1)^n (ŷ_j-ŷ_j(i))^2)/(p∙MSE), in which p is the number of predictors, ŷ_j is the predicted target value for sample j using entire training set, ŷ_j(i) is the predicted target value using the training set without sample i, D_i is the resulting sample influence measure for sample i, ∑_(j=1)^n is the symbol for adding from j=1 to j=n.
+- Including sample ID, sample label (User provided), true y, predicted y, above-mentioned incluence measure of each class
+
+* Unit task of workers (granularity of worker task):
+- A complete evaluation process using the dataset and one single provided model, generating the required reports for the single classification or regression model and returning the reports back to the root node (user node)
+
+* Integration advices:
+- Update `architecture.md` and add these detailed input / output / minimal unit task for the workers
+- Document the necessary instructions about this in the `AGENTS.md` and refers to `architecture.md`
+- Report any ambiguities about this in the next prompt with explanation and example.
+```
+
+
+**[Agent Instructions](E:/swectral_new/cocoonet/AGENTS.md:17)**
+
+- **The documentation gate has ambiguous scope and paths.** It names `architecture.md` and `roadmap.md`, while the actual files are under `docs/`. “Explicitly documented” and “functional improvement” are undefined, making it unclear whether fixes, scaffolding, and tooling work require design approval.
+
+```text
+MY ADVICES:
+Functional improvement includes: new feature, performance improvement
+Functional improvement excludes: fixes, scaffolding, internal tooling
+
+Please note this documentation gate scope is for update of `architecture.md` and `roadmap.md` only, the scaffolding and internal tooling must be described in the docstring of each scaffolding and internal tooling function or method, and the more detailed code logic must be documented as comment above the code line or code block.
+```
+
+- **The gate does not define a bootstrap path.** Requiring both documents to be updated and committed before a subsequent implementation step can stall an early repository when documents are absent or incomplete. The required approval and commit boundary is also unclear.
+
+```text
+MY ADVICES:
+For the codex working pattern for this project:
+- Do not committed automatically, provide one to several git commit messages at the end of each implementation for manual commitment
+- Both `roadmap.md` and `architecture.md` must be updated for new features and major performance improvements, unless the new feature or improvement does neither change any architecture nor introduce any new architecture.
+```
+
+- **The single-unit rule conflicts with coordinated implementation and testing.** Changing a production function and its test normally involves two functions and two files. Imports, configuration, signatures, and callers may also require coordinated edits. The rules could force incomplete intermediate states.
+- **Scope restrictions conflict with mandatory decomposition.** Helpers are restricted to the targeted method’s immediate scope, while another section mandates extracting helpers from long functions. It is unclear which changes constitute permitted supporting work.
+
+
+```text
+MY ADVICES for the above two ambiguities:
+- The single-unit rule is for working code, excluding testing code. An entire testing unit dedicated for the working unit can be added or updated simultaneously with the single-unit working code change.
+- If a working unit does not complete a verifiable functionality, tests could be delayed in implementation, and wait for user approval for the working unit.
+- If more than one functions or methods must be updated simultaneously, e.g. in modification of existing functions instead of writing new functions, simply ask user explicitly for permission.
+- Due to this unitwise development requirement, the initial composition of a function with many helpers must be completed unit-by-unit, explaining functions of each helper and add helpers one-by-one, and wait for approval to proceed to the next helper. But the modification of a function with helpers can be permitted with explicit user approval in the prompt.
+- Do not implement multiple working unit updates silently without asking me for permission.
+- Never implement large-scale modification in one implementation regardless of my prompt instructions. Large-scale modification in one implementation is strictly forbidden for this project, any large-scale modification must be divided in single or multiple unit updating steps in implementation and wait for my approval step-by-step.
+```

@@ -1,0 +1,763 @@
+The documents sufficiently establish the architectural contracts needed to generate the roadmap. I found **no blocking architectural ambiguity or missing cross-component contract**. Some older wording and references need cleanup, plus one narrow resource-policy wording conflict.
+
+I read both current files completely. No files were modified.
+
+The principal contracts are settled:
+
+| Area | Readiness assessment |
+|---|---|
+| Task hierarchy and identities | One parent fixes its dataset and evaluation configuration; each model creates one unit task; duplicate executions create attempts of that same unit. Internal identifiers, user-facing labels, and dataset-scoped sample identity are sufficiently distinguished. |
+| Shared partitions and recovery | The root generates the schedule once. `AGENTS.md` explicitly requires durable storage of actual training/testing memberships before evaluation. Workers, duplicates, and resumed executions reuse those memberships. |
+| Component ownership | Coordination, communication, synchronization, model execution, reporting, persistence, and delivery have distinct responsibilities. External public-service allocation remains outside Cocoonet. |
+| Dataset lifecycle | Exact-representation identity, synchronization readiness, retained-data reuse, resynchronization after deletion, and mandatory cleanup before another user are established. |
+| Evaluation and reporting | Model execution supplies aligned predictions; reporting owns calculations; framework components own persistence. Held-out validation, class alignment, fold-state independence, and influence populations are defined. |
+| Scientific and failure semantics | Formula-defined `NaN` is distinct from an operational failure. Reconstruction/baseline failures terminate the unit evaluation; prediction, report, and removal-evaluation failures propagate only through actual dependencies. |
+| Results and distributed lifecycle | One file represents an attempt outcome. Reception selection, persistence, acknowledgement, acceptance, duplicate stopping, and bounded delivery failure are distinct stages with defined ordering. |
+| Security and compatibility | Authenticated exclusive ownership, technically enforced model restrictions, control-path responsiveness, serialization ownership, and exact Cocoonet-version matching are established. Their mechanisms can be chosen later. |
+
+---
+
+The genuine issues are as follows, in architecture-section order.
+
+**1. Sections 3.4, 5.4, and 10 do not restate the precise partition-persistence gate**
+
+Relevant wording:
+
+- [Architecture §3.4](/E:/swectral_new/cocoonet/docs/architecture.md:296): “Preserve its actual sample memberships and fold/split associations sufficiently for execution, recovery, duplicate handling, and provenance.”
+- [Architecture §5.4](/E:/swectral_new/cocoonet/docs/architecture.md:785): restore the preserved schedule before dispatch; do not rerun the splitter.
+- [Architecture §10](/E:/swectral_new/cocoonet/docs/architecture.md:1017): the schedule’s “representation, distribution, and durable storage remain implementation design.”
+- [AGENTS.md — Project Overview](/E:/swectral_new/cocoonet/AGENTS.md:28): “As soon as data splitting completes, durably save” the memberships to the root’s hard drive and “Complete this persistence before any unit-task evaluation begins.”
+
+**Classification:** Documentation inconsistency through an incomplete restatement, not a missing architectural contract.
+
+**Why it is non-blocking:** `AGENTS.md` already supplies the exact persistence timing, contents, associations, and execution gate. Its [specification-preservation instruction](/E:/swectral_new/cocoonet/AGENTS.md:103) also explicitly prevents older documentation from overriding these contracts.
+
+**Potential downstream mistake:** Someone reading only the architecture could implement dispatch before durable partition storage. A root failure could then leave completed or running evaluations without recoverable partition evidence.
+
+**Smallest clarification:** Restate the existing persistence gate in §3.4 and make §10 clear that only the storage mechanism and representation remain deferred. No new persistence policy is needed.
+
+```text
+MY ADVICE:
+Resolve this ambiguity by making the realized data-partition indices authoritative and persistent at the root. The intended lifecycle is:
+
+- Apply the configured data splitter only on the root node. The splitter generates the realized training and testing indices for all required folds or splits. Workers must not invoke the splitter to generate or regenerate these indices.
+
+- Immediately after the complete set of realized partition indices has been generated, persist that set once in one `dill` file on the root node. This persistence must complete successfully before any unit-task allocation begins.
+
+- Treat this `dill` file as the single durable copy of the realized partition indices for that parent model evaluation task. Do not persist the same partition set repeatedly during normal execution, and do not divide or duplicate the authoritative persisted partition indices across multiple files.
+
+- When synchronizing the dataset required for an evaluation to a worker, send the worker a copy of the applicable realized partition indices together with the dataset. The worker uses the received indices to select the corresponding training and testing data from the synchronized dataset. It must not rerun the splitter or otherwise regenerate partition indices.
+
+- All unit tasks and execution attempts belonging to the same parent model evaluation task, including duplicate attempts, must use the same realized partition indices generated by the root.
+
+- After any root restart or recovery occurring after the partition indices have been successfully persisted, load and reuse the indices directly from the existing `dill` file. Do not rerun the splitter as a recovery mechanism and do not create a replacement partition set.
+
+- The persisted partition indices therefore define the authoritative realized data partition for the lifetime of that parent model evaluation task. The dataset representation and the persisted indices must remain associated so that the indices continue to refer to the exact dataset representation for which they were generated.
+
+This is an architectural lifecycle requirement, not a deferred storage-policy decision. Lower-level implementation details that do not alter these invariants may remain deferred, such as the exact in-file Python container structure, filename convention, directory layout, and the mechanism used to ensure that the single write is durably completed before task allocation.
+```
+
+**2. Sections 4.4–4.6 retain older, insufficiently scoped report wording**
+
+Relevant wording:
+
+- [Architecture §4.4](/E:/swectral_new/cocoonet/docs/architecture.md:414): fold `X` rows identify training samples and contain “`Sample_ID`, user-provided sample label, and training data filenames.”
+- The same section calls these logical fields resolved.
+- [Architecture §3.5](/E:/swectral_new/cocoonet/docs/architecture.md:340) requires separate source-file references for both training and testing populations.
+- [Architecture §3.1](/E:/swectral_new/cocoonet/docs/architecture.md:196) distinguishes internal `sample_id` records from user-facing labels.
+- Sections [4.5](/E:/swectral_new/cocoonet/docs/architecture.md:430) and [4.6](/E:/swectral_new/cocoonet/docs/architecture.md:518) continue to list both identifiers without consistently identifying the internal-record versus user-facing scope.
+- [AGENTS.md — Fold Results](/E:/swectral_new/cocoonet/AGENTS.md:41) states both distinctions explicitly.
+
+**Classification:** Documentation inconsistency.
+
+**Why it is non-blocking:** The governing contracts are already explicit and mutually compatible: retain internal identity and alignment information, identify samples to users by their labels, and preserve both populations’ dataset-relative source references. The older passages do not establish a necessary alternative design.
+
+**Potential downstream mistake:** Report construction could treat §4.4 as an exhaustive training-only source-reference schema, or presentation code could treat internal identifiers as the primary user-facing identity.
+
+**Smallest clarification:** Align §4.4 with the existing training/testing reference contract, and qualify identifier lists in §§4.4–4.6 as internal result fields where appropriate. Preserve internal traceability; no new identifiers or report semantics are needed.
+
+```text
+MY ADVICE:
+**Resolution: Use a Unified Sample Data Structure for Training and Testing Populations**
+
+Training and testing data differ by **which samples are selected for each population**, not by the logical structure used to represent those samples. Do not define separate training-sample and testing-sample record structures.
+
+Use the same logical sample structure for both populations. Each sample record contains:
+
+- the internal `sample_id`;
+- the user-provided sample label;
+- the sample's dataset-relative training data filename/reference; and
+- the sample's target value or class label.
+
+The realized fold/split membership determines whether a sample record belongs to the training population or the testing population for that fold. Training/testing status is therefore established by the saved partition membership rather than by using structurally different records.
+
+Preserve the distinction between the internal `sample_id` and the user-provided sample label. The internal `sample_id` is used for framework identity, alignment, partition membership, provenance, and related internal operations. The user-provided sample label is the user-facing identifier for the sample.
+
+Report and evaluation components should use this common sample information consistently. Additional computed fields, such as predicted values, predicted class labels, or class probabilities, are evaluation results associated with the applicable samples; they do not redefine the underlying sample-data structure.
+
+Revise Architecture §§4.4–4.6 accordingly so references to training and testing samples use this unified structure and do not imply that training and testing populations have different source-data schemas.
+```
+
+**3. Several references point to resource management instead of failure/formula rules**
+
+Relevant examples include:
+
+- [§4.3, line 408](/E:/swectral_new/cocoonet/docs/architecture.md:408): “Section 8 defines failure and formula fidelity rules.”
+- [§4.5, line 452](/E:/swectral_new/cocoonet/docs/architecture.md:452): undefined-value handling refers to §8.3.
+- Failure references at [line 506](/E:/swectral_new/cocoonet/docs/architecture.md:506), [line 557](/E:/swectral_new/cocoonet/docs/architecture.md:557), [line 590](/E:/swectral_new/cocoonet/docs/architecture.md:590), [line 714](/E:/swectral_new/cocoonet/docs/architecture.md:714), and [line 804](/E:/swectral_new/cocoonet/docs/architecture.md:804) point to §8.2.
+- [§7.2, line 892](/E:/swectral_new/cocoonet/docs/architecture.md:892) directs model-specific failures to Section 8.
+
+The actual rules are in Section 9, particularly §9.2 for failures and §9.3 for formula fidelity.
+
+**Classification:** Documentation inconsistency.
+
+**Why it is non-blocking:** The substantive rules are present and agree with `AGENTS.md`.
+
+**Potential downstream mistake:** A developer following a reference could consult multiprocessing rules instead of the applicable failure boundary.
+
+**Smallest clarification:** Correct those references to Section 9, §9.2, or §9.3 as appropriate. References within Section 8 that actually concern resource management should remain unchanged.
+
+```text
+MY ADVICE:
+I updated the reference. Please validate the references in `AGENTS.md` and `architecture.md` again, including the cross-references of these two files.
+```
+
+**4. Section 8.2’s spare-CPU statement does not cover its formula’s single-CPU case consistently**
+
+[Architecture §8.2](/E:/swectral_new/cocoonet/docs/architecture.md:923) defines:
+
+```text
+max_parallel_nCPU = max(1, N - 1)
+```
+
+It then says: “At least one CPU is excluded from Cocoonet’s parallel evaluation pool.”
+
+**Classification:** A narrow contradiction in the literal wording for `N = 1`.
+
+**Example:** With one available CPU, the formula permits a parallel CPU count of one, leaving no CPU excluded from that pool.
+
+**Why it is non-blocking for roadmap generation:** This does not leave component ownership, task boundaries, persistent state, or development dependencies undecided. Cocoonet owns multiprocessing, the workflow owns its subprocesses, and control-path responsiveness remains mandatory. The conflict is confined to the local resource-limit explanation.
+
+**Potential downstream mistake:** Resource validation could allow one evaluation CPU according to the formula while another local check rejects that same configuration under the unconditional reservation sentence.
+
+**Smallest clarification:** Qualify the spare-CPU statement as applying when `N >= 2`, preserving the stated formula. Keep the independent responsiveness requirement applicable to all configurations. This is the smallest wording adjustment consistent with the explicit numeric rule.
+
+````text
+MY ADVICE:
+
+Please update both root `AGENTS.md` and `docs/architecture.md` to incorporate the following architectural clarification before creating the implementation roadmap.
+
+The goal is to define the **user-facing lifecycle and architectural contracts**, without prematurely fixing every Python method signature or implementation detail.
+
+## 1. Core object model
+
+CocooNet has a reusable root-side **computation instance**.
+
+The computation instance is **not** itself a parent task.
+
+Each call to `start()` creates a new parent evaluation task from the computation's current configuration:
+
+```text
+Reusable computation
+    │
+    ├── one active dataset
+    ├── zero or more models
+    ├── zero or more workers
+    ├── evaluation/split configuration
+    │
+    └── start()
+            ↓
+       Parent task
+            ├── unit tasks
+            ├── execution attempts
+            └── results/reports
+```
+
+The same computation instance may later be modified and reused to create another parent task.
+
+This distinction must be explicit because it affects identity, persistence, recovery, worker reuse, dataset reuse, and roadmap ordering.
+
+## 2. Intended user workflow
+
+The normal workflow is:
+
+```text
+1. Create computation instance with evaluation configuration.
+2. Add the dataset at the root.
+3. Add model(s).
+4. Add worker(s):
+   - root-local worker,
+   - online worker(s),
+   - or both.
+5. Optionally prepare/inspect the data split.
+6. Call start().
+7. Root validates prerequisites and prepares a new parent task.
+8. Evaluation runs.
+9. After completion, failure settlement, or completed break/cancellation,
+   the computation becomes configurable again.
+10. User may modify/copy/reuse it and start another parent task.
+```
+
+Do not require this exact method-call order unless a real dependency requires it.
+
+Incomplete configuration is valid before `start()`.
+
+For example, a computation may temporarily have a dataset and models but no worker.
+
+## 3. Configuration is locked during execution
+
+While a parent task is running, execution-defining configuration must not be modified.
+
+Conceptually:
+
+```text
+CONFIGURABLE
+    ↓ start()
+RUNNING / LOCKED
+    ↓ completion or fully settled break
+CONFIGURABLE
+```
+
+Therefore a later operation such as removing a model applies only after the active parent task has settled; it must not retroactively alter the running parent task.
+
+The exact locking mechanism is an implementation detail.
+
+## 4. Reuse and copying
+
+Users should be able to reuse an established computation efficiently, for example:
+
+- same dataset, different model set;
+- different workers;
+- different permissible evaluation configuration;
+- replaced dataset;
+- copied computation configuration.
+
+Copying should primarily mean copying the **computation configuration**, not cloning live runtime state such as:
+
+- active worker processes;
+- online connections;
+- running attempts;
+- accepted results;
+- heartbeat/reconnect state.
+
+If exact copy semantics remain unresolved, report them rather than inventing them.
+
+## 5. Dataset contract
+
+A computation has **exactly one active dataset**.
+
+`dataset_id` provides stable dataset identity for persistence/reuse, especially on workers.
+
+A dataset may persist across multiple parent tasks so that workers do not need to receive the same dataset again unnecessarily.
+
+Example:
+
+```text
+Parent Task 1:
+    dataset D
+    models A/B
+
+Parent Task 2:
+    same dataset D
+    models C/D
+```
+
+A worker that still retains the valid representation of dataset D should be able to reuse it according to the persistence contract.
+
+Changing models alone must not inherently invalidate the dataset or valid realized partitions.
+
+Replacing the dataset does invalidate partitions associated with the previous dataset.
+
+Changing split-defining configuration also invalidates the corresponding realized partitions.
+
+## 6. Dataset configuration versus persistence
+
+Keep these concepts separate:
+
+```text
+Remove/replace active dataset
+    → changes computation configuration.
+
+Clear persisted dataset
+    → removes retained root/worker copies used for reuse.
+```
+
+Do not make `rm_dataset()` implicitly mean “delete every persisted copy everywhere.”
+
+The user should have explicit persistence-management capability, including manual clearing.
+
+Exact API naming can be deferred.
+
+## 7. Dataset representation
+
+The canonical dataset abstraction is sample-oriented and tabular.
+
+CocooNet must distinguish:
+
+```text
+internal sample_id
+```
+
+from:
+
+```text
+user-facing sample_label
+```
+
+The user does not need to provide CocooNet's internal `sample_id`.
+
+For sklearn-style data:
+
+```text
+sample_label | y | X0 | X1 | ... | Xn
+```
+
+For inline PyTorch/tensor data:
+
+```text
+sample_label | y | shape | X0 | X1 | ... | Xn
+```
+
+with deterministic reconstruction and:
+
+```text
+product(shape) == number of flattened X values
+```
+
+Do not silently pad, truncate, repair, or infer inconsistent tensor data.
+
+For file-backed data:
+
+```text
+sample_label | y | X_file
+```
+
+`X_file` should represent a dataset-relative/logical source reference compatible with synchronization and worker-local resolution, not an assumption that the same root-machine absolute path exists on every worker.
+
+Please report whether the architecture must decide now:
+
+- whether inline and file-backed samples may coexist in one dataset;
+- whether `shape` is always per-sample or may be dataset-global.
+
+If these are implementation-local choices, classify them as safely deferred.
+
+## 8. Data splitting
+
+Data splitting belongs to the root/computation preparation lifecycle.
+
+Workers must not independently generate their own partitions.
+
+Realized training/testing memberships must be fixed and durably persisted before dependent evaluation begins, according to the existing partition-persistence contract.
+
+The intended API includes a capability conceptually similar to:
+
+```python
+computation.data_split(...)
+```
+
+Please report one remaining API-lifecycle question instead of assuming the answer:
+
+```text
+Must data_split() be called explicitly before start(),
+or may start() realize a missing split automatically?
+```
+
+Both are acceptable only if the existing scientific and persistence invariants remain unchanged.
+
+## 9. Public API capabilities
+
+Do not fully freeze the exact Python API before the roadmap.
+
+However, document the required capabilities now.
+
+Conceptually, the computation should support:
+
+```text
+Dataset:
+    add/set
+    inspect
+    remove
+    clear/manage persistence
+
+Models:
+    add one
+    add multiple
+    list/inspect
+    summary
+    remove one
+    remove multiple
+
+Workers:
+    add one
+    add multiple
+    list/inspect
+    summary
+    remove one
+    remove multiple
+
+Execution:
+    data split / split preparation
+    start
+    break/cancel
+
+Reuse:
+    modify after execution settles
+    copy/reuse configuration
+```
+
+Exact signatures, argument types, return types, aliases, and container classes may be deferred unless they affect architectural invariants.
+
+For models and workers, support both singular and bulk operations conceptually:
+
+```python
+computation.add_model(...)
+computation.add_models([...])
+
+computation.add_worker(...)
+computation.add_workers([...])
+```
+
+The singular operation is the primitive semantic action; bulk operations are explicit convenience operations.
+
+Where practical, bulk configuration mutations should have defined commit semantics and should not silently leave undocumented partial configuration after validation failure.
+
+## 10. Root coordinator and worker roles
+
+The root node always owns coordinator responsibilities.
+
+It does **not** automatically act as a worker.
+
+CocooNet supports:
+
+```text
+1. optional root-local worker
+2. optional online worker(s)
+```
+
+These are independently optional.
+
+Supported topologies are:
+
+```text
+local only
+online only
+local + online
+```
+
+The root-local worker must be explicitly configured.
+
+## 11. No-worker behavior
+
+Zero workers is a valid configuration state before execution.
+
+It is not valid for `start()`.
+
+If the user calls `start()` without any usable execution target, fail explicitly before model evaluation begins.
+
+Do not:
+
+- silently run models in the coordinator;
+- automatically create/enable a local worker;
+- create a fake network worker;
+- wait indefinitely for a worker the user never configured.
+
+This is a configuration/startup failure, not a baseline model-training failure.
+
+Please also report whether the architecture already distinguishes:
+
+```text
+worker configured
+```
+
+from:
+
+```text
+worker currently runnable/available
+```
+
+For example, if the only configured online worker is disconnected when `start()` is called, should CocooNet fail immediately or allow the parent task to wait for that worker?
+
+Do not assume the answer if it is not already defined.
+
+## 12. Root-local worker design
+
+When enabled, the root-local worker is a separate locally managed worker process.
+
+The coordinator must dispatch to it through a direct local execution/control boundary.
+
+Do not create WSS loopback or other fake network behavior merely to emulate an online worker.
+
+The local worker does not require remote-only mechanisms such as:
+
+- network authentication;
+- heartbeat/reconnect;
+- network dataset synchronization;
+- network result delivery.
+
+However, it must share the same applicable scientific/task contracts as online workers:
+
+- parent configuration;
+- dataset identity;
+- persisted partitions;
+- unit-task identity;
+- execution-attempt identity;
+- model execution rules;
+- scientific calculations;
+- failure semantics;
+- result structures;
+- duplicate-attempt handling;
+- at-most-one-accepted-result behavior.
+
+User model code must not run directly inside the root coordinator process.
+
+The root-local worker is another **execution target**, not a separate evaluation implementation.
+
+## 13. Networking is conditional
+
+Networking is required only when online workers are used.
+
+Local-only execution must work without initializing the online-worker network subsystem.
+
+Conceptually:
+
+```text
+Local only:
+    coordinator → local worker
+
+Online only:
+    coordinator → worker network → online workers
+
+Mixed:
+    coordinator → local worker
+               → worker network → online workers
+```
+
+Distributed networking extends the execution system; it is not a prerequisite for evaluation.
+
+## 14. Mixed scheduling
+
+When both local and online workers exist, schedule across both using the same logical task system.
+
+Duplicate attempts and accepted-result rules must remain topology-neutral.
+
+For example:
+
+```text
+attempt A → local worker
+attempt B → online worker
+```
+
+must still obey the same at-most-one-accepted-result contract.
+
+Do not create separate local versus remote result-acceptance semantics.
+
+## 15. Worker ownership/reuse
+
+Please review whether workers are best understood as reusable root/computation resources used by successive parent tasks rather than objects owned exclusively by one parent task.
+
+The clarified workflow suggests reuse across parent tasks, especially for:
+
+- online connections;
+- root-local worker processes;
+- persisted datasets;
+- resource accounting.
+
+Do not invent exact process/connection lifetimes if they are not yet architecturally fixed.
+
+Report remaining ambiguity.
+
+## 16. CPU allocation
+
+Each worker has a user-configurable CPU budget `n_cpu`, defaulting to that machine's available CPU count `N`.
+
+Evaluation CPU capacity is:
+
+```text
+nCPU = max(1, min(n_cpu, N) - 1)
+```
+
+where:
+
+```text
+n_cpu = user-configured CPU budget
+N     = available CPU count
+nCPU  = resulting evaluation CPU capacity
+```
+
+`nCPU = 1` means serial evaluation.
+
+Parallel evaluation occurs only when:
+
+```text
+nCPU > 1
+```
+
+Therefore both:
+
+```text
+n_cpu = 1
+n_cpu = 2
+```
+
+intentionally produce serial evaluation.
+
+This conservative behavior also applies to online workers.
+
+Do not state that the formula guarantees one physical CPU is always unused; the minimum evaluation capacity of one takes precedence.
+
+Coordinator/worker-control responsiveness remains an independent requirement.
+
+## 17. Existing scientific failure contracts remain unchanged
+
+Do not change the existing failure-isolation rules.
+
+Keep configuration/startup failures distinct from:
+
+- baseline model-training failure;
+- report failure;
+- shared-intermediate failure;
+- influence-analysis sample failure;
+- worker/infrastructure failure.
+
+In particular, “no worker available” occurs before scientific model evaluation and must not be reported as a model-training failure.
+
+## 18. What must be fixed before the roadmap
+
+Document these architectural invariants now:
+
+- reusable computation exists above parent tasks;
+- each `start()` creates a new parent task;
+- one active dataset per computation;
+- zero or more models during configuration;
+- zero or more workers during configuration;
+- at least one usable execution target required to start;
+- local and online workers may coexist;
+- local worker is separate from coordinator execution;
+- networking is conditional on online workers;
+- computation configuration is locked during execution;
+- computation may be reused after execution settles;
+- dataset persistence may span parent tasks;
+- model changes need not invalidate an unchanged dataset/split;
+- root owns realized partition generation/persistence;
+- public API supports inspection/modification/reuse;
+- CPU semantics follow the formula above.
+
+Do not unnecessarily freeze now:
+
+- exact Python signatures;
+- exact return types;
+- exception hierarchy;
+- IPC implementation;
+- network message encoding;
+- persistence-file format/layout;
+- other implementation-local choices.
+
+## 19. Required documentation update
+
+Please make the user workflow explicit in both `AGENTS.md` and `docs/architecture.md`, rather than leaving it inferable from scattered component descriptions.
+
+The central model should be understandable as:
+
+```text
+Reusable computation
+    │
+    ├── one dataset
+    ├── models
+    ├── local/online workers
+    ├── split/evaluation configuration
+    │
+    └── start()
+            ↓
+       validate configuration
+            ↓
+       prepare/fix durable execution state
+            ↓
+       new parent task
+            ↓
+       unit tasks / attempts / results
+
+After execution settles:
+    modify, copy, or reuse the computation.
+```
+
+## 20. Report remaining ambiguities
+
+After updating the documents, perform an architecture-readiness review and report unresolved points.
+
+Focus only on ambiguities that affect architectural contracts, especially:
+
+### Computation lifecycle
+- Does every `start()` create a new parent-task identity?
+- What state/history remains attached to the reusable computation?
+- What exactly is copied?
+- What must complete after `break()` before mutation is allowed?
+
+### Dataset/persistence
+- What creates a new `dataset_id`?
+- What exactly does manual persistence clearing remove?
+- How are stale worker copies detected?
+- Can retained data be cleared while still required by another task?
+
+### Splits
+- Explicit `data_split()` or automatic split-on-start?
+- Exactly when may realized partitions be reused?
+
+### Workers
+- Are workers reusable root/computation resources?
+- What makes a configured worker sufficiently runnable for `start()`?
+- What is the root-local worker process lifetime?
+- How are worker removal, shutdown, and root restart handled?
+
+### Local/online boundary
+- What local control/IPC contract is architecturally required?
+- How does the local worker access artifacts without introducing a second scientific pathway?
+- Are duplicate/result-acceptance rules fully topology-neutral?
+
+### Restart/recovery
+- Which computation configuration is durable?
+- How are unfinished parent tasks distinguished from reusable configuration?
+- How are persisted worker datasets reconciled after restart?
+
+For every remaining issue, classify it as:
+
+```text
+A. Architectural blocker before roadmap creation
+
+B. Architectural contract that should be documented now,
+   but is no longer blocking once specified
+
+C. Implementation/API detail safely deferred to its roadmap phase
+```
+
+Do not create new requirements merely for implementation completeness.
+
+The objective is to make the roadmap depend on a stable **computation → parent task → unit task/attempt** model, while leaving ordinary Python API and implementation details flexible until their relevant development phase.
+````
+
+---
+
+Several matters should remain deferred until immediately before their dependent implementation work:
+
+| Deferred matter | Resolve immediately before | Why it does not block the roadmap |
+|---|---|---|
+| Concrete records, schemas, identifier encodings, and interface signatures | Implementing the corresponding shared records and their consumers | Identity relationships, ownership, immutable context, and required information are already established. |
+| Durable-state layout, complete-file publication, pending-selection evidence, and retry accounting | Implementing the persistence foundations that later recovery consumes | The state that must survive and the recovery invariants are defined. Choose its durable representation before consumers rely on it, rather than postponing it until recovery implementation. |
+| Model-isolation mechanism and cleanup verification | Implementing executable deserialization/model execution and user-release cleanup | The security restrictions and responsible components are settled. Execution separation must not be mistaken for permission enforcement. |
+| Authentication, reconnection, heartbeat timing, message encoding, acknowledgement representation, and retry timing | Implementing the corresponding connection/protocol operations | Connection direction, ownership, acceptance ordering, and exhaustion behavior already constrain these choices. |
+| Prediction array shapes, report layouts, conventional metric/report conventions, and fit-state reset mechanisms | Implementing the relevant model/report interfaces and computations | Required information, sample/class associations, scientific invariants, and responsibility boundaries are already specified. |
+| Subprocess mechanics, CPU detection, pool configuration, and termination mechanisms | Implementing worker resource management | Ownership and execution boundaries are explicit; the single-CPU wording should be clarified at that point or during documentation cleanup. |
+| External public-service interface | Implementing public-service integration, after its interface is supplied | Cocoonet’s responsibilities are defined, and private-worker development does not depend on inventing the external service’s contract. |
+
+These belong to preparation for their owning implementation capabilities. They do **not** warrant separate roadmap phases whose purpose is to repair the architecture.
+
+---
+
+Some distinctions are particularly important to preserve during planning:
+
+- Fixed partitions do not promise deterministic model outputs.
+- Terminal baseline failure ends the unit evaluation, not the parent task or worker process.
+- A failure-only file remains an acceptable complete outcome.
+- Delivery exhaustion can leave a logical task unfinished while its worker returns to ordinary task handling. The documents expressly prohibit automatic recomputation, promotion of another result, and silent retry-budget resets.
+- Cooperative duplicate cancellation and mandatory cleanup before another user apply to different lifecycle situations; cleanup cannot be declared successful while prior execution can recreate state.
+
+**Conclusion: READY WITH NON-BLOCKING CLEANUP.** The documents can serve as the frozen architectural basis for roadmap generation. Preserve their established contracts, clean up the identified wording, and settle deferred mechanisms immediately before the implementation work that depends on them.

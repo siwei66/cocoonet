@@ -1,0 +1,35 @@
+Resolve your proposed ambiguities:
+
+```text
+| Issue | Explanation and example |
+|---|---|
+| Influence splits | Decide whether influence reuses validation splits. A model using 5-fold validation could otherwise receive 2-fold or 5-fold influence analysis. |
+| Predictor count | Define whether `p` counts original or transformed features. Three original predictors becoming seven encoded columns changes normalization. |
+| Zero or near-zero MSE | Perfect baseline predictions make the ratio undefined; very small MSE can amplify small changes. Stabilization or unavailable-result behavior needs definition. |
+| Missing classes and failed evaluations | Removing the only training example of a class may prevent fitting or remove a probability column. Failure and partial-result handling remain unspecified. |
+| Comparable refits | Define preprocessing refitting and randomness controls. Different random initializations could introduce prediction changes unrelated to sample removal. |
+| Report prediction provenance | In a 70/30 split, training samples receive influence values but have no held-out predictions for themselves. The source of their reported predicted labels/targets needs definition, together with count/status encoding. |
+```
+
+according to my advices below:
+
+```text
+| Issue | Explanation and example |
+|---|---|
+| Influence splits | Influence exact reuses validation splits. |
+| Predictor count | `p` is the number of actual predictors of input X. |
+| Zero or near-zero MSE | Do not complicate the logic. Leave undefined D NaN. Leave small MSE as it is. |
+| Missing classes and failed evaluations | Leave related D values NaN if undefined. And raise error loudly and clearly. Do not complicated edge cases. Leave undefined cases undefined as NaN. Do not try to manipulate edge cases. Keep the computation logic direct and simple. |
+| Comparable refits | Accept any randomness influence. Again, do not try to manipulate the results after computation, accept any result from define formula. |
+| Report prediction provenance | Influence metrics apply only to training samples. Each training sample is omitted once, the model is refitted, and the prediction change is evaluated on the fixed test set. Test samples do not receive influence metrics because they do not participate in model construction. |
+```
+
+Limit the scope to the `### 4.7 Optional generalized Cook's distance-like influence` section of `architecture.md`.
+
+---
+
+And compose an additional developing instruction to `AGENTS.md` according to my following concern:
+
+For evaluation metrics with defined formula, codex should report edge cases and risks only, but must never try to manipulate the edge cases. Codex must leave undefined values `NaN`. For a well-defined measure, all risks and `NaN` in undefined scenarios are expected. Raising ambiguity for these cases caused by the well-defined formula itself does not make sense. This is a scientific project. Clear definition, simple and direct logic are of central concern. Besides, any future composition of the module code must be simple, clear and direct, so that ensure the high-performance and well expected outputs.
+
+Do not modify `AGENTS.md`, simply provide the instructions for `AGENTS.md` and inspect `AGENTS.md` and suggest the correct position to put the instructions.

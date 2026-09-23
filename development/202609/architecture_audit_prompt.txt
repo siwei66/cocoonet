@@ -1,0 +1,32 @@
+Read the current root `AGENTS.md` and `architecture.md`.
+
+Audit `architecture.md` for missing architectural content required to make the current design implementable and unambiguous.
+
+Check specifically for missing or insufficiently defined:
+
+* code/module map and component boundaries;
+* core data models and identities;
+* state/lifecycle models;
+* essential control and data flows;
+* persistence and recovery behavior;
+* network/authentication/discovery relationships;
+* timeout, retry, cancellation, and reassignment semantics;
+* dataset synchronization/cache behavior;
+* protocol or compatibility boundaries;
+* other architecture decisions required by `AGENTS.md`.
+
+For each gap, report:
+
+1. **What is missing**
+2. **Why it matters**
+3. **Example of what should be clarified or added**
+
+Requirements:
+
+* Do not modify any file.
+* Base the audit on the current `AGENTS.md` and `architecture.md`; do not invent requirements that are not implied by them.
+* Distinguish between a genuinely missing architecture decision and an implementation detail that does not belong in `architecture.md`.
+* A missing item may be an entire section, a small data model, an invariant, or a single relationship that needs clarification.
+* Organize findings by the relevant `architecture.md` section, then work through them step by step.
+* If an existing section is already sufficient, do not propose expansion merely for completeness.
+* At the end, provide a concise prioritized list of the missing items that should be addressed first.

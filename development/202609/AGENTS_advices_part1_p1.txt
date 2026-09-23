@@ -1,0 +1,50 @@
+Updated only the authorized scope:
+
+- [AGENTS.md](E:/swectral_new/cocoonet/AGENTS.md:3): revised Project Overview and Agent Instructions, including task granularity, documentation gates, manual commits, testing allowances, and approval between production units.
+- [docs/architecture.md](E:/swectral_new/cocoonet/docs/architecture.md:1): added the architecture skeleton and initial worker contracts, reports, influence formula, and evaluation correctness requirements.
+
+Unresolved details are explicitly recorded as open decisions:
+
+- **Fold outputs:** whether `y` means true or predicted targets, and whether `X` returns full arrays or dataset references.
+
+```text
+MY ADVICE:
+- For classification models fold y results include: Sample_ID, sample label, y label true, y label predict, predicted probability of the classes
+- For classification models fold X results include: Sample_ID, sample label, training data filenames
+- For regression models fold y results include: Sample_ID, sample label, true y values, predicted y values
+- For regression models fold X results include: Sample_ID, sample label, training data filenames
+```
+
+- **Metric definitions:** undefined `TF` in accuracy, averaging conventions, and regression normalization—for example, normalization by target range versus mean.
+
+```text
+MY ADVICE: `TF` is wrong, it should be `TN` True Negative, i.e, Accuracy = (TP+TN)/sample_size
+```
+
+- **Residual statistics:** calculation populations and conventions—for example, whether probability z-scores are computed across samples.
+
+```text
+MY ADVICE: Residual statistics for classification, the residual measures are computed across classes for each sample only, instead of across samples.
+```
+
+- **Influence analysis:** fitting/comparison populations and MSE definition; a held-out sample cannot be removed from training data that never contained it. Regression’s “each class” wording also remains unresolved.
+
+```text
+MY ADVICES:
+1. D_i = (∑_(j=1)^n (ŷ_j-ŷ_j(i))^2)/(p∙MSE), in which p is the number of predictors, computed for probability per class, ŷ_j is the predicted probability for sample j using entire training set, ŷ_j(i) is the predicted probability using the training set without sample i, D_i is the resulting sample influence measure for sample i, ∑_(j=1)^n is the symbol for adding from j=1 to j=n.
+2. ŷ_j (j from 1 to sample size n), represents the original training dataset, ŷ_j(i) represents the original training dataset without sample i.
+3. For sample i, ŷ_j == ŷ_j(i), because the two datasets are the same.
+4. MSE is Mean Squared Error: mse = np.mean((y_probability_without_i - y_probability_original) ** 2, axis=0)
+```
+
+- **PyTorch execution:** configuration and weights alone do not establish model construction, optimizer, training schedule, or device ownership.
+
+```text
+MY ADVICES:
+Including all necessary informations for re-construction of the torch model. Organize and list the necessary information. For initial weights, users must be able to choose weight pattern like random weights too, so that reduces the data transferring load when certain initial weights is not needed for the modeling.
+Device could be different, and should be configured on worker nodes, ignoring potential subtle influence on modeling results from different devices, like GPU and CPU. However, if the GPU does not tolerate the model e.g. too little memory, error should be raised explicitly (This detailed implementation-level device policy statement only helps with the understanding of the project for you, instead of being added to `AGENTS.md` exactly.)
+```
+
+Verified that the remaining `AGENTS.md` content is unchanged. `git diff --check` passed. No commit was created.
+
+Suggested commit message: `docs: clarify agent workflow and define initial worker architecture`

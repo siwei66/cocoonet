@@ -1,0 +1,99 @@
+For your remaining ambiguity:
+```
+One genuine policy overlap remains, recorded in [Section 10.1 (line 1479)](E:/swectral_new/cocoonet/docs/architecture.md:1479): overwrite=True clears working-directory contents, while root source-file ownership prohibits deleting user dataset files. If the selected directory contains both run metadata and source.csv, initialization needs a rule to reject that directory or preserve the source file.
+```
+
+
+
+\---
+
+
+
+My advice is:
+
+
+
+The ambiguity should be resolved by establishing a strict filesystem ownership boundary between the root working directory and user-provided dataset paths.
+
+### Root Working Directory and Dataset Paths
+
+The root working directory is Cocoonet-managed persistent storage. User-provided dataset source paths are user-owned data and must remain outside that directory.
+
+Therefore, for every configured dataset:
+```rust
+dataset_path == root_dir
+    -> fail explicitly
+
+dataset_path is contained within root_dir
+    -> fail explicitly
+
+dataset_path is outside root_dir
+    -> allowed
+```
+
+This invariant must be validated **from both configuration directions**.
+
+When a dataset is added or its path is changed, Cocoonet must validate the dataset path against the currently configured root working directory.
+
+When the root working directory is initialized, changed, or reassigned, Cocoonet must also validate the proposed root working directory against all existing configured dataset paths.
+
+This second validation is necessary because the dataset may already exist before the root working directory changes. For example, a user may copy a computation instance, preserve its dataset configuration, and assign the copied instance a different root working directory. That new root directory must not contain any of the already configured dataset paths.
+
+Conceptually:
+```rust
+configure dataset
+    -> validate dataset_path against root_dir
+
+configure/change root_dir
+    -> validate root_dir against every configured dataset_path
+```
+
+The validation is therefore an invariant of the computation configuration, not merely a rule of `add_dataset()` or `initialize()`.
+
+If any configured dataset path is equal to or contained within the proposed root working directory, the root-directory configuration fails explicitly and must not modify persistent files.
+
+Likewise, if a newly configured dataset path is equal to or contained within the current root working directory, the dataset configuration fails explicitly.
+
+### Ownership Consequence
+
+Because configured dataset sources can never reside inside the root working directory:
+```rust
+root_dir
+    -> Cocoonet-owned persistent state and artifacts
+
+dataset paths
+    -> user-owned source data outside root_dir
+```
+
+Cocoonet may therefore clear or replace managed contents of the root working directory according to its persistence and `overwrite` rules without needing dataset-path exclusions.
+
+Removing a dataset from the computation removes Cocoonet's configuration/reference to that dataset only. It does not delete, move, rename, or otherwise modify the underlying user-provided source data.
+
+This resolves the previous `overwrite=True` ambiguity without introducing selective preservation rules inside the root working directory.
+
+
+
+\---
+
+
+
+1. Please revise the `AGENTS.md` and `architecture.md` for this remaining ambiguity. Limit the scope to the corresponding sections of `AGENTS.md` and `architecture.md` associated with this ambiguity.
+2. Preserve existing statements unless they genuinely conflict with the clarified interpretation.
+3. Limit modifications to `AGENTS.md` and `architecture.md`.
+
+
+
+\---
+
+
+
+After revision:
+
+1. Read the complete revised `AGENTS.md` and `architecture.md` again.
+2. Check that they are mutually consistent.
+3. Check that concepts with different scopes are not incorrectly treated as contradictions.
+4. Report any remaining:
+   - design inconsistency;
+   - conceptual ambiguity;
+   - instructional ambiguity;
+   - unclear lifecycle, identity, security, timeout, retry, cache, or worker behavior.

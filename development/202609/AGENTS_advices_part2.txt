@@ -1,0 +1,135 @@
+**[Architecture Principles](E:/swectral_new/cocoonet/AGENTS.md:32)**
+
+- **Independence and shared state are not clearly bounded.** “Without … shared distributed state” could refer only to worker execution or also to coordinator scheduling and result tracking. Those interpretations permit substantially different implementations.
+
+```text
+MY ADVICE:
+Workers execute model-evaluation tasks independently and must not depend on shared mutable state with other workers. State required for task scheduling, assignment, lifecycle tracking, failure tracking, and result acceptance may be maintained by the coordinator. Internal evaluation state remains local to the worker executing the task.
+```
+
+- **One-time dataset synchronization lacks an identity invariant.** Dataset versions, worker readiness, and consistency between data and split definitions are unspecified. Workers could evaluate different data while producing apparently comparable reports.
+
+
+```text
+MY ADVICE:
+Dataset identity and synchronization: The local module assigns a unique dataset key to each dataset and uses that key to identify the dataset in worker tasks. A required dataset is synchronized to a worker once before task execution begins, and the worker may execute tasks referencing that dataset only after synchronization completes. The dataset key identifies the exact dataset representation, including the row-wise association among sample IDs, features, targets, and related metadata. Public workers are exclusively assigned to one user at a time; all synchronized user data and associated task data must be cleared when that user releases or disconnects the worker and before the worker is reassigned.
+```
+
+- **Idempotency lacks a defined acceptance boundary.** Task identity, execution attempts, duplicate-result handling, and durable completion are unspecified. Preventing duplicate entries alone does not resolve conflicting results or failures during persistence.
+
+
+```text
+MY ADVICE:
+Duplicate task allocation is allowed only when all remaining unallocated tasks have finished or been assigned and a worker would otherwise be idle. In that case, the free worker may duplicate an unfinished task, starting from the oldest currently running task.
+
+A duplicate execution does not create a new logical task or result entry. The first valid result returned and accepted by the root node completes the task; results returned later by duplicate executions are discarded. Therefore, each logical task has at most one accepted result, while duplicate execution is used only to utilize otherwise-idle workers and reduce long-tail completion time.
+
+The exact durable persistence and result-acceptance boundary can be defined separately in the task lifecycle/protocol specification.
+```
+
+- **Streaming leaves persistence and resource guarantees undefined.** Asynchronous disk ingestion does not establish bounded memory, incomplete-upload handling, integrity validation, or when a report becomes accepted. These are implementation-critical protocol details.
+
+```text
+MY ADVICE:
+Report persistence has no explicit acceptance boundary. Evaluation reports are expected to be small and are written to local disk immediately after receipt, so bounded-memory streaming and backpressure are not required by the initial design. The architecture should define whether successful local persistence constitutes acceptance and how a failed write affects task/result state.
+```
+
+- **Reproducibility and auditability are absolute but not operationally defined.** Seeding an “execution environment” is unclear, and heterogeneous hardware may prevent identical results. Neither the promised reproducibility level nor the required provenance and audit events are defined, making compliance difficult to demonstrate.
+
+
+```text
+MY ADVICE:
+Reproducibility and auditability: The framework does not guarantee deterministic model results. Randomness and nondeterminism from models, dependencies, execution environments, or hardware are accepted without corrective manipulation. User-provided reproducibility settings, such as random seeds, are passed through where applicable but do not imply deterministic execution. Determinism of user-defined models and their dependencies is the user's responsibility. Framework reliability is based on simple and direct execution, preservation of actual results, and sufficient traceability to audit how an evaluation was performed.
+```
+
+
+**[Technical Stack](E:/swectral_new/cocoonet/AGENTS.md:47)**
+
+- **Transport choices mix constraints with unresolved design.** HTTP/WebSocket, pull-based execution, and port 443 do not establish how task delivery, connection ownership, or security work together. These choices may prematurely constrain implementation and largely belong in architecture/protocol documentation.
+
+```text
+MY ADVICE:
+The transport and connection model should follow a simple persistent-worker workflow. A worker initiates an outbound WSS connection to the root over port 443 and keeps that connection open while it is available to the system. Workers therefore do not require publicly reachable endpoints.
+
+After the connection is established, the root maintains the active worker connection and tracks whether the worker is available or working. When a worker is available and an evaluation task is ready, the root assigns one complete model-evaluation task through the existing WebSocket connection. The worker marks itself as working, performs the evaluation independently, and returns the resulting evaluation reports through the same connection. Once the task has finished and its results or failure have been returned, the worker becomes available again and may receive another task from the root.
+
+Therefore, connection establishment is worker-initiated, while task scheduling and assignment are root-controlled. The persistent WebSocket connection is bidirectional and is reused for task assignment, task status, results, and subsequent tasks.
+
+These workflow rules are architectural invariants and should be documented now. Detailed application-protocol mechanics—such as exact message schemas, authentication, acknowledgements, heartbeat/reconnection behavior, and serialization details—can be defined incrementally when the corresponding protocol implementation is developed.
+```
+
+- **Serialization lacks trust and compatibility boundaries.** `dill`/`pickle` can execute code during loading, but authorized producers, loading locations, environment compatibility, and payload versioning are unspecified. This affects both safe execution and reproducibility.
+
+```text
+MY ADVICE:
+The serialization trust and compatibility boundaries are defined as follows:
+
+1. **Who may create serialized model payloads:** Users provide model objects to the root node. The root validates the model for supported Cocoonet execution, and only after successful validation does it become an applicable model for workers. Only the root node creates serialized model payloads sent to workers. Cocoonet uses `dill` exclusively for serialization to keep the serialization path consistent and maximize compatibility within the supported environment.
+
+2. **Where deserialization occurs:** Model payloads are deserialized only by worker nodes as part of worker execution. Evaluation-report payloads are serialized by workers and deserialized only by the root node. Serialization and deserialization are therefore restricted to the defined Cocoonet transfer paths rather than arbitrary received serialized data.
+
+3. **Environment compatibility:** Worker compatibility is validated during the connection handshake, before normal protocol operation, dataset synchronization, task assignment, or model deserialization. Root and worker must use the same Cocoonet major and minor version; patch versions may differ. For example, `1.2.1` and `1.2.7` are compatible, while `1.2.x` and `1.3.x` are incompatible. An incompatible worker is rejected immediately, with a clear error reporting the incompatible versions and suggesting that the user align the root and worker environments, such as by creating a virtual environment and reinstalling the appropriate Cocoonet version. No automatic compatibility fallback or attempted deserialization is performed after validation fails.
+
+The connection workflow is therefore:
+
+Worker                              Root
+  |                                  |
+  | ---- connection request -------> |
+  |      cocoonet_version=1.2.4      |
+  |                                  |
+  |                         validate |
+  |                         version  |
+  |                                  |
+  | <---- accepted / rejected ------ |
+  |                                  |
+  |       normal protocol begins     |
+
+Matching Cocoonet versions define the supported serialization/runtime contract. Cocoonet should maintain the dependency constraints required by that contract rather than introducing separate environment negotiation into the worker protocol.
+```
+
+- **Quality tools are named without an executable baseline.** The empty `pyproject.toml` provides no project configuration or verification commands. Agents could interpret strict checking and supported Python versions differently.
+
+```text
+MY ADVICE:
+The quality-tool baseline is intentionally defined at a high level in `AGENTS.md`; the concrete `pyproject.toml` configuration will be created and validated later.
+
+- Support Python **3.12 through the latest stable Python release**.
+- Use **Ruff, mypy, Black, and pytest** as the required quality and testing tools.
+- Ruff uses the defined `E`, `F`, `W`, `B`, `I`, `N`, and `C` rule families, with the specified exclusions and exceptions.
+- mypy requires typed definitions and return checking but is **not full `strict = true`**; missing third-party import typing is ignored.
+- Black uses a 120-character line length. Its Python target must remain consistent with the project's supported Python versions when `pyproject.toml` is created.
+- pytest is the test runner, with tests under `tests/` following the defined test discovery conventions.
+- An implementation is acceptable only when applicable **pytest, mypy, Black, and Ruff checks all pass**. If documentation is rebuilt, its local accessibility and version-switching functionality must also be validated.
+- The eventual `pyproject.toml` must implement these requirements consistently. Its detailed configuration should be validated when it is introduced rather than independently inferred or expanded by agents.
+```
+
+**[Code Quality Standards](E:/swectral_new/cocoonet/AGENTS.md:58)**
+
+- **Docstring requirements do not distinguish applicable cases.** Requiring every section for every class and function leaves unclear treatment of constructors, parameterless functions, and functions returning nothing. “Handled exceptions” also differs from exceptions callers can receive, risking misleading documentation.
+
+
+```text
+MY ADVICE:
+Docstring Section Applicability: Required docstring sections apply only when relevant to the documented object. Omit Args when there are no parameters requiring documentation and omit Returns when the function returns no meaningful value. Raises documents exceptions intentionally exposed to callers as part of the function's contract; exceptions caught and handled internally are not listed as raised exceptions. Do not exhaustively document incidental exceptions that may propagate from third-party libraries or user-provided components unless they form part of the project's defined interface.
+User-facing API documentation is distinct from source-code docstrings. Only public APIs are included in API documentation. Private/internal classes, functions, methods, helpers, and implementation details must still have source docstrings, but must not be exposed merely because they are documented in the source.
+```
+
+- **Comment and length requirements are subjective or conflicting.** “Every non-trivial step,” “medium,” and “typically 20–100 lines” lack clear acceptance criteria. They can encourage padding or excessive comments; mandatory helper extraction also conflicts with single-unit modification.
+
+```text
+MY ADVICE:
+- Keep functions and methods focused, cohesive, simple, and directly understandable. Functions are typically expected to remain within approximately 20–100 lines, but this range is a guideline rather than a mechanical acceptance criterion. Do not pad short functions or split coherent logic solely to satisfy a line-count target.
+- Decompose a function when doing so meaningfully improves readability, testability, reuse, or separation of responsibilities. Extract helpers around coherent operations rather than arbitrary line-count boundaries. Do not introduce trivial wrappers or unnecessary abstraction merely to shorten a function.
+- An approved production implementation unit may include private helpers that are directly necessary to implement that unit correctly and clearly. Such helpers are part of the same implementation unit and do not authorize unrelated production changes.
+- Comment non-obvious reasoning, scientific assumptions, invariants, algorithmic decisions, performance-sensitive behavior, and implementation constraints that cannot be understood reliably from the code alone. Do not add comments that merely restate clear code.
+- Prefer clear naming and straightforward control flow over explanatory comments. Comments should explain why a computation or constraint exists when that reasoning is not self-evident; the code itself should express what is being done.
+- Keep scientific and numerical computations as direct representations of their defined procedures. Do not fragment a coherent formula or computation into unnecessary helpers when doing so makes its mathematical meaning harder to inspect or audit.
+```
+
+- **Universal compliance without suppressions may be impractical.** Strict typing across third-party ML interfaces can require accommodations. With no defined checking scope or exception policy, acceptance could be blocked by external typing limitations rather than project defects.
+
+```text
+MY ADVICE:
+Mypy requires typed definitions and return checking but does not use full `strict = true`. Missing third-party import typing is ignored. Project-owned code must comply with the configured type-checking and linting rules.
+Narrow suppressions are permitted only for limitations in external dependency typing, including incomplete or inaccurate type information or runtime behavior that the checker cannot represent correctly. Suppressions must be local to the affected expression or line and use the most specific applicable error code. They must not be used to conceal type or linting errors originating from project-owned interfaces or implementation logic.
+```

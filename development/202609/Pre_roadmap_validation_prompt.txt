@@ -1,0 +1,64 @@
+Read the current root `AGENTS.md` and `docs/architecture.md` carefully and determine whether they are sufficiently complete, internally consistent, and mutually consistent to serve as the frozen architectural basis for generating the initial development roadmap.
+
+This is an architectural-contract readiness review, not an implementation-design review. Do not attempt to make the documents implementation-complete.
+
+Evaluate whether the documents sufficiently define the cross-cutting contracts and invariants that determine subsystem boundaries, dependency order, persistent state, evaluation semantics, failure behavior, distributed behavior, and recovery behavior.
+
+In particular, verify the consistency and completeness of the following areas where applicable:
+
+- parent model evaluation task, unit task, and execution-attempt hierarchy;
+- `dataset_id`, `sample_id`, `model_id`, user-facing labels, and identifier scopes;
+- ownership and responsibility boundaries between root/coordinator, worker control, evaluation execution, persistence, reporting, and external public-worker services;
+- fixed parent-task evaluation configuration and model/unit-task relationships;
+- realized data-partition generation, durable storage of training/testing `sample_id` memberships, reuse, duplicate execution, and recovery;
+- dataset synchronization, retention, cleanup, and readiness;
+- model reconstruction, training, prediction, and execution-boundary responsibilities;
+- prediction/result/report contracts and the information required to connect evaluation with reporting;
+- scientific calculation invariants, `NaN` semantics, and distinction between mathematically undefined values and operational failures;
+- baseline-evaluation, report-level, influence-sample, persistence, delivery, and other failure boundaries and their propagation;
+- result-file construction, persistence, delivery, selection, acknowledgement, and acceptance semantics;
+- worker availability and task lifecycle semantics;
+- duplicate-attempt scheduling and at-most-one-result acceptance;
+- root restart, durable state, reconciliation, and recovery invariants;
+- private-worker and public-worker lifecycle boundaries;
+- security/isolation requirements that materially affect component boundaries or development order.
+
+Use the following standard when deciding whether something is an architectural gap:
+
+A matter is **blocking for roadmap generation** when the current documents permit materially incompatible interpretations that would affect multiple components, persistent data, public/internal interfaces, scientific semantics, security boundaries, lifecycle behavior, or the dependency/order of later development.
+
+A matter is **not blocking** merely because a concrete implementation choice has not yet been specified. Exact Python classes/functions, helper structure, filesystem encoding, database/file format, wire encoding, message representation, library usage, local algorithms, optimization details, or similar implementation decisions may remain deferred when the architectural responsibilities, invariants, and interfaces they must satisfy are already clear.
+
+Also distinguish between:
+
+1. **Contradiction** — two requirements cannot both be followed as written.
+2. **Architectural ambiguity** — multiple materially different cross-component interpretations remain possible.
+3. **Missing architectural contract** — later components require a shared invariant or boundary that is not defined.
+4. **Documentation inconsistency** — the intended contract appears clear, but terminology or an older passage conflicts with it.
+5. **Intentionally deferred implementation detail** — safe to decide during the relevant implementation phase and not a blocker for roadmap generation.
+
+Do not classify an issue as blocking without explaining the concrete downstream consequence. State which components or later development phases could make incompatible decisions if it remains unresolved.
+
+Do not invent new requirements or architecture merely to make the documents more detailed. Preserve the architecture and intent already established by the documents.
+
+For each genuine issue, provide:
+
+1. exact section(s) and relevant wording;
+2. issue classification;
+3. why it is or is not blocking for roadmap generation;
+4. the concrete downstream ambiguity or incompatibility it could cause;
+5. the smallest clarification needed to resolve it, if any.
+
+Also identify explicitly deferred matters that are safe to leave unresolved until their relevant implementation phase. Do not recommend resolving them now merely for completeness.
+
+At the end, give one of these conclusions:
+
+- **READY** — the documents are sufficiently complete and consistent to freeze as the architectural basis for roadmap generation. Any remaining open matters are implementation-local and can safely be deferred.
+- **READY WITH NON-BLOCKING CLEANUP** — the architectural contracts are sufficiently settled for roadmap generation, but minor terminology, stale references, or other non-semantic documentation cleanup remains.
+- **NOT READY** — one or more unresolved contradictions, architectural ambiguities, or missing cross-component contracts could materially affect the roadmap or cause later architectural refactoring.
+
+If the conclusion is `NOT READY`, provide a minimal ordered list of only the blocking issues that should be resolved before roadmap generation. Do not revise either file yet.
+
+If the conclusion is `READY` or `READY WITH NON-BLOCKING CLEANUP`, identify which currently deferred decisions should instead be resolved immediately before their dependent implementation phase rather than being added as roadmap phases for correcting the architecture.
+
+Do not modify `AGENTS.md`, `docs/architecture.md`, `docs/roadmap.md`, source code, or any other file. This step is review only.

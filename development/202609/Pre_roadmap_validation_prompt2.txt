@@ -1,0 +1,523 @@
+1. How is a split prepared before `start()` associated with a parent, and when/how may a later parent reuse its valid authoritative file?
+
+```text
+MY ADVICE:
+The computation instance has one current active dataset and one authoritative realized data partition associated with that dataset. The computation working directory must be supplied when the computation instance is initialized.
+Dataset registration and split preparation are handled together by `add_dataset()`. A successfully completed `add_dataset()` establishes an evaluation-ready current dataset and its authoritative realized partition; a separate explicit `data_split()` step is not required.
+When an existing `split_path` is supplied, `add_dataset()` loads the persisted partition from that path and validates it against the dataset being added. It must not rerun the splitter. When an existing split is not supplied, a data-splitting method and its required configuration must be provided. `add_dataset()` realizes the partition, validates it, and persists the authoritative partition as a `dill` file. The destination may be explicitly supplied; otherwise, a default destination is derived from the computation instance's working directory.
+The persisted partition must preserve the realized training/testing memberships and the information required to associate those memberships with the exact dataset representation. Dataset/split consistency must be validated before the dataset is accepted. The persisted and supplied dataset must match in both internal `sample_id` identity and corresponding user-facing `sample_label` identity. A matching `sample_id` with a different `sample_label`, or vice versa, is not considered the same dataset/split association. The split must also contain valid memberships for that dataset. Exact validation and serialization mechanisms may be decided during implementation.
+`add_dataset()` may be called again while execution-defining configuration is mutable. A successful later call replaces the computation instance's current dataset/split configuration rather than requiring creation of a new computation instance. This permits correction of an incorrectly selected dataset or split before execution and permits a settled reusable computation to establish a different dataset/split configuration for a later parent evaluation.
+`start()` consumes the dataset and authoritative partition that are current when that parent evaluation is created. The parent must remain associated with that exact dataset and realized partition for its execution, provenance, duplicate attempts, and recovery. A later replacement of the computation instance's current dataset/split configuration affects only subsequently created parents and must not retroactively change the dataset or partition associated with an existing parent.
+Replacing the computation instance's current split association is distinct from overwriting the contents of a persisted split artifact. An artifact still required by an existing parent must continue to represent the exact partition originally associated with that parent. A later `add_dataset()` may select or create another split artifact, but it must not silently mutate an existing parent's authoritative partition in place.
+While execution-defining configuration is locked by an unsettled parent, `add_dataset()` must not replace the current dataset/split configuration. Once configuration is mutable again, re-adding the dataset and replacing the current split association is permitted.
+A later computation instance may also reuse an existing partition by supplying its `split_path` to `add_dataset()` together with the matching dataset. Reuse is permitted only after dataset/split consistency validation succeeds.
+The exact `add_dataset()` signature, default split-file naming strategy, serialized object structure, consistency-validation mechanism, and retention/cleanup mechanism remain implementation details.
+```
+
+---
+
+2. What settles a parent after user break/cancellation or a failed operation that leaves a unit unaccepted, and when is configuration unlocked?
+
+```text
+MY ADVICE:
+There is no requirement for parent settlement to gate configuration changes.
+The intended contract is simpler: each parent execution is bound to the configuration used when that parent starts and when its unit tasks are allocated. Once allocated, a unit task and its execution attempt retain that configuration for their lifetime. Later configuration changes do not modify or propagate into already-running attempts.
+When the current parent is stopped, cancelled, or superseded, executing workers receive a stop instruction and terminate at the next defined cooperative execution boundary. Attempts or results that are already accepted, rejected, or otherwise no longer needed stop immediately. Any late result from the old parent remains associated with that parent and cannot be accepted into a later parent.
+A subsequent `start()` creates a new parent execution using the then-current configuration. Workers synchronize the configuration and required resources for that new parent before receiving its unit-task allocations. The new parent creates a new round of results; it does not resume or extend the previous parent using changed configuration.
+This separation is intentional. A parent must represent one fixed execution configuration and one coherent result set. Results produced under different configurations must not be combined within the same parent, because doing so would change the meaning of that parent’s evaluation and reduce interpretability and auditability. Parent identity therefore defines the scientific execution boundary: one parent corresponds to one fixed execution configuration and one coherent result set.
+Settlement may still describe completion of cleanup and terminal handling for the previous parent, but it is not a prerequisite for editing the configuration that will be used by a future parent. The essential invariant is that configuration changes are prospective only and can never alter the meaning of already-allocated work.
+```
+
+---
+
+3. May start wait for an explicitly configured but disconnected online worker, or must it fail immediately? If waiting is allowed, what bounds it?
+
+```text
+MY ADVICE:
+The disconnected-worker startup ambiguity should be resolved through one unified online-worker connection policy that applies before `start()`, during active evaluations, and after disconnection.
+Configured online workers are execution resources that may be available or unavailable at any given time. A worker being disconnected does not by itself invalidate the computation or prevent other runnable workers from receiving tasks.
+Connection establishment and reconnection use the same periodic retry policy throughout the worker lifecycle. The policy consists of a configurable retry period and a configurable sequence of retry intervals within each retry round. For example, a retry period of 60 seconds with retry intervals of `[1, 2, 4]` means that a connection round is initiated periodically; if an attempt fails, further attempts in that round occur after the configured 1-, 2-, and 4-second delays. If the round is exhausted without establishing a usable connection, the worker is marked unavailable for allocation until the next retry round. The exact API and timer implementation remain deferred.
+When unit tasks are ready for allocation, the root checks configured idle online workers that are candidates for work. Workers with usable connections are eligible for allocation; unavailable workers are skipped. Among responsive idle workers, allocate first to the worker with the fastest connection response for that allocation opportunity, then continue assigning available unit tasks to the remaining eligible idle workers until no unit tasks or eligible idle workers remain. Response speed is an allocation-time observation, not a permanent worker priority.
+A configured but unavailable worker remains configured. Failed connection attempts do not remove it, fail unrelated tasks, or fail work running on other workers. When it later reconnects and satisfies normal readiness requirements, it becomes eligible for subsequent allocations automatically.
+If a worker disconnects while an attempt is already assigned, mark that worker unavailable for new allocations and continue applying the same periodic reconnection policy. The fate of the existing attempt is governed by the established attempt, delivery, duplicate-execution, and recovery rules. Network disconnection must not be reclassified as model-training failure or scientific evaluation failure, and it must not trigger uncontrolled evaluation retries.
+`start()` does not wait for every configured online worker to become connected. Disconnected configured workers remain under the same retry policy. Startup and scheduling use currently runnable execution targets. If no configured execution target is runnable at all, the existing no-runnable-target startup rule applies; connection retries continue independently so a later start may succeed once a worker becomes available.
+Connection checking, retrying, and response-time measurement must remain asynchronous with respect to the coordinator's control path and isolated per worker. Failure or exhaustion of one worker's connection round must not block other workers or ongoing evaluations.
+This policy defines the architectural behavior only. Exact parameter names, public APIs, response-time measurement, probe implementation, timer mechanics, and connection-state representation should be decided during the corresponding implementation phase.
+```
+
+---
+
+4. Which retained root/worker artifacts does an explicit clear operation target, and how does it handle artifacts still required by a task or another reusable configuration?
+
+````text
+
+MY ADVICE:
+
+The persistence and initialization policy should use a simple boundary between in-memory configuration and persisted execution state.
+
+### Configuration boundary
+Configuration operations modify only attributes of the parent computation instance in memory.
+They do not create, modify, or delete persistent files.
+```text
+configuration change
+    -> instance attributes change in memory only
+    -> no file is created
+    -> no existing file is modified
+```
+Execution-defining configuration remains locked while an execution is running. It may be modified only after the relevant execution has finished or otherwise settled.
+
+### Construction and initial root-directory preparation
+A new parent computation instance is associated with a user-provided root working directory.
+The constructor uses an `overwrite` parameter to determine how an existing directory is handled:
+```text
+root does not exist
+    -> create/prepare it
+    -> instance state = initialized
+root exists and is empty
+    -> accept it
+    -> instance state = initialized
+root exists and is non-empty, overwrite=False
+    -> reject initialization
+root exists and is non-empty, overwrite=True
+    -> clear the existing contents
+    -> prepare the directory
+    -> instance state = initialized
+```
+`overwrite` is therefore an explicit opt-in to destructive replacement of an existing working directory.
+
+### `start()` and consolidation
+`start()` is the boundary at which the current in-memory configuration becomes persistent execution configuration.
+Immediately before the computation workflow begins, Cocoonet stores the current configuration in the root working directory.
+After that configuration has been committed to the execution, the instance becomes `consolidated`.
+Conceptually:
+```text
+initialized
+    |
+    | configure in memory
+    v
+initialized
+    |
+    | start()
+    | - validate current configuration
+    | - persist configuration
+    | - establish the parent execution
+    | - begin the computation workflow
+    v
+consolidated
+```
+Configuration changes made before the first `start()` do not require another initialization because no previous persisted execution configuration exists yet.
+
+### Persistence during execution
+`start()` is the only boundary that converts mutable in-memory configuration into persisted execution configuration.
+It is not the only operation that may write files.
+The subsequent execution workflow may also persist required artifacts such as:
+```text
+authoritative data-partition information
+task/lifecycle and recovery state
+evaluation-result files
+reports
+failure information
+other execution artifacts required by the defined workflow
+```
+These are execution outputs or recovery state, not configuration-side effects.
+
+### Reconfiguration after consolidation
+Once an instance is consolidated, its current in-memory configuration corresponds to an existing persisted execution.
+If the user later changes any execution-defining configuration after the execution has settled, that correspondence is broken.
+The instance therefore becomes `unconsolidated`.
+```text
+consolidated
+    |
+    | user changes execution-defining configuration
+    v
+unconsolidated
+```
+This rule is independent of whether the instance was originally constructed, copied, or otherwise reused.
+An `unconsolidated` instance cannot start another execution directly.
+```text
+unconsolidated
+    |
+    | start()
+    v
+reject
+```
+The user must explicitly call `initialize(...)` first.
+This requirement applies regardless of whether the currently referenced directory happens to be empty. Filesystem inspection does not implicitly change the object's lifecycle state.
+
+### Reinitialization
+`initialize(...)` establishes the filesystem boundary for the next fresh execution.
+It may explicitly require or accept a new `root_dir`, which makes reconfiguration and creation of a new execution unambiguous:
+```text
+consolidated execution
+    |
+    | change configuration
+    v
+unconsolidated
+    |
+    | initialize(new_root_dir, ...)
+    v
+initialized
+    |
+    | start()
+    v
+new parent execution
+```
+The exact API and clearing arguments for `initialize(...)` may be decided during implementation. Architecturally, initialization must explicitly prepare the selected root directory for the next fresh execution rather than silently treating old persisted state as belonging to the new configuration.
+After successful initialization:
+```text
+state = initialized
+```
+and execution is permitted again.
+
+### Copying behavior
+Copying an instance does not itself change its lifecycle state.
+A normal copy reproduces the instance attributes, including its current configuration, root directory, and state.
+Therefore:
+```python
+b = copy(a)
+```
+does not automatically make `b` unconsolidated.
+For example, if:
+```text
+a.state = consolidated
+```
+then immediately after an ordinary copy:
+```text
+b.state = consolidated
+```
+as well.
+Without any subsequent configuration change, the copy still represents the same persisted computation state and therefore has resume semantics rather than fresh-execution semantics.
+Conceptually:
+```text
+A
+state = consolidated
+root = run_A
+        |
+        | copy
+        v
+B
+state = consolidated
+root = run_A
+```
+At this point A and B describe the same existing persisted execution.
+Copying alone must not silently:
+```text
+create a new parent
+allocate a new root directory
+clear files
+reset state
+or convert the copy into a fresh execution
+```
+The state changes only when the user actually changes execution-defining configuration.
+For example:
+```text
+B copied from A
+state = consolidated
+        |
+        | user changes model / dataset / split configuration /
+        | execution topology / root directory / other
+        | execution-defining configuration
+        v
+state = unconsolidated
+```
+The same rule applies without copying:
+```text
+A consolidated
+    |
+    | user reconfigures A
+    v
+A unconsolidated
+```
+Thus copying requires no special lifecycle mechanism. Reconfiguration is the event that matters.
+
+### Resume versus new execution
+The lifecycle state makes the distinction explicit.
+```text
+consolidated + unchanged configuration
+    -> existing persisted execution
+    -> resume semantics
+
+unconsolidated
+    -> configuration no longer matches persisted execution
+    -> execution prohibited
+
+unconsolidated
+    -> initialize(new_root_dir, ...)
+    -> initialized
+    -> start()
+    -> fresh parent execution
+```
+A copied consolidated instance that has not been changed therefore behaves the same as the original instance with respect to the existing execution.
+If the user wants to turn the copy into a different computation, changing its execution-defining configuration makes it unconsolidated, after which explicit initialization establishes the root directory for the new execution.
+
+### Recovery
+Recovery of an existing persisted execution is distinct from fresh initialization.
+Recovery preserves the existing parent identity and persisted execution state. It must not clear or freshly initialize the corresponding root directory.
+The architectural distinction is:
+```text
+initialize(...)
+    -> prepare filesystem state for a fresh execution
+
+start() from initialized state
+    -> persist current configuration
+    -> create/start a new parent execution
+
+resume/recovery of consolidated state
+    -> continue the existing persisted execution
+    -> preserve parent identity
+    -> do not clear its root directory
+```
+The exact recovery API can remain an implementation decision.
+
+### Persistent-file clearing
+Cocoonet does not require a general persistent-file `clear()` API as part of its architecture.
+Datasets, partitions, results, reports, and other persistent state are files. Users may manage those files directly outside the module.
+A convenience clearing API may be added later, but its absence does not affect the core functionality or lifecycle contract.
+The only required destructive behavior at this architectural level is explicit preparation of a root directory when the user chooses to initialize a fresh execution into a directory whose previous contents are to be replaced.
+
+### Resulting lifecycle
+The complete configuration lifecycle is:
+```text
+new instance
+    |
+    | constructor validates/prepares root
+    v
+initialized
+    |
+    | configuration changes
+    | memory only
+    v
+initialized
+    |
+    | start()
+    | persist configuration
+    v
+consolidated
+    |
+    | existing execution may run / settle / resume
+    |
+    +------------------------------+
+    |                              |
+    | no configuration change      | configuration change
+    |                              |
+    v                              v
+consolidated                  unconsolidated
+resume existing                    |
+execution                          | initialize(root_dir, ...)
+                                   v
+                              initialized
+                                   |
+                                   | start()
+                                   v
+                              new consolidated
+                              parent execution
+```
+Copying does not create an additional transition:
+```text
+copy(instance)
+    -> copies the current state as ordinary object state
+
+configuration change afterward
+    -> if previously consolidated, becomes unconsolidated
+```
+This keeps the policy simple and auditable: configuration is memory-only until `start()`, persisted execution remains associated with consolidated configuration, reconfiguration explicitly breaks that association, and `initialize(...)` explicitly establishes the filesystem boundary before a fresh execution.
+````
+
+---
+
+5. Manual persistence clearing
+
+````text
+MY ADVICE:
+
+The earlier ambiguity should be narrowed substantially. Cocoonet does not manage or delete user-provided dataset files on the root node. Root-side user data remains under the user's filesystem control.
+
+### Root-side data ownership
+The root node stores and manages references to user-provided dataset files together with Cocoonet-owned metadata and state such as dataset identity, generated sample identifiers, configuration, task state, and prepared partition information.
+Cocoonet must not delete, move, garbage-collect, or otherwise manage the underlying user-provided dataset files on the root filesystem. If the user wants to modify or delete those files, that is performed directly through the filesystem outside Cocoonet.
+Removing a dataset from a computation or configuration therefore removes Cocoonet's reference/configuration only. It does not delete the underlying source data.
+The authoritative root-side partition file is different because it is a Cocoonet-generated persistence artifact. Its lifecycle is governed by the partition persistence and recovery contract rather than worker-dataset cleanup.
+
+### Worker-side dataset ownership
+Workers hold synchronized dataset copies that are created and managed by Cocoonet. Dataset cleanup applies to these worker-side copies.
+A synchronized worker dataset may be retained for reuse. When it is successfully cleaned, that worker no longer has the dataset available and its readiness for that dataset is invalidated. A later task requiring the dataset must synchronize it again.
+Private workers may retain their synchronized data for reuse under user control. Public workers must clean user-managed state before ownership is released and before another user can use the worker.
+Worker dataset cleanup is separate from worker removal, task failure, result persistence, and scientific evaluation failures.
+
+### Cleanup timing and rejection policy
+Under the normal workflow, cleanup is issued only after the parent task has finished.
+The exceptional case occurs when the user interrupts the parent execution and then requests cleanup before every affected worker has actually become inactive.
+The rule is:
+```text
+Worker dataset cleanup is all-or-nothing across the requested worker set
+and is allowed only when every targeted worker is inactive.
+```
+A cleanup request may target:
+- one specific worker;
+- a specific group of workers; or
+- all applicable workers.
+The exact public API for selecting these scopes is deferred to implementation design.
+For a single-worker cleanup request, if that worker is still active, the request is rejected and no deletion occurs.
+For a group or all-workers cleanup request, every targeted worker must be inactive. If any targeted worker is still active, the entire cleanup request is rejected and no dataset copy is deleted from any worker in the requested set.
+There is no partial cleanup after rejection, and Cocoonet does not defer the rejected operation for later execution. The user may issue the cleanup request again after all targeted workers have become inactive.
+An interrupted parent task does not itself make cleanup immediately valid. Cleanup becomes valid only after the targeted workers have actually become inactive.
+This resolves the worker-dataset cleanup ambiguity. The remaining details—such as method names, selection arguments, storage layout, and deletion implementation—are implementation details and do not require further architectural policy.
+````
+
+---
+
+6. Does removing a configured worker only detach its configuration, or also stop/disconnect/release its runtime resource, and who retains ownership for subsequent reuse or recovery?
+
+````text
+MY ADVICE:
+
+The ambiguity should be resolved by defining `remove_worker` strictly as a **root-side worker-configuration modification operation**.
+`remove_worker` is not an execution-control, disconnection, cleanup, or resource-release instruction.
+
+### Core rule
+When `remove_worker` succeeds:
+```text
+Root computation instance:
+    worker configuration is modified to remove the selected worker
+
+Worker:
+    no direct action is performed by remove_worker
+```
+Any worker-side behavior resulting from loss of the root connection follows the already-defined **disconnection rules**. `remove_worker` does not introduce separate stop, cleanup, timeout, or release semantics.
+
+### Normal lifecycle
+Worker configuration may be modified:
+1. **Before execution initiated by `start()` begins.**
+   Removing a worker only changes the root computation instance's worker configuration.
+2. **After the execution initiated by `start()` has finished.**
+   Removing a worker again only changes the root computation instance's worker configuration.
+During ordinary active parent-task execution, worker configuration remains locked according to the existing configuration-locking policy, so normal worker removal does not occur in that state.
+
+### Interrupted or recovered parent execution
+An interrupted parent may leave a worker connected, working, idle, or holding retained state.
+A new or resumed root instance may add and reconnect that worker and subsequently call `remove_worker`.
+The same rule still applies:
+```text
+remove_worker
+    -> modifies root-side worker configuration only
+```
+The worker itself receives no special `remove_worker` behavior.
+If removing the worker causes or accompanies disconnection, the worker follows the established disconnection policy. Whether it is currently working or idle does not create a separate removal policy.
+If the root cannot successfully modify its worker configuration, `remove_worker` fails explicitly and clearly. It does not attempt to compensate by introducing separate worker-control behavior.
+
+### Worker data and resource management are separate operations
+Worker configuration removal must remain independent from worker-data cleanup and resource release.
+For both private and public workers:
+```text
+cleanup_dataset
+    -> clean the selected retained dataset data
+
+cleanup
+    -> clean all retained user data
+```
+For a public worker:
+```text
+release
+    -> clean all retained user data
+    -> perform the required state/resource release
+```
+For a private worker:
+```text
+release
+    -> has no applicable resource-release function
+    -> warn the user that private-worker lifecycle remains user controlled
+```
+Therefore, removing a public worker from the root configuration does **not** implicitly clean its data or release the public resource. Those actions require the corresponding explicit worker-management operation.
+Likewise, removing a private worker does not clean its retained data, stop its independent runtime, reset it, or define whether it may later be reconnected. Those concerns remain under the user's control and the existing worker/disconnection lifecycle.
+
+### Public-worker disconnection
+If a public worker is disconnected without an explicit `release`, its retained data and eventual resource lifecycle follow the already-established public-worker disconnection rules.
+`remove_worker` does not override those rules.
+
+### Architectural boundary
+The responsibilities should therefore remain separated as follows:
+```text
+remove_worker
+    -> root worker-configuration modification
+connection/disconnection
+    -> connection lifecycle rules
+cleanup_dataset
+    -> selected dataset cleanup
+cleanup
+    -> all retained user-data cleanup
+release
+    -> public-worker cleanup and resource/state release
+start / cancellation / recovery
+    -> execution lifecycle
+```
+No additional runtime ownership semantics should be inferred from `remove_worker`.
+This keeps the operation simple and auditable: worker configuration, worker data lifecycle, connection lifecycle, execution lifecycle, and public-resource lifecycle remain separate concerns.
+
+````
+
+---
+
+- Must `data_split()` be called explicitly, or may start prepare a missing split automatically?
+
+```text
+MY ADVICE:
+
+```
+
+---
+
+- What configuration fields are copied, and what configuration/history is restored for a reusable computation beyond the fixed parent state already required for recovery?
+
+```text
+MY ADVICE:
+
+```
+
+---
+
+7. Additional architecture revision:
+
+````text
+MY ADVICE:
+
+For user addition of dataset, the provided table from user should be:
+
+- ungroupped, unmasked dataset:
+
+```text
+Ordinary inline features: sample_label | y | X0 | X1 | ... | Xn
+Inline tensor data:       sample_label | y | shape | X0 | X1 | ... | Xn
+File-backed data:         sample_label | y | X_file
+```
+
+- ungroupped, masked dataset:
+
+```text
+Ordinary inline features: sample_label | train_mask | test_mask | y | X0 | X1 | ... | Xn
+Inline tensor data:       sample_label | train_mask | test_mask | y | shape | X0 | X1 | ... | Xn
+File-backed data:         sample_label | train_mask | test_mask | y | X_file
+```
+
+- groupped, unmasked dataset:
+
+```text
+Ordinary inline features: sample_label | group | y | X0 | X1 | ... | Xn
+Inline tensor data:       sample_label | group | y | shape | X0 | X1 | ... | Xn
+File-backed data:         sample_label | group | y | X_file
+```
+
+- groupped, masked dataset:
+
+```text
+Ordinary inline features: sample_label | group | train_mask | test_mask | y | X0 | X1 | ... | Xn
+Inline tensor data:       sample_label | group | train_mask | test_mask | y | shape | X0 | X1 | ... | Xn
+File-backed data:         sample_label | group | train_mask | test_mask | y | X_file
+```
+
+Internal dataset dataframe for instance and for storage must be the same as `groupped, masked`, with default `group` to unique IDs if ungroupped, and default `train_mask` and `test_mask` to `1` if unmasked.
+`group` is for groupped train-test-split, groupped k-fold and LOGO.
+If `train_mask==1`, the use of the sample for training is permitted, if `train_mask==0`, the sample is not included in all training datasets.
+If `test_mask==1`, the use of the sample for testing is permitted, if `test_mask==0`, the sample is not included in all testing datasets.
+
+Why? The reason is that this input dataset structure allows an divergent utilization of samples in training and testing, which could be common for some data augmentation scenarios, e.g. augmentation samples do not join testing, reserved validation samples do not join training (but split and join test dataset of the folds, accepting the randomness influence too like for data split itself).
+````

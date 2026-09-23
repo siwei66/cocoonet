@@ -1,0 +1,41 @@
+The remaining ambiguities are:
+- Connection bootstrap: How does public discovery cause the selected worker to initiate its outbound connection to the root? The existing worker-initiated transport remains preserved.
+
+````text
+MY ADVICE:
+
+The previously identified connection-bootstrap ambiguity comes from an incorrect assumption about connection ownership. In CocooNet, the **root initiates connections to workers**; workers do not initiate connections to the root and never communicate directly with other workers.
+For a private worker, the root connects using its configured worker connection information. For a public worker, the root requests an idle worker from an external discovery service and receives the connection information required to reach the selected worker. The root then establishes the connection to that worker.
+
+```text
+Private worker:
+Root -----------------------> Worker
+      establish connection
+Public worker:
+Root ---- request worker ----> Discovery Service
+Root <--- connection info ---- Discovery Service
+Root -----------------------> Worker
+      establish connection
+```
+
+The public-worker discovery service is outside the scope of CocooNet and is planned separately, such as in `CocoonService`. That service is responsible for worker availability, idle-worker selection, reservation/allocation state, and determining when a worker becomes available again. This state remains internal to the service; CocooNet receives only the selected worker's connection information.
+CocooNet may send lifecycle notifications required by the external service, such as a worker-release notice. Reservation duration, timeout-based release, and other worker-pool policies remain responsibilities of the external service.
+The concrete service endpoint, request/response format, authentication mechanism, returned connection-information format, and release-notification protocol should not be invented in CocooNet in advance. They will be defined when the external service interface is provided for implementation.
+Therefore, public discovery does not cause a worker to initiate a connection back to the root. It provides the root with the information needed to establish the root-initiated connection, while discovery-service allocation and release management remain outside CocooNet.
+````
+
+- Retry exhaustion: Delivery failure remains unfinished, but subsequent worker availability and the user’s recovery action need definition.
+
+```text
+MY ADVICE:
+Retry exhaustion: When any configured retry limit is reached, the attempted operation fails. Stop further retries and record the failure clearly in the failure log, including the operation, retry limit, attempts made, and final error. No additional recovery, fallback, recomputation, or special action is required solely because the retry limit was exhausted. The failure follows the normal failure-handling rules for the affected operation.
+```
+
+- Other scientific definitions: Previously unresolved classification aggregation/covariance and regression normalization conventions remain outside these advice resolutions.
+
+```text
+MY ADVICE:
+This is not an unresolved ambiguity. Standard classification and regression metrics use their established conventional definitions unless Cocoonet explicitly defines a project-specific variation.
+Detailed formulas and report conventions can be added to `architecture.md` during the corresponding later planning and implementation steps.
+The influence measure is different because it is a Cocoonet-specific, recomposed metric rather than a standard classical measure; therefore, its definition must be specified explicitly.
+```

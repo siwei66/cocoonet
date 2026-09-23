@@ -1,0 +1,58 @@
+I found three places where requirements need clearer scope or consistent lifecycle handling. No files were modified.
+
+1. **Architecture Principles — discarded duplicates versus delivery waiting**
+
+   [Duplicate handling](E:/swectral_new/cocoonet/AGENTS.md:272) requires discarding later results. [Delivery handling](E:/swectral_new/cocoonet/AGENTS.md:299) requires the sending worker to wait for persistence confirmation or a resend request, until persistence succeeds or retries are exhausted.
+
+   **Example:** Worker A wins. Worker B has already finished and sends its result, which the root discards. B’s result will never be persisted, but its delivery-wait rule does not explicitly recognize cancellation or discard as a terminal outcome. Cancellation checks between evaluation loops do not clearly cover this completed-but-delivering state.
+
+   **Clarification needed:** Discarding or cancelling a losing attempt must end that attempt’s delivery wait without requiring persistence or treating normal duplicate cancellation as a delivery failure. Exact message formats can remain deferred.
+
+```text
+MY ADVICE:
+Duplicate result delivery is serialized by the root for each logical task.
+When multiple duplicate attempts are ready to return results, the root receives only one result file at a time, according to receiving order. Once the selected result file has been completely received, successfully persisted, and accepted, the logical task is complete. The root sends stop instructions to all remaining duplicate workers and does not receive their result files.
+Resend handling applies only to the result file currently selected for reception when its transfer or persistence fails. Losing duplicate attempts do not enter the resend process and their unreceived results are not treated as delivery failures.
+Therefore, there is no conflict between duplicate-result handling and delivery waiting: persistence/retry applies to the selected result transfer, while all remaining duplicate attempts are stopped after successful acceptance.
+```
+
+2. **Agent Instructions / Architecture Principles — terminal failure versus “unfinished” task**
+
+   [Retry exhaustion](E:/swectral_new/cocoonet/AGENTS.md:129) terminates the attempted operation through normal failure handling. However, [delivery exhaustion](E:/swectral_new/cocoonet/AGENTS.md:301) explicitly leaves the logical task unfinished while allowing the worker to continue. [Retention](E:/swectral_new/cocoonet/AGENTS.md:305) also uses “all root tasks finish” as a condition.
+
+   **Example:** Nine tasks deliver successfully; the tenth exhausts its delivery retries. No computation or delivery remains active, but a literal “all tasks finished” check never succeeds.
+
+   **Clarification needed:** Distinguish **no accepted result** from **work still pending**. An exhausted operation can leave a task terminally failed without an accepted result. Run-completion and retention conditions should consistently recognize terminal failures. This implements the existing normal-failure policy; it does not require additional recovery.
+
+```text
+MY ADVICE:
+The ambiguity comes from mixing failures at different scopes. These scopes must remain strictly separated in `AGENTS.md` and throughout Cocoonet development.
+**Failure is always handled at the smallest applicable scope. Reaching a retry limit fails only the operation governed by that retry limit. It does not imply failure or termination of the worker process.**
+For example:
+- A measure-level computation failure is logged, the affected result becomes `NaN` or missing as defined, and the remaining evaluation continues.
+- A task-level failure, such as an unrecoverable failure of the model evaluation itself, fails that task and produces the defined failure outcome. The worker remains running and continues with subsequent work.
+- Exhaustion of a transfer, persistence, connection, or other bounded retry sequence fails that specific operation and follows the failure handling defined for that scope. It must not terminate the worker.
+- Failure of one model, report, measure, task, or retry sequence must never be interpreted as worker-process failure.
+The **worker process is a long-running execution service expected to operate continuously for extended periods, potentially months**. Normal application-level failures must therefore be contained and must not propagate into worker-process termination.
+A **worker failure** specifically means that the worker process itself has become unavailable—for example because of an unrecoverable process crash, machine shutdown, external termination, or comparable infrastructure/runtime failure. This is exceptional and is fundamentally different from a task or operation failure. Restarting the worker process is not part of normal Cocoonet task/error recovery; if the process actually stops, external intervention may be required to start the worker module again.
+Accordingly, wording such as **“fail,” “failure,” “retry exhaustion,” or “terminate the operation” must always be interpreted and documented with its applicable scope**. Do not use these terms in a way that could imply worker termination when only a measure, task, delivery, connection, or other bounded operation has failed.
+This distinction must be made explicit in `AGENTS.md` as a general implementation invariant and preserved consistently in architecture, lifecycle/protocol documentation, and all subsequent module development.
+The original ambiguity about a delivery retry limit should therefore not be resolved by introducing a generic terminal-worker concept. Delivery retry exhaustion means that the **delivery operation has failed at its defined scope**. Its effect on the logical task/result state should be specified separately according to the result lifecycle, while the worker itself remains running and available for continued operation.
+```
+
+3. **Project Overview — accuracy formula versus general classification scope**
+
+   The [accuracy expression](E:/swectral_new/cocoonet/AGENTS.md:36) is stated without a binary or per-class qualification, while the [standard-metric rule](E:/swectral_new/cocoonet/AGENTS.md:41) requires conventional definitions across supported classification models.
+
+   **Example:** True classes are `[A, B, C]`, and predictions are `[B, C, A]`. Conventional overall accuracy is `0`. For class A treated as one-versus-rest, `TP = 0` and `TN = 1`, so `(TP + TN) / 3 = 1/3`. These are different quantities.
+
+   **Clarification needed:** Identify `(TP + TN) / sample_size` as binary or class-versus-rest accuracy. Overall multiclass accuracy should follow its conventional definition unless an explicitly named project-specific variation is intended. This is a scope issue, not a missing standard formula.
+
+```text
+MY ADVICE:
+Clarify the scope of overall accuracy explicitly in `AGENTS.md`:
+- Classwise overall accuracy = `(TP + TN) / (TP + TN + FP + FN)`
+- Micro-average overall accuracy = `number of true predictions / sample size`
+- Macro-average overall accuracy = `average of the classwise overall accuracies of all classes`
+These definitions intentionally represent different scopes of accuracy. Different values between classwise, micro-average, and macro-average accuracy in multiclass classification are expected and should not be treated as an ambiguity.
+```

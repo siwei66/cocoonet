@@ -1,0 +1,32 @@
+Read the attached ambiguity-review file first.
+
+The file contains ambiguity findings and my responses marked as `MY ADVICE`.
+
+Limit the scope to the root `AGENTS.md`.
+
+Process the attached file section by section, and within each section handle each `MY ADVICE` entry one by one.
+
+For each `MY ADVICE`:
+
+1. Identify the ambiguity it addresses.
+2. Check whether my advice resolves it clearly and consistently.
+3. Refine it only as needed to make the intended behavior implementable and unambiguous.
+4. Revise `AGENTS.md` accordingly.
+5. Preserve the intended architecture and the mandatory one-change-unit approval gate.
+
+Do not batch unrelated ambiguity resolutions together. Work through the file in order.
+
+After all `MY ADVICE` entries are incorporated:
+
+1. Validate the complete revised `AGENTS.md` from a development perspective.
+2. Report any remaining conceptual, instructional, security, lifecycle, or scope ambiguities concisely.
+3. Check whether `architecture.md` now needs revision to stay consistent with the latest understanding expressed in `AGENTS.md`.
+
+Output:
+
+1. A concise section-by-section report of how each `MY ADVICE` was interpreted and resolved.
+2. The complete revised `AGENTS.md`.
+3. Remaining ambiguities, if any.
+4. Whether `architecture.md` needs updating, and which areas would need revision.
+
+Do not implement project code or modify any file other than `AGENTS.md`.

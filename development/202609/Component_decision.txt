@@ -1,0 +1,63 @@
+### For root node
+
+Root coordinator
+    owns logical task state and scheduling, progress reporting, interrupt resume
+
+Root connection component
+    owns worker connection information retrieval and worker connection
+
+Root communication component
+    owns worker communication, task sending, heartbeat, result accepting, result storage and result resending request
+
+Root control component
+    owns connection/communication lifecycle of the entire batch model evaluation task of all single models, keeps the running logs and error logs
+
+
+---
+
+### For worker node
+
+Dataset synchronization component
+    owns dataset validation, synchronization and synchronized dataset readiness/storage
+
+Model synchronization component
+    owns model reconstruction data or model basic validation, synchronization and synchronized model readiness/storage
+
+Data splitting component
+    owns all data splitting logic, including simple random train test split / groupped random train test split / k-fold / groupped k-fold / LOO / LOGO for regression, and simple random train test split / groupped random train test split / k-fold / groupped k-fold / LOO / LOGO / stratified simple random train test split / stratified groupped random train test split / stratified k-fold / stratified groupped k-fold for classification.
+
+sklearn model initialization component
+    owns sklearn model reconstruction meta data validation, model reconstruction and initialization
+
+sklearn-like model initialization component
+    owns validation and initialization of custom models with sklearn-like API
+
+pytorch model initialization component
+    owns torch model reconstruction, initial weight initialization, and scheduler, optimizer etc. torch training component initialization
+
+Model training component
+    owns model training on training dataset and prediction on test dataset
+
+Segment evaluation components (validation result component, performance report component, residual analysis component, influence analysis component and visualization plot generalization component)
+    owns all evaluation report computation logic output standardized single reports of validation results, performance metrics, residual analysis, influence analysis and visualizations (plotting data of ROC Curve for classification / plotting data of Scatter plot and Residual plot for regression), and keeping them in the harddrive.
+
+Result packaging component
+    converts evaluation outputs into one standardized Cocoonet result dill file for transferring.
+
+sklearn model training component
+    owns organization of a entire sklearn model reconstruction, initialization, training, prediction, evaluation and result collection & packaging workflow for one single sklearn model using the corresponding components. And controls the parallel workflow subprocesses of the (number of available CPU cores - 1) cores (one reserved for communication).
+
+sklearn-like model training component
+    owns organization of a entire sklearn-like model initialization, training, prediction, evaluation and result collection & packaging workflow for one single sklearn model using the corresponding components. And controls the parallel workflow subprocesses of the (number of available CPU cores - 1) cores (one reserved for communication).
+
+torch model training component
+    owns organization of a entire torch model reconstruction, initialization, training, prediction, evaluation and result collection & packaging workflow for one single sklearn model using the corresponding components.
+
+sklearn model training component
+    owns organization of a entire model reconstruction, initialization, training, prediction, evaluation and result collection & packaging workflow for one single sklearn model using the corresponding components
+
+Worker control component
+    owns connection/control lifecycle of the entire workflow of a single model, keeps the running logs and error logs
+
+Delivery component
+    owns result transfer/resend lifecycle

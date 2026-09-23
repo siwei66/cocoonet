@@ -1,0 +1,622 @@
+## Project Overview
+
+Cocoonet is a distributed engine for large-scale evaluation of machine-learning models across independent, heterogeneous worker nodes.
+
+The **root node** is the user's local coordinator and control point. The distributed compute infrastructure is the **worker network**.
+
+A primary dataset is synchronized to workers separately from evaluation tasks. The root dispatches model definitions or recipes, hyperparameters, evaluation directives, and execution metadata. Workers execute tasks independently and return serialized reports such as predictions, metrics, and execution metadata.
+
+An optional online **directory service** supports worker discovery and network membership. It is not the execution coordinator or task/result data plane unless the architecture explicitly changes.
+
+The same Python package may configure the local runtime explicitly as a root node or worker node.
+
+Supported workloads include scikit-learn-compatible estimators, PyTorch models through a defined execution contract, and evaluation strategies such as K-fold, grouped K-fold, Leave-One-Out (LOO), Leave-One-Group-Out (LOGO), and train/test splits.
+
+Correctness, reproducibility, auditability, failure transparency, and deterministic behavior take precedence over implementation convenience or premature optimization.
+
+---
+
+## Sources of Truth
+
+Use repository guidance in this order:
+
+1. Explicit user instructions for the current task.
+2. Applicable `AGENTS.md` files.
+3. `architecture.md` and protocol/schema specifications.
+4. `roadmap.md`.
+5. Tests.
+6. Existing implementation.
+
+If authoritative sources conflict, identify the conflict instead of silently choosing one.
+
+Do not infer new architecture from existing implementation alone.
+
+---
+
+## Historical Prompt Archive
+
+`prompts/development/` contains historical development prompts for audit purposes only.
+
+Agents must not read, search, summarize, interpret, or use files in this directory during normal planning, implementation, debugging, review, or testing.
+
+These files are not project requirements or sources of truth.
+
+Inspect them only when the user explicitly asks to review development prompt history.
+
+Do not modify existing prompt records in this directory and its subdirectories.
+
+---
+
+## Development Workflow
+
+### Documentation First
+
+Before changing externally visible behavior, architecture, protocols, schemas, persistent formats, or distributed-system semantics, verify that the intended behavior is documented.
+
+If documentation is missing but the design is already clear, update the relevant documentation before implementing it.
+
+If an architectural decision remains unresolved, stop at that boundary and ask the user to decide.
+
+### Small, Reviewable Change Units — Mandatory Approval Gate
+
+All implementation must proceed one change unit at a time, even when the user provides a high-level request covering an entire feature.
+
+Codex may decompose and describe the full implementation plan, but it must implement only the first unapproved change unit.
+
+A change unit is normally one of:
+
+* one production function;
+* one class method;
+* one narrowly scoped schema, declaration, configuration, or documentation change.
+
+The same unit may also include only the directly corresponding:
+
+* tests;
+* type annotations;
+* docstrings or documentation;
+* minimal edits required to keep that unit valid.
+
+Do not include another production function, method, unrelated refactor, or future implementation step in the same unit.
+
+If one function depends on a new helper, implement and obtain approval for the helper first. Implement the caller in a later approved unit.
+
+After each change unit:
+
+1. Run the focused validation applicable to that unit.
+2. Report:
+
+   * what changed;
+   * files changed;
+   * tests/checks run and their results;
+   * any remaining concern;
+   * the next proposed change unit.
+3. Stop.
+
+Do not begin the next change unit until the user explicitly approves continuation.
+
+A high-level implementation request, approval of an implementation plan, or approval of an earlier unit does not authorize later units automatically.
+
+When the user says `continue`, `approved`, or equivalent, implement only the next proposed unit and stop again.
+
+### No Unsolicited Scope Expansion
+
+Do not introduce unrelated:
+
+* dependencies;
+* abstractions;
+* utilities;
+* protocols;
+* framework support;
+* refactors;
+* infrastructure.
+
+If additional scope is necessary, explain why and leave it for a later approved change unit.
+
+### Inspect Before Editing
+
+Before modifying a component, inspect:
+
+* the applicable `AGENTS.md`;
+* relevant architecture or protocol documentation;
+* the current implementation;
+* relevant tests;
+* affected callers or consumers when changing a contract.
+
+---
+
+## Network Roles and Membership
+
+### Root Node
+
+The root is the user's local coordinator.
+
+It owns:
+
+* evaluation-run creation;
+* worker membership;
+* task scheduling;
+* timeout, retry, cancellation, and reassignment decisions;
+* result collection;
+* durable progress state;
+* user-facing health and progress reporting.
+
+### Worker Nodes
+
+Workers execute assigned tasks independently.
+
+Workers must not require:
+
+* worker-to-worker communication;
+* distributed shared mutable state;
+* peer synchronization;
+* worker consensus.
+
+Workers may be privately controlled or explicitly shared by another operator.
+
+### Directory Service
+
+The optional online directory service supports discovery and membership metadata.
+
+It must not become the task coordinator, dataset store, model store, or result store unless explicitly documented.
+
+Manual worker connection configuration must remain possible.
+
+Established worker identity and completed task state must not depend on directory-service availability.
+
+---
+
+## Identity, Enrollment, and Discovery
+
+### Root Identity
+
+Creating a network generates a unique root/network identity and authentication credential.
+
+The root's private credential must remain local to the root.
+
+Do not distribute the root's private credential to workers or store it in the directory service.
+
+### Worker Enrollment
+
+A privately controlled worker may be added using a simple enrollment key or token.
+
+The enrollment credential must be distinct from the root's private credential and scoped to enrollment.
+
+Each enrolled worker must have its own stable worker identity and credential.
+
+Credentials should be revocable or replaceable where practical.
+
+### Shared Workers
+
+A shared worker may expose an access or invitation credential that permits an authorized root to use it.
+
+That access credential must be separate from the worker's private identity credential.
+
+A shared worker must not accept arbitrary executable model payloads from unrelated users unless an explicit isolation and trust model exists.
+
+### Discovery
+
+Worker connection and authorization information may be:
+
+* configured manually on the root; or
+* retrieved through the directory service after the root authenticates.
+
+The directory service may provide the root with the connection information and worker-specific authorization material needed to access workers that the root is authorized to use.
+
+The directory service must never expose root or worker private identity keys.
+
+Without access to the directory service, the root must still be able to connect directly to a worker using manually configured connection information together with the worker-specific credential required by that worker.
+
+Task payloads, datasets, models, and evaluation results should travel directly between root and workers unless an explicit relay architecture is introduced.
+
+---
+
+## Run, Task, and Attempt Identity
+
+A complete evaluation is an **evaluation run** with a stable `Run ID`.
+
+Each independently schedulable logical task has a stable `Task ID`.
+
+Each execution or re-execution of that task has a distinct `Attempt ID`.
+
+The identity relationship is:
+
+`Run → Task → Attempt`
+
+Retry or reassignment:
+
+* preserves the `Run ID`;
+* preserves the logical `Task ID`;
+* creates a new `Attempt ID`.
+
+Only one successful logical result may become canonical for a task.
+
+Duplicate, late, or conflicting results must be detected and must not silently overwrite canonical state.
+
+---
+
+## Task Execution and Network Invariants
+
+### Minimal Network Transfer
+
+Datasets should be synchronized separately from routine evaluation tasks.
+
+Task dispatch should contain only information required to identify and execute the task, such as:
+
+* run/task/attempt identity;
+* dataset identity;
+* model or model recipe;
+* hyperparameters;
+* evaluation directives;
+* seeds; and
+* protocol metadata.
+
+### Idempotency
+
+Retries, reassignment, duplicate delivery, reconnects, and late results must not:
+
+* create duplicate logical results;
+* corrupt coordinator state;
+* silently overwrite conflicting results;
+* count one task more than once.
+
+Correctness must rely on stable identities rather than connection timing.
+
+### Disk-First Report Ingestion
+
+Do not deserialize arbitrary report payloads in the active network event loop.
+
+Incoming reports should be:
+
+1. validated at the protocol boundary where possible;
+2. streamed asynchronously to staging storage;
+3. integrity-checked;
+4. finalized atomically;
+5. deserialized only in an authorized processing context when required.
+
+### Backpressure
+
+Task dispatch, execution, report transfer, and artifact persistence must use bounded concurrency or another explicit backpressure mechanism.
+
+Do not create unbounded tasks, queues, buffers, or transfers.
+
+---
+
+## Timeouts, Cancellation, and Reassignment
+
+Worker configuration must support timeout policy when a worker is added.
+
+At minimum, distinguish **task timeout** from **straggler timeout**.
+
+### Task Timeout
+
+Task timeout limits one execution attempt.
+
+It should begin when the attempt starts execution rather than merely when it is queued.
+
+When an attempt exceeds the task timeout:
+
+1. mark the attempt timed out;
+2. request cancellation where possible;
+3. preserve all previously completed tasks;
+4. retry or reassign according to the bounded retry policy.
+
+Cancellation is best-effort.
+
+A cancelled or superseded attempt may still return a late result. Such a result must be identified by `Attempt ID` and must not silently become canonical.
+
+Retry policies must be bounded. Do not retry indefinitely.
+
+If no allowed attempt succeeds, the logical task fails and the run reports the failure while preserving completed results.
+
+### Straggler Timeout
+
+Straggler timeout applies when remaining in-flight work is delaying completion after the rest of the run has finished or become terminal.
+
+If a remaining attempt exceeds this threshold and another eligible worker is available:
+
+1. supersede the current attempt;
+2. request cancellation;
+3. create a new `Attempt ID`;
+4. reassign the same logical task.
+
+The replacement attempt remains subject to normal task timeout and retry limits.
+
+Straggler reassignment must never create a second logical task.
+
+---
+
+## Durable Progress and Restart
+
+Completed logical task results must be committed durably as they finish.
+
+Root restart must reconstruct evaluation state from durable data.
+
+Normal restart/resume schedules only unfinished work.
+
+Previously completed tasks must not be recomputed automatically.
+
+Failed, cancelled, timed-out, or otherwise incomplete work may create new attempts according to retry policy.
+
+### Recompute All
+
+When the user explicitly requests complete recomputation:
+
+* create a new `Run ID`;
+* preserve the previous run and its results;
+* start a complete new set of tasks;
+* record previous-run lineage where applicable.
+
+Recomputation must not silently overwrite or delete the previous run.
+
+---
+
+## Worker Health and Progress Reporting
+
+Workers must emit lightweight periodic heartbeats or equivalent lease updates.
+
+Root health decisions should use heartbeat age or equivalent recent communication rather than a single missed request.
+
+Worker status should expose, where applicable:
+
+* worker identity;
+* reachable/unreachable state;
+* idle/busy state;
+* active attempt;
+* last-seen time;
+* basic capability/capacity;
+* recent failure information.
+
+The root must periodically report run progress to the user.
+
+Progress should include:
+
+* total tasks;
+* pending tasks;
+* running tasks;
+* succeeded tasks;
+* failed tasks;
+* retries/reassignments;
+* worker health summary.
+
+Meaningful state changes may also trigger immediate reports.
+
+Worker loss may cause reassignment, but reassignment must create a new `Attempt ID` rather than a duplicate logical task.
+
+---
+
+## Security and Trust
+
+All root-worker communication must use encrypted transport and application-level authentication.
+
+Transport encryption alone does not establish authorization.
+
+`pickle`, `dill`, and equivalent Python-object formats are trusted-code serialization mechanisms, not safe untrusted-data formats.
+
+Do not deserialize Python objects outside the documented trust boundary.
+
+Root, worker, enrollment, and shared-worker credentials must have separate purposes and must not be interchangeable.
+
+Do not:
+
+* commit credentials or secrets;
+* log secrets;
+* place real credentials in tests;
+* expose credentials through health/progress output;
+* weaken execution isolation implicitly.
+
+Authentication failures must fail closed.
+
+Worker removal or credential revocation must prevent new work from being assigned without deleting historical results.
+
+Validate identifiers, versions, declared sizes, checksums, and other protocol metadata before expensive processing or deserialization where practical.
+
+---
+
+## Reproducibility
+
+Every evaluation run must preserve enough machine-readable metadata to explain and reproduce its result where mathematically possible.
+
+Record as applicable:
+
+* `Run ID`;
+* previous/parent run ID for explicit recomputation;
+* logical `Task ID`;
+* successful `Attempt ID`;
+* attempt history where relevant;
+* dataset identity/fingerprint;
+* model/configuration identity;
+* evaluation and split configuration;
+* random seeds;
+* runtime/package versions;
+* worker identity;
+* timeout/retry configuration;
+* artifact identity/checksum;
+* execution status; and
+* failure information.
+
+Random-number generators must be explicitly seeded where deterministic behavior is possible.
+
+Do not claim deterministic execution where the underlying framework or operation cannot guarantee it.
+
+Logs may supplement reproducibility metadata but must not be its only source.
+
+---
+
+## Protocol and Compatibility
+
+Treat these as compatibility-sensitive contracts:
+
+* network/root/worker identity;
+* membership and enrollment records;
+* task and report schemas;
+* run/task/attempt identity;
+* protocol messages;
+* heartbeat/status messages;
+* serialization formats;
+* dataset identity;
+* timeout/retry semantics;
+* persistent artifact layouts; and
+* public APIs.
+
+Protocol objects must explicitly identify their type and version.
+
+Where applicable, messages and artifacts must carry enough identity to associate them with the correct:
+
+* network;
+* root;
+* worker;
+* run;
+* task;
+* attempt; and
+* dataset.
+
+Do not infer protocol identity solely from a network connection.
+
+Breaking changes require explicit documentation, versioning, tests, and defined migration or rejection behavior.
+
+Unsupported protocol/schema versions must fail explicitly rather than being interpreted heuristically.
+
+Incoming artifacts must not become canonical results until transfer and required integrity validation complete.
+
+---
+
+## Technical Stack
+
+* Python 3.13+
+* `asyncio`
+* `aiofiles`
+* HTTP/WebSocket-based networking as defined by the architecture
+* encrypted transport
+* `dill` / `pickle` where trusted Python-object serialization is required
+* `black`
+* `ruff`
+* `mypy`
+* `pytest`
+* `pytest-asyncio`
+
+Prefer existing dependencies and the Python standard library.
+
+New dependencies or backend infrastructure require a concrete documented project need.
+
+Do not select directory-service, database, authentication, or relay technology merely because implementation begins to require one; document the architectural choice first.
+
+---
+
+## Code Standards
+
+### Typing
+
+New and modified code must be fully typed.
+
+Avoid unnecessary `Any`, broad ignores, unchecked casts, and suppressions that hide real errors.
+
+### Documentation
+
+Use NumPy-style docstrings for public APIs and non-obvious components.
+
+Document contracts, side effects, lifecycle requirements, and important exceptions where relevant.
+
+Do not add verbose comments or docstrings that merely restate the code.
+
+### Comments
+
+Use comments for non-obvious rationale, especially around:
+
+* concurrency;
+* authentication;
+* retries;
+* timeout/reassignment;
+* idempotency;
+* artifact finalization;
+* protocol validation; and
+* reproducibility.
+
+### Structure
+
+* Maximum line length: 120 characters.
+* Keep functions focused.
+* Reconsider functions substantially exceeding about 100 lines.
+* Reconsider modules containing unrelated responsibilities.
+
+Do not split code solely to satisfy numeric limits.
+
+### Exceptions and Cancellation
+
+Catch exceptions only to recover, translate them, add useful context, or perform necessary cleanup.
+
+Do not hide unexpected failures.
+
+Async code must preserve cancellation semantics and must not convert cancellation into success.
+
+---
+
+## Testing
+
+Every behavioral change unit must include or update the tests required to validate that unit.
+
+Prioritize tests for:
+
+* normal execution;
+* invalid input;
+* deterministic behavior;
+* private worker enrollment;
+* invalid/revoked credentials;
+* shared-worker authorization;
+* manual worker configuration;
+* directory-service unavailability;
+* duplicate task/result handling;
+* late results from superseded attempts;
+* retries;
+* task timeout;
+* straggler reassignment;
+* cancellation races;
+* worker disconnect/loss;
+* root restart and resume;
+* preservation of completed results;
+* explicit recompute-all;
+* heartbeat expiry/recovery;
+* partial artifact transfer;
+* incompatible protocol versions;
+* scientific split/metric correctness where applicable.
+
+For async tests, prefer events, queues, futures, or equivalent deterministic synchronization over arbitrary sleeps.
+
+Do not weaken tests or quality configuration merely to make validation pass.
+
+---
+
+## Validation
+
+Before presenting a change unit for approval, run the narrowest relevant checks available in the repository.
+
+Where applicable, validate:
+
+* focused tests;
+* formatting;
+* linting;
+* static typing.
+
+Use repository-defined commands rather than inventing alternatives.
+
+If a required check cannot be run, report:
+
+* which check was skipped;
+* why it could not run;
+* what validation was performed instead.
+
+Never claim that an unexecuted check passed.
+
+---
+
+## Definition of Done for One Change Unit
+
+A change unit is ready for user review only when:
+
+* it implements only its approved scope;
+* relevant tests are included and pass where executable;
+* applicable formatting, linting, and typing checks pass;
+* architecture and compatibility requirements are preserved;
+* no unrelated changes are included;
+* validation results are reported.
+
+After reaching this point, stop and wait for explicit user approval before implementing the next change unit.

@@ -1,0 +1,124 @@
+I read the current [AGENTS.md](E:/swectral_new/cocoonet/AGENTS.md) and [architecture.md](E:/swectral_new/cocoonet/docs/architecture.md). No files were modified.
+
+The architecture establishes the main behavioral requirements consistently. Its remaining gaps concern the contracts and mechanisms needed to implement those requirements. Several are explicitly deferred in Section 9; that makes them planned design work, rather than contradictions.
+
+**Section 2 — System context and responsibilities**
+
+**1. Component/module map and execution boundaries**  
+[Relevant section](E:/swectral_new/cocoonet/docs/architecture.md:18)
+
+- **Missing:** A minimal mapping from responsibilities to code components, their dependencies, and their execution boundaries. The actor table identifies root, worker, and external service, but does not decompose the root or worker.
+- **Why it matters:** Scheduling, connection handling, model execution, report construction, and persistence have different responsibilities. In particular, long-running model execution must not prevent the worker from handling heartbeat, status, or stop instructions.
+- **Example:** Identify components responsible for coordinator state, worker communication, dataset storage, evaluation, isolated model execution, and result persistence. State which component owns each responsibility and how evaluation exchanges data with the communication service. Exact filenames and individual helper functions can remain implementation details.
+
+**Section 3 — Dataset and model contracts**
+
+**2. Minimal logical data models and identity relationships**  
+[Relevant section](E:/swectral_new/cocoonet/docs/architecture.md:58)
+
+- **Missing:** A compact logical model connecting dataset, sample, model configuration, evaluation directives, logical task, execution attempt, fold, and result. Some identity scopes—particularly sample-ID uniqueness and model identity—are explicitly deferred.
+- **Why it matters:** These relationships underpin sample alignment, duplicate detection, provenance, and restart recovery. Mentioning identifiers individually does not establish how records reference one another.
+- **Example:** Clarify whether samples are identified by `(dataset_key, sample_id)`; what model/configuration and directives a logical task references; and how each attempt, fold, and result links back to that task. Specify what changes require a new logical task. UUID formats, Python classes, and serialization field names need not be decided here.
+
+**Section 4 — Worker evaluation**
+
+**3. Performance-report population and relationship to fold reports**  
+[Relevant section](E:/swectral_new/cocoonet/docs/architecture.md:145)
+
+- **Missing:** Whether performance reports describe each fold, pooled held-out predictions, an aggregation of fold metrics, or explicitly distinguished outputs for these scopes.
+- **Why it matters:** This determines report inputs and meaning even when every metric uses its conventional formula. Section 4.3 explicitly leaves report aggregation conventions for later.
+- **Example:** If two folds contain 20 and 80 samples, with MSE values of 1 and 9, pooled MSE is `7.4`, while the unweighted mean of fold MSE values is `5`. Specify which report contains which quantity and its evaluation population.
+
+This finding concerns report scope, not missing standard metric formulas. Section 4.7 already sufficiently defines influence populations, computation, aggregation, and undefined-value behavior.
+
+**Section 5 — Coordinator and task lifecycle**
+
+**4. Assignment uncertainty and control-event transitions**  
+[Relevant section](E:/swectral_new/cocoonet/docs/architecture.md:485)
+
+- **Missing:** The behavior when assignment receipt or execution state is uncertain, particularly across disconnection. The result-selection flow also needs an explicit event establishing “receiving order” before a selected file is transferred.
+- **Why it matters:** The coordinator must distinguish an assignment message being repeated from authorization for another execution attempt. Connection loss must not accidentally become task reassignment or public-worker release.
+- **Example:** The root sends an assignment, then disconnects before learning whether execution started. Specify how reconciliation identifies the existing attempt and how that disconnected attempt affects scheduling eligibility. For results, identify the notification that enters reception arbitration and the authorization that permits file transmission.
+
+The existing duplicate eligibility, acceptance-before-stop rule, and cooperative cancellation policy do not need redesign. This gap is the transition contract connecting them.
+
+**5. Durable recovery records and publication boundary**  
+[Relevant section](E:/swectral_new/cocoonet/docs/architecture.md:538)
+
+- **Missing:** The durable source of the “known task set,” pending reception selection, and remaining delivery budget, together with the evidence distinguishing a complete persisted result from an incomplete write.
+- **Why it matters:** Section 5.4 requires recovery to preserve facts that complete result files alone cannot reconstruct.
+- **Example:** Attempt A is selected and partially received before the root crashes. Recovery must recover A’s selection and the remaining delivery allowance without selecting attempt B or accepting the partial file. Identify which component records these facts and when they become durable relative to selection, acceptance, and acknowledgement.
+
+A storage engine, filename convention, or exact publication API can remain a later implementation choice.
+
+**Section 6 — Dataset distribution and report persistence**
+
+**6. Dataset synchronization completion and cache validity**  
+[Relevant section](E:/swectral_new/cocoonet/docs/architecture.md:561)
+
+- **Missing:** The logical evidence that synchronization is complete, who establishes dataset readiness, and how clearing or incomplete synchronization invalidates readiness.
+- **Why it matters:** A dataset key identifies the required representation; its presence alone does not prove that all required data and associations are locally available.
+- **Example:** An interrupted synchronization leaves some files present. Specify that this does not establish readiness, what completion information permits readiness, and how the root learns that a previously synchronized dataset has been cleared. Also define coordination between clearing cached data and tasks currently using it.
+
+The architecture need not prescribe checksumming algorithms, transfer chunk sizes, cache eviction heuristics, or directory names.
+
+**7. Failure before an evaluation-result file exists**  
+[Relevant section](E:/swectral_new/cocoonet/docs/architecture.md:572)
+
+- **Missing:** The transition for failure while constructing, serializing, or locally persisting the worker’s result file.
+- **Why it matters:** The delivery rules assume an existing file that can be resent. General operation-failure isolation does not specify how the coordinator learns that no deliverable file exists or when the worker becomes available again.
+- **Example:** Evaluation completes, but writing the result file fails. Specify how the worker reports that operation failure, how the attempt is represented, and how task availability is restored without reevaluating the model or falsely accepting a result.
+
+This is an operational boundary, separate from formula-defined `NaN` and report-computation failures.
+
+**8. Retry authority and silent-peer handling**  
+[Relevant section](E:/swectral_new/cocoonet/docs/architecture.md:584)
+
+- **Missing:** Which actor owns the delivery retry budget and which events end a wait when neither acknowledgement nor resend request arrives.
+- **Why it matters:** Bounded retries do not themselves bound a wait that never detects failure. Independently maintained counters can also disagree after reconnection.
+- **Example:** The root persists a file, but the acknowledgement is lost. Define how the worker detects the unresolved delivery and how the root confirms existing persistence without recomputation or resetting the retry budget.
+
+Exact timeout durations, backoff schedules, and message encodings belong in protocol configuration/specification. The existing exhaustion outcome is already defined and needs no additional recovery policy.
+
+**9. Retention task-set boundary and completion notification**  
+[Relevant section](E:/swectral_new/cocoonet/docs/architecture.md:606)
+
+- **Missing:** What collection “all root tasks” refers to and how its completion becomes known to workers retaining files.
+- **Why it matters:** A long-lived root can submit additional work. Without a defined collection boundary, workers cannot reliably evaluate the retention condition.
+- **Example:** A root completes one submitted collection and later submits another. Specify whether retention attaches to the first collection, another defined evaluation session, or a different explicit boundary, and identify the root-to-worker completion notification.
+
+The existing precedence of mandatory release cleanup over retention is sufficient.
+
+**Section 7 — Transport, serialization, and trust**
+
+**10. Authentication, ownership, and reconnection binding**  
+[Relevant section](E:/swectral_new/cocoonet/docs/architecture.md:616)
+
+- **Missing:** The relationship between authenticated identity, worker ownership, and a particular connection, including how ownership survives reconnection and how obsolete connections lose authority.
+- **Why it matters:** A unique credential and WSS transport do not, by themselves, define exclusive ownership across root restarts or overlapping connections.
+- **Example:** After a root restarts, specify how its new connection is recognized as belonging to the existing owner, reconciles ongoing work, and prevents an old connection from issuing conflicting commands. Identify the trust information used to authenticate the worker endpoint and the owning root.
+
+Public allocation remains the external service’s responsibility. Its absent interface is an explicitly deferred integration dependency; Cocoonet should not invent it. Exact version matching and supported-Python compatibility are already adequately defined.
+
+**11. Enforceable model-execution and output boundary**  
+[Relevant section](E:/swectral_new/cocoonet/docs/architecture.md:647)
+
+- **Missing:** The selected enforcement architecture for model deserialization, reconstruction, and execution, plus the boundary through which validated outputs reach trusted report construction.
+- **Why it matters:** The prohibition on model filesystem/network access cannot be implemented through documentation or API checks alone. The boundary also affects worker responsiveness and verification that released work cannot recreate user state.
+- **Example:** Identify the isolated execution environment, what framework-owned data crosses into it, what output types may cross back, and how execution termination is confirmed before cleanup succeeds. Explain how standardized result construction prevents arbitrary model-provided objects from passing through as executable serialized report content.
+
+Choosing the isolation mechanism is an architectural decision. Its exact operating-system configuration and enforcement calls can be documented separately.
+
+**Sections 8 and 9 — Existing content that is sufficient**
+
+The failure scopes, worker lifetime, provenance categories, formula fidelity, and development approval gate are sufficiently clear at this level. They do not require expansion merely into more exhaustive lists.
+
+Section 9 should distinguish the architectural decisions above from genuinely deferred implementation details. Full wire schemas, field spellings, numerical timeout defaults, individual function signatures, and conventional metric formulas do not all need to move into `architecture.md`.
+
+**Priorities**
+
+1. **Component boundaries and logical identities:** findings 1–2 establish the contracts other components depend on.
+2. **Authentication and enforced execution isolation:** findings 10–11 are prerequisites for implementing the stated trust boundary.
+3. **Assignment, recovery, and delivery lifecycle:** findings 4–5 and 8 prevent duplicate execution mistakes, lost recovery state, and indefinite waits.
+4. **Dataset readiness and result-file creation failure:** findings 6–7 close essential operational paths.
+5. **Report population and retention scope:** findings 3 and 9 complete the corresponding reporting and storage contracts.

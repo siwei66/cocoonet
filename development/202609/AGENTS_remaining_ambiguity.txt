@@ -1,0 +1,169 @@
+3. Remaining ambiguities and inconsistencies
+- Stale influence definition outside scope: Project Overview still gives the superseded prediction-difference MSE and cancellation warning. It contradicts the approved influence definition in architecture Section 4.7.
+
+```text
+MY ADVICE:
+I delete the section reporting open question about it manually. Because it is solved in `architecture.md`.
+```
+
+- Security and execution boundaries: Peer authentication, user ownership verification, and isolation of executable user models remain unspecified. These also affect worker-survival and public-worker cleanup guarantees.
+
+```text
+MY ADVICE:
+The security, ownership, discovery, release, and model-execution boundaries are defined as follows.
+
+### Worker Authentication and Exclusive Use
+Every worker accepts Cocoonet connections only through the module-defined internal protocol and may serve at most one root/user at a time.
+Worker registration generates the required connection information and a unique credential. For a private worker, this information is returned directly to the user by the worker-side module, for example as a dictionary that can be printed and copied into the root-node configuration.
+Private workers are not registered as public workers and are never exposed through public-worker discovery. They remain under direct user control and are not automatically released because of disconnection. Connection, disconnection, and other lifecycle operations are initiated explicitly by the user through either the root-node module or the module running on the private-worker computer.
+
+### Public Worker Discovery and Credentials
+Public workers additionally communicate with a Cocoonet server-side service responsible only for public-worker registration, discovery, and availability state.
+An idle public worker is listed by this service together with the connection information required by a root to attempt a connection.
+Public-worker credentials are one-time credentials. Once a credential has been used for an accepted root-worker connection, it must not be reusable. After the worker's current use has ended and cleanup has completed, a new credential is generated before the worker is marked idle and exposed through public-worker discovery again.
+Listing a public worker does not reserve it. The worker itself is the final authority on connection acceptance. While idle, it accepts only the first valid connection using its current credential. Once accepted, it enters the working state, rejects additional connections, and is removed from the server's idle-worker listing.
+Consequently, simultaneous or stale discovery cannot result in multiple users sharing a worker.
+The server-side service does not proxy datasets, models, tasks, reports, or evaluation traffic. Once a root has connected to a public worker, normal evaluation communication occurs directly between the root and worker using the same Cocoonet evaluation protocol used by private workers.
+
+### Public Worker Release
+A public worker maintains a minimal heartbeat with its connected root while allocated.
+Normal release begins when the root marks the entire evaluation task as finished and no tasks remain to be allocated. The worker is released within one hour of that condition.
+If the root connection is lost, the worker does not immediately become available to another user. Loss of the connection is detected through the heartbeat mechanism, after which the worker waits for its configured public-worker release timeout. This timeout is selected when the worker is registered as public and defaults to 12 hours.
+If the connection has not been restored within that timeout, the previous allocation is released.
+In either release path, the worker must complete cleanup before becoming available again. Previous user work must be stopped, and synchronized datasets, task state, models, reports, and other Cocoonet-managed user state must be removed. The old credential must be invalidated and a new one-time credential generated before the worker transitions back to `idle` and is advertised by the public-worker service.
+The lifecycle is therefore conceptually:
+`idle -> authenticated connection -> working -> release condition -> cleanup -> credential renewal -> idle`
+A worker must never be advertised as idle while cleanup or credential renewal remains incomplete.
+
+### Network Execution Boundary
+Worker networking is restricted to Cocoonet-defined communication.
+The worker may communicate with the Cocoonet server only using the fixed module-defined data required for public-worker registration and availability state. During evaluation it may communicate with its authenticated root only for defined protocol operations such as heartbeat/status information, receiving the model and standardized model-evaluation configuration, and returning validated standardized evaluation results.
+The user-provided model itself has no network access.
+The worker does not expose a general-purpose remote-execution interface and does not accept arbitrary serialized payloads for execution. Serialized models are accepted only from the authenticated root through the designated Cocoonet model-transfer path and are deserialized only at the defined worker deserialization boundary.
+
+### Filesystem and Model Execution Boundary
+User-provided model code has no direct file read or write permission and no network permission.
+Dataset storage and reading are performed internally by Cocoonet. The framework supplies the required in-memory training/evaluation data to the model through the supported model interface.
+Likewise, evaluation report construction and persistence are performed by Cocoonet rather than by the supplied model. The model returns only the outputs required by the supported evaluation interface; Cocoonet validates and converts these into its standardized evaluation results and reports.
+Filesystem creation, dataset access, report writing, and other persistent state operations required by evaluation therefore remain framework responsibilities rather than capabilities granted to user model code.
+The concrete mechanism used to enforce network, filesystem, and execution isolation must be specified before implementing this execution boundary. These restrictions must be technically enforced and must not rely solely on Python module conventions or cooperative behavior by user-provided model code.
+
+### Resulting Trust Boundary
+Private and public workers use the same direct authenticated root-worker model-evaluation protocol. Their primary difference is discovery and lifecycle management.
+Private workers are configured directly by their user, are not publicly discoverable, and remain under explicit user control.
+Public workers advertise availability through the Cocoonet server, use a one-time connection credential for each allocation, serve exactly one root while working, maintain a heartbeat with that root, undergo controlled release and cleanup, renew their credential, and only then become publicly discoverable again.
+The Cocoonet server provides public-worker discovery and availability coordination only. Model evaluation remains a direct root-worker operation.
+```
+
+- Lifecycle details: Disconnect versus temporary interruption, cleanup verification, duplicate cancellation, and arbitration between failure outcomes and successful duplicate results still need protocol definitions.
+
+```text
+MY ADVICE:
+The lifecycle behavior is defined consistently with the worker ownership, release, and cleanup boundaries described above.
+
+### Disconnect versus Temporary Interruption
+Private workers are not automatically released because of connection loss. They remain private and under their user's control, with lifecycle operations performed explicitly through the root-node or private-worker module.
+Public workers maintain a minimal heartbeat with their connected root. Loss of the connection does not immediately release the worker. The worker remains allocated for its configured disconnection timeout, which defaults to 12 hours. If the connection is restored before the timeout expires, the existing allocation may continue. If the timeout expires, the worker enters release and cleanup.
+Normal public-worker release also begins when the root marks the entire evaluation as finished and no tasks remain to be allocated, with release occurring within one hour.
+
+### Cleanup Verification
+A public worker must complete cleanup before returning to the idle state. Previous user execution must be stopped and Cocoonet-managed datasets, task state, models, reports, and other user state must be removed.
+Only after cleanup succeeds may the worker generate a new one-time connection credential, report itself as idle, and become discoverable through the public-worker service.
+If cleanup cannot be confirmed as successful, the worker remains unavailable and must not be returned to the public idle-worker pool.
+
+### Duplicate Cancellation
+Duplicate execution is permitted only under the previously defined duplicate-allocation conditions.
+All executions of the same logical task remain competing attempts until the root receives the first result. The first result received by the root is accepted as the result of that logical task.
+Once the first result is received, the root sends stop instructions for any remaining attempts of that logical task. Workers check for stop instructions before beginning each evaluation loop and terminate the affected attempt when instructed.
+Cancellation therefore does not need to interrupt arbitrary model code immediately. It takes effect at the defined cooperative cancellation points between evaluation loops.
+Any result produced by another attempt after the first result has already been accepted is discarded.
+
+### Arbitration Between Failure and Successful Duplicate Results
+Arbitration does not depend on whether an attempt succeeds or fails. The first result received by the root determines the logical task outcome.
+If the first received result is successful, it is accepted and the remaining duplicate attempts are stopped.
+If the first received result is a failure, that failure is accepted as the logical task outcome and the remaining duplicate attempts are likewise stopped, even if one of them might otherwise have subsequently succeeded.
+Therefore, duplicate execution is used to reduce completion latency rather than to provide failure recovery or retry semantics. There is no preference for a successful later result over an earlier failure.
+The invariant is:
+`first result received -> accept logical task outcome -> stop remaining attempts -> discard any later results`
+This remains consistent with the existing rule that terminal baseline-training failures are not automatically retried or reallocated.
+These rules define the required lifecycle semantics. Exact heartbeat intervals, stop-message schemas, cancellation acknowledgement, cleanup implementation, and other wire-level details may be specified later in the protocol and implementation documentation.
+```
+
+- Acceptance details: The high-level persistence prerequisite is now defined, but atomicity, crash recovery, acknowledgements, and validity of partial-report outcomes remain deferred.
+
+```text
+MY ADVICE:
+Acceptance, persistence, acknowledgement, and crash-recovery semantics are defined around one complete evaluation-result file for each model evaluation.
+
+### Result and Acceptance Unit
+A worker produces one evaluation file containing all reports and results for the evaluation of a single model.
+Independent computation failures within an otherwise valid evaluation do not create separate or partially transferred report files. As defined by the report failure-isolation policy, affected results remain missing or `NaN` as appropriate and the corresponding error information is recorded, while successfully computed results are preserved.
+The resulting evaluation file therefore represents the complete outcome of that model-evaluation attempt, including any explicitly recorded partial computation failures.
+The root marks the logical task as finished only after the complete evaluation file has been received and successfully written to local persistent storage. Successful network receipt alone does not complete the task.
+
+### Transfer, Persistence, Retry, and Acknowledgement
+If network transfer or root-side persistence fails, the task remains unfinished and the root requests that the worker resend the existing evaluation file, subject to a configured retry limit. Transfer or persistence failure does not cause the model evaluation to be recomputed.
+After sending an evaluation file, the worker must wait for a response from the root before proceeding with actions that depend on successful result delivery.
+If the root confirms successful persistence, the result is accepted and the task is marked finished. If the root requests a resend, the worker resends the existing evaluation file.
+Until the result has either been successfully persisted by the root or the configured retry limit has been reached:
+- the root must not allocate a new task to that worker; and
+- the worker must retain its local evaluation file.
+Worker-side evaluation-file retention is configurable. Evaluation files may be deleted after confirmed successful delivery, retained until all root-node tasks have finished, or configured never to be automatically deleted.
+Because all reports for a model evaluation are transferred as one evaluation file, there is no separate network-transfer or persistence state for individual reports.
+
+### Computation Failure versus Delivery Failure
+Computation failure and result-delivery failure are distinct.
+A report-level computation failure is represented inside the evaluation file through the previously defined missing/`NaN` values and error information. Such failures do not invalidate successfully computed reports, do not require retransmission, and do not prevent the resulting evaluation file from being accepted according to the normal persistence rules.
+A network-transfer or root-persistence failure instead affects delivery of the complete evaluation file. In that case, the logical task remains unfinished and the existing evaluation file is resent subject to the configured retry limit.
+Therefore:
+`computation failure -> record missing/NaN result and error -> preserve successful results -> produce evaluation file`
+while:
+`delivery/persistence failure -> keep task unfinished -> retain evaluation file -> request resend`
+
+### Root Restart and Progress Recovery
+After a root restart, the root reconstructs evaluation progress from the known task set and the evaluation files already present in root-side persistent storage, determines the remaining work, and reconnects to the workers.
+During reconciliation, each worker can be in one of three relevant evaluation states:
+1. **Computing:** the assigned model evaluation is still in progress. The root restores that task as in progress and allows the existing computation to continue.
+2. **Completed and delivered:** evaluation has finished and the corresponding evaluation file already exists in root-side persistent storage. The root reconstructs the task as finished, and the worker may return to the idle state for further allocation.
+3. **Completed but pending delivery:** evaluation has finished and the worker retains the evaluation file, but the corresponding file is absent from root-side persistent storage. The worker must transfer the retained result before receiving another task.
+The root therefore reconstructs progress from persistent result state and reconciles that state with each reconnected worker rather than relying solely on pre-crash in-memory coordinator state.
+If the root crashes after successfully persisting an evaluation file but before recording the task as finished in memory, restart reconciliation discovers the existing file and reconstructs the task as completed without requiring reevaluation or retransmission.
+If the corresponding root-side file is absent but the worker has completed the evaluation, the retained worker-side file is transferred before any new task is allocated to that worker.
+Evaluation-result files must therefore have a stable identity associated with their logical task so that persisted results can be matched to the known task set during recovery. The exact filename and identifier format may be defined later.
+
+### Acceptance and Recovery Invariants
+The normal acceptance lifecycle is:
+`evaluate model -> create one evaluation file -> transfer -> persist on root -> confirm -> mark task finished`
+A delivery failure follows:
+`transfer -> transfer/persistence failure -> request resend -> resend existing file`
+Root restart recovery follows:
+`restart -> inspect persisted evaluation files and known tasks -> reconnect workers -> reconcile worker states -> recover progress -> resume scheduling`
+The worker does not proceed past result delivery without a root response, and the root does not mark a logical task finished until its evaluation file has been successfully persisted.
+Exact message schemas, retry counts and timing, file-integrity mechanisms, evaluation-file naming/identifier format, and low-level acknowledgement encoding may be defined later in the protocol and implementation documentation. These are implementation details rather than unresolved acceptance semantics.
+```
+
+- Runtime compatibility: Dependency constraints and supported Python/runtime combinations must substantiate the same-major/minor compatibility contract. Custom-model dependency availability also needs a defined validation boundary.
+
+```text
+MY ADVICE:
+**Runtime Compatibility**
+Root and worker nodes must run exactly the same Cocoonet version. The complete version identifier must match; compatibility is not inferred from matching major or minor versions. For example, root `1.2.3` accepts worker `1.2.3` but rejects `1.2.4`.
+Each Cocoonet version must operate correctly across all Python versions it declares as supported. Root and worker nodes may use different Python versions within that supported range; matching Python versions are not required. Cocoonet's dependency constraints and release validation must preserve this supported-runtime contract. Do not introduce dependency or environment negotiation into the worker protocol.
+
+**Model Reconstruction and Compatibility**
+Model handling follows the applicable model type:
+- **Standard scikit-learn models:** Identify the supported model type and use the standard parameter interface for efficient worker reconstruction. Obtain the model parameters with `get_params` and reconstruct/configure the corresponding model on the worker using `set_params` as appropriate.
+- **Custom scikit-learn-like models:** Validate only the required API for the applicable model category, such as `fit` and `predict` for regression and `fit`, `predict`, `predict_proba`, and required class information for classification. Do not perform deeper dependency, implementation, or execution-compatibility validation.
+- **PyTorch models:** Reconstruct the model on the worker from the supplied construction and training information. The reconstruction data must include all metadata required to reproduce the configured model and training procedure, including the model definition and architecture parameters, input/output configuration, criterion/loss, optimizer, scheduler where applicable, training settings, initialization configuration, and optionally supplied initial weights. No general third-party dependency negotiation mechanism is required for this path.
+These validation and reconstruction paths establish only the information Cocoonet requires to attempt the defined evaluation; they do not guarantee that every supplied or custom model will execute successfully.
+After the applicable validation and reconstruction, execute the evaluation directly. Do not introduce compatibility prediction, dependency inspection or negotiation, environment repair, fallback reconstruction or model substitution, result manipulation, or other corrective mechanisms. If reconstruction, fitting, prediction, or another defined model operation fails because the supplied model or reconstruction information is incompatible, preserve and report the actual failure through the normal failure-isolation and logging mechanism so the user can identify and diagnose the error.
+This resolves the compatibility boundary: exact Cocoonet version equality governs root-worker compatibility; each Cocoonet version guarantees its declared Python-version range; standard scikit-learn models use parameter-based reconstruction, custom scikit-learn-like models receive only required API validation, and PyTorch models use complete reconstruction/training metadata. Model-specific execution incompatibilities are recorded failures rather than conditions Cocoonet attempts to predict or repair.
+```
+
+- Tooling configuration: Exact Ruff exclusions, pytest discovery conventions, mypy settings, and documentation-build/version-switching checks remain unspecified. pyproject.toml is still empty.
+
+```text
+MY ADVICE:
+I will let you compose `pyproject.toml` later and I will correct it.
+Do not add this info to `AGENTS.md`, I simply tell you here that this is not an ambiguity. Simply assume the existence of `pyproject.toml` currently temporarily, and let the project refers to `pyproject.toml` for these technical details.
+```
