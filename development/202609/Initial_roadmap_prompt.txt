@@ -1,8 +1,8 @@
-Read the current root `AGENTS.md` and `architecture.md` carefully and use them as the sole basis for composing the initial project roadmap.
-
-Then update the root `roadmap.md` with the complete roadmap you compose.
-
+Read the current root `AGENTS.md` and `architecture.md` carefully and use them as the sole architectural basis for composing the initial project roadmap.
+Then update the root `roadmap.md` with the complete roadmap.
 The project will later be implemented in very small approved change units, usually function-by-function or method-by-method. Therefore, compose the roadmap so development can proceed in a simple, modular, mostly forward-only order with minimal refactoring and minimal jumping back and forth across files or subsystems.
+
+---
 
 The roadmap should prioritize:
 
@@ -15,60 +15,77 @@ The roadmap should prioritize:
 * minimal architectural churn during later implementation;
 * milestones that can later be decomposed into very small reviewable change units.
 
-For each roadmap phase, provide:
+---
 
-1. **Goal**
-2. **Why this phase comes here**
-3. **Main components or capabilities introduced**
-4. **Dependencies on earlier phases**
-5. **What should be stable before moving forward**
-6. **What should explicitly remain out of scope until later**
+For each roadmap phase, make the following clear, either explicitly or through concise phase descriptions:
 
-Requirements:
+* the phase goal;
+* why it belongs at that point in the sequence;
+* the main components or capabilities introduced;
+* its dependencies on earlier phases;
+* what must be stable before proceeding;
+* what remains intentionally deferred to later phases.
+
+Do not force these into six separate labeled subsections when the same information can be expressed more clearly and concisely. The final `roadmap.md` should prioritize readability and usefulness as an implementation roadmap rather than mechanically following a template.
+
+---
+
+## Requirements
 
 * Follow `AGENTS.md` and `architecture.md`; do not invent architecture that is not supported by them.
-* Do not plan by individual functions or methods yet. Keep the roadmap at capability/module/milestone level.
-* Avoid phases that require broad refactoring of earlier work.
+* Do not decompose the roadmap into individual functions or methods yet. Keep it at the capability, module, subsystem, or milestone level.
+* Avoid phases that would require broad refactoring of earlier work.
 * Prefer one-directional dependency growth where possible.
-* Identify any architectural dependency that prevents a clean implementation order.
-* Do not modify source code or implementation files.
-* Update only `roadmap.md` for this task.
-* Preserve all relevant architectural requirements and constraints from `AGENTS.md` and `architecture.md`; do not omit roadmap-relevant contents merely to simplify the roadmap.
+* Preserve all roadmap-relevant architectural requirements and constraints from `AGENTS.md` and `architecture.md`. Each such requirement should be represented in an appropriate phase, reflected in sequencing or scope boundaries, or explicitly deferred to a later phase.
+* Identify any genuine architectural dependency or gap that prevents a clean implementation order.
+* Modify only the root `roadmap.md`. Do not modify source code, implementation files, `AGENTS.md`, `architecture.md`, or any other file.
+* Do not implement any project behavior in this task.
+
+---
 
 The completed `roadmap.md` should contain:
 
-1. the proposed roadmap in order;
-2. a short dependency rationale for the overall sequence;
-3. any roadmap risks or architecture gaps that should be resolved before implementation begins.
+1. the roadmap phases in implementation order;
+2. a concise rationale for the overall dependency and sequencing structure;
+3. any genuine roadmap risks or architecture gaps that should be resolved before implementation begins.
 
-This task is for roadmap composition and updating `roadmap.md` only. Do not implement anything yet.
-
----
-
-Before finalizing `roadmap.md`, perform a roadmap-quality and completeness pass against both `AGENTS.md` and `architecture.md`.
-
-Additional requirements:
-
-* Ensure every roadmap-relevant architectural component, responsibility, lifecycle, persistence requirement, execution boundary, and distributed-system capability defined in `AGENTS.md` or `architecture.md` is represented in an appropriate phase or explicitly deferred to a later phase. Do not silently omit architectural requirements.
-* Check the proposed ordering for hidden dependencies. A phase should not depend on behavior, state, interfaces, persistence structures, or distributed capabilities that are only introduced in a later phase.
-* Identify circular or bidirectional implementation dependencies and, where the existing architecture permits it, order foundational interfaces or data models first so later phases can depend on them without requiring broad refactoring.
-* Keep each phase internally coherent. Avoid placing unrelated capabilities in the same phase merely to reduce the number of phases.
-* Define the expected architectural state at the end of each phase clearly enough that the next phase can begin without redesigning the completed phase.
-* Distinguish genuine architecture gaps that prevent reliable roadmap ordering from implementation details that can safely be decided later. Do not treat ordinary implementation-level choices as roadmap blockers.
-* Check that capabilities intentionally deferred from an earlier phase are actually introduced in an appropriate later phase.
-* Check that recovery, retry, reconnection, failure handling, cleanup, and other advanced lifecycle behavior are introduced only after the underlying normal-path state, persistence, communication, and lifecycle foundations they depend on are stable.
-* Prefer phases whose later implementation can be decomposed into small, locally reviewable changes without requiring simultaneous edits across many unrelated subsystems.
+Do not add a separate summary that merely repeats the roadmap. Integrate these elements into `roadmap.md` in the clearest structure for future implementation use.
 
 ---
 
-After composing the roadmap, reread the completed `roadmap.md` alongside `AGENTS.md` and `architecture.md` and perform a final consistency check for:
+## Roadmap Quality and Completeness Pass
 
-1. omitted architectural capabilities;
+Before finalizing `roadmap.md`, review the roadmap against both `AGENTS.md` and `architecture.md`.
+
+Ensure that:
+
+* every roadmap-relevant architectural component, responsibility, lifecycle, persistence requirement, execution boundary, and distributed-system capability is represented in an appropriate phase or explicitly deferred to a later phase;
+* no roadmap-relevant architectural requirement is silently omitted;
+* the roadmap ordering contains no hidden dependency on behavior, state, interfaces, persistence structures, or distributed capabilities that are only introduced in a later phase;
+* circular or bidirectional implementation dependencies are identified and, where the existing architecture permits it, reduced by introducing foundational interfaces, data models, or state structures before the capabilities that depend on them;
+* each phase is internally coherent and does not combine unrelated capabilities merely to reduce the number of phases;
+* the expected architectural state at the end of each phase is clear enough that the next phase can begin without redesigning completed work;
+* genuine architecture gaps that affect roadmap ordering are distinguished from implementation details that can safely be decided later;
+* capabilities intentionally deferred from an earlier phase are actually introduced in an appropriate later phase;
+* recovery, retry, reconnection, failure handling, cleanup, and other advanced lifecycle behavior are introduced only after the normal-path state, persistence, communication, and lifecycle foundations they depend on are stable;
+* phases can later be decomposed into small, locally reviewable implementation changes without requiring simultaneous changes across many unrelated subsystems.
+
+---
+
+## Final Verification
+
+After composing the roadmap, reread the completed `roadmap.md` alongside `AGENTS.md` and `architecture.md`.
+
+Check for:
+
+1. omitted roadmap-relevant architectural capabilities;
 2. contradictions with the architecture;
 3. incorrect dependency ordering;
-4. unnecessary forward references or later refactoring;
+4. unnecessary forward dependencies or later refactoring;
 5. duplicated roadmap responsibilities;
 6. architectural requirements placed in the wrong phase;
 7. genuine architecture gaps that must be resolved before implementation.
 
-Correct the roadmap itself based on this review before finishing the task.
+Correct `roadmap.md` itself based on this final verification before finishing the task.
+
+This task is complete only after the roadmap has been composed, written to the root `roadmap.md`, and verified against `AGENTS.md` and `architecture.md`. Do not implement anything else.
