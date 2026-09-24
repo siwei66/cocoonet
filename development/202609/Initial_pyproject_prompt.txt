@@ -1,0 +1,247 @@
+Read the current root `AGENTS.md`, `architecture.md`, and `roadmap.md` carefully.
+
+Then create or replace the root `pyproject.toml`.
+
+Use the reference `pyproject.toml` provided below as the formatting and structural template. Preserve its general organization, section ordering, formatting style, indentation, and configuration style, but do not copy project-specific content blindly. Adapt all values to the current Cocoonet project according to the authoritative project requirements in `AGENTS.md` and `architecture.md`.
+
+Use `roadmap.md` specifically to determine the **minimal dependency set required for the project's current and initial implementation stages**.
+
+The goal is not to predict every dependency that Cocoonet might eventually use. Keep the initial dependency set deliberately minimal:
+
+* Include a runtime dependency only when it is already required by the architecture or by work that the current roadmap establishes as necessary for the initial implementation.
+* Do not add speculative dependencies merely because they may become useful in later roadmap phases.
+* Prefer the Python standard library whenever it satisfies the defined requirements cleanly.
+* Do not copy dependencies from the reference project unless Cocoonet independently requires them.
+* If a dependency will clearly be required later but is not yet necessary for the initial implementation, leave it out for now rather than pre-installing it.
+* Respect architectural decisions already made in the project, including any explicitly selected libraries or serialization/runtime requirements.
+
+Determine appropriate project metadata from the current repository documentation, including:
+
+* project name
+* current version, if already defined authoritatively in the repository
+* concise project description
+* supported Python versions
+* author information where already established
+* license configuration
+* project URLs, where they can be determined from the repository
+* suitable PyPI keywords
+* suitable PyPI classifiers
+
+For `keywords` and `classifiers`, choose entries that accurately describe Cocoonet rather than adapting Swectral's scientific-imaging metadata. Use recognized PyPI classifier values only. Do not invent classifiers that are not part of the official classifier taxonomy.
+
+Pay particular attention to the project's Python compatibility policy. Configure `requires-python`, mypy, Black target versions, and any other version-specific settings consistently with the Python versions defined in `AGENTS.md` and `architecture.md`.
+
+For development tooling, derive the configuration from the project's documented quality requirements. Preserve the reference file's general tool-configuration style where appropriate, but make the actual configuration conform to Cocoonet's requirements, including the documented policies for:
+
+* Ruff
+* mypy
+* pytest
+* Black, if Black remains part of the project's defined development toolchain
+* line length
+* enabled and ignored lint rules
+* type-checking requirements
+* source layout
+* test layout
+
+Do not silently introduce new project policies merely because they appear in the reference file. `AGENTS.md` and `architecture.md` are authoritative for Cocoonet; the reference file is authoritative only for the desired `pyproject.toml` organization and formatting style.
+
+Before writing the file, inspect the repository as needed to avoid inventing metadata that can be determined directly, such as package layout, repository URL, license file, README filename, current version source, and existing test/source directories.
+
+If some metadata cannot be established from the repository or the authoritative documents, use the narrowest reasonable value only when it is safe to infer. Do not invent unsupported URLs, versions, authors, licenses, or project capabilities.
+
+After composing the file:
+
+1. Re-read `AGENTS.md`, `architecture.md`, and the relevant initial portions of `roadmap.md`.
+2. Check the resulting `pyproject.toml` for consistency with all three.
+3. Check that runtime dependencies are genuinely minimal and currently justified.
+4. Check that development/test/docs dependencies are separated appropriately from runtime dependencies.
+5. Check that Python-version settings agree across all sections.
+6. Check that every classifier is a valid PyPI classifier.
+7. Check the TOML syntax and internal consistency.
+8. Make any corrections you identify.
+9. Write the final result to the root `pyproject.toml`.
+
+Do not modify `AGENTS.md`, `architecture.md`, or `roadmap.md` as part of this task.
+
+Reference `pyproject.toml`:
+
+```toml
+[build-system]
+requires = ["setuptools>=66.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "swectral"
+version = "0.6.5"
+description = "A Python framework for automated batch composition, implementation and method assessment of plant hyperspectral modeling pipelines."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    {name = "Siwei Luo", email = "siwei1102@outlook.de"}
+]
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = [
+    "hyperspectral-imaging",
+    "spectral-image-processing",
+    "hyperspectral-modeling",
+    "model-evaluation-automation",
+    "spectral-modeling-pipeline"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence"
+]
+dependencies = [
+    "pydantic>=2.11.7",
+    "pandas>=1.5.2",
+    "numpy>=1.24.3",
+    "tqdm>=4.65.0",
+    "rasterio>=1.4.2",
+    "pathos>=0.3.4",
+    "torch>=2.0.0",
+    "scikit-learn>=1.6.1",
+    "scipy>=1.13.1",
+    "statsmodels>=0.14.6",
+    "dill>=0.4.0",
+    "matplotlib>=3.9.4",
+    "beautifulsoup4>=4.12.2",
+    "lxml>=4.9.3",
+    "geopandas>=1.0.1",
+    "pyproj>=3.5.0",
+    "shapely>=2.0.1",
+    "zstandard>=0.23.0",
+    "PyWavelets>=1.6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/siwei66/swectral"
+Repository = "https://github.com/siwei66/swectral"
+Documentation = "https://siwei66.github.io/swectral/"
+Issues = "https://github.com/siwei66/swectral/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4.1",
+    "pytest-cov>=7.0.0",
+    "black==25.11.0",
+    "ruff==0.13.1",
+    "mypy==1.18.2"
+]
+test = [
+    "pytest>=8.4.1",
+    "pytest-cov>=7.0.0",
+]
+docs = [
+    "sphinx>=7.4.7",
+    "pydata-sphinx-theme>=0.16.1,<0.17",
+    "numpydoc>=1.9.0",
+    "sphinx-autodoc-typehints>=2.3.0,<2.4.0",
+    "myst-parser>=3.0.1,<3.1.0",
+    "linkify-it-py>=2.0.0,<2.1.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = {find = {where = ["src"]}}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = ["-v", "--tb=short"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = true
+exclude = [
+    "^\\.eggs/",
+    "^\\.git/",
+    "^\\.hg/",
+    "^__pycache__/",
+    "^\\.mypy_cache/",
+    "^\\.tox/",
+    "^\\.venv/",
+    "^_build/",
+    "^buck-out/",
+    "^build/",
+    "^dist/",
+    "^demo/",
+    "^demo_script\\.py$",
+    "^docs/",
+    "^venv/",
+]
+
+[tool.black]
+line-length = 120
+target-version = ["py39"]
+skip-string-normalization = true
+include = "\\.pyi?$"
+exclude = '''
+/(
+    \\.eggs
+  | \\.git
+  | \\.hg
+  | \\.__pycache__
+  | \\.mypy_cache
+  | \\.tox
+  | \\.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+  | demo
+  | demo_script.py
+  | docs
+  | venv
+)/
+'''
+
+[tool.ruff]
+line-length = 120
+extend-exclude = [
+    "*.pyc",
+    "*.egg-info",
+    "__pycache__",
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "build",
+    "dist",
+    "local_tests",
+    "demo",
+    "example_code.py",
+    "demo_script.py",
+    "docs",
+    "venv",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "W",
+    "B",
+    "I",
+    "N",
+    "C"
+]
+ignore = [
+    "E203",
+    "E266",
+    "I001"
+]
+```
