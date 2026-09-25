@@ -1,0 +1,173 @@
+name: Build and Deploy Documentation
+
+on:
+  push:
+    branches: ["master"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Configure GitHub Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Install package and documentation dependencies
+        run: python -m pip install ".[docs]"
+
+      # There is no Sphinx source tree yet. Generate current-version API docs
+      # in runner storage; do not assume historical docs or custom JS exist.
+      - name: Prepare minimal API documentation
+        id: docs
+        env:
+          PAGES_BASE_URL: ${{ steps.pages.outputs.base_url }}
+        shell: python
+        run: |
+          import json
+          import os
+          import tomllib
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          from cocoonet import get_version
+
+          project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
+          version = get_version()
+          base_url = os.environ["PAGES_BASE_URL"].rstrip("/")
+          base_path = urlsplit(base_url).path.rstrip("/")
+          source = Path(os.environ["RUNNER_TEMP"]) / "cocoonet-docs" / "source"
+          site_root = Path(os.environ["RUNNER_TEMP"]) / "cocoonet-docs" / "site"
+          html_dir = site_root / base_path.lstrip("/")
+          static = source / "_static"
+          static.mkdir(parents=True, exist_ok=True)
+          config = {
+              "project": "CocooNet",
+              "release": version,
+              "version": version,
+              "extensions": ["sphinx.ext.autodoc", "numpydoc"],
+              "html_theme": "pydata_sphinx_theme",
+              "html_static_path": ["_static"],
+              "html_theme_options": {
+                  # The first deployment does not exist yet; validate locally below.
+                  "check_switcher": False,
+                  "switcher": {
+                      "json_url": f"{base_url}/_static/switcher.json",
+                      "version_match": version,
+                  },
+                  "navbar_start": ["navbar-logo", "version-switcher"],
+              },
+          }
+          (source / "conf.py").write_text(
+              "\n".join(f"{key} = {value!r}" for key, value in config.items()) + "\n",
+              encoding="utf-8",
+          )
+          (source / "index.rst").write_text(
+              "\n".join([
+                  "CocooNet",
+                  "========",
+                  "",
+                  project["description"],
+                  "",
+                  f"Version: {version}",
+                  "",
+                  "This initial scaffold exposes package version information.",
+                  "Model evaluation is not implemented in this release.",
+                  "",
+                  "Public API",
+                  "----------",
+                  "",
+                  ".. autofunction:: cocoonet.get_version",
+                  "",
+              ]),
+              encoding="utf-8",
+          )
+          (static / "switcher.json").write_text(
+              json.dumps([{"name": f"v{version}", "version": version, "url": f"{base_url}/"}]),
+              encoding="utf-8",
+          )
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"html_dir={html_dir}\nbase_path={base_path}\n")
+
+      - name: Build and check documentation
+        env:
+          HTML_DIR: ${{ steps.docs.outputs.html_dir }}
+        run: |
+          python -m sphinx -W --keep-going -b html "$RUNNER_TEMP/cocoonet-docs/source" "$HTML_DIR"
+          python -m sphinx -W --keep-going -b linkcheck "$RUNNER_TEMP/cocoonet-docs/source" "$RUNNER_TEMP/cocoonet-docs/linkcheck"
+
+      - name: Verify local pages and version switcher
+        env:
+          BASE_PATH: ${{ steps.docs.outputs.base_path }}
+          PAGES_BASE_URL: ${{ steps.pages.outputs.base_url }}
+        shell: python
+        run: |
+          import json
+          import os
+          from functools import partial
+          from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+          from pathlib import Path
+          from threading import Thread
+          from urllib.parse import urlsplit
+          from urllib.request import urlopen
+
+          from cocoonet import get_version
+
+          site_root = Path(os.environ["RUNNER_TEMP"]) / "cocoonet-docs" / "site"
+          handler = partial(SimpleHTTPRequestHandler, directory=str(site_root))
+          with ThreadingHTTPServer(("127.0.0.1", 0), handler) as server:
+              thread = Thread(target=server.serve_forever, daemon=True)
+              thread.start()
+              origin = f"http://127.0.0.1:{server.server_port}"
+              base_path = os.environ["BASE_PATH"]
+              try:
+                  with urlopen(f"{origin}{base_path}/index.html", timeout=10) as response:
+                      html = response.read().decode("utf-8")
+                  assert "cocoonet.get_version" in html, "Public API documentation is missing."
+                  assert "version-switcher" in html, "Version switcher is missing."
+                  with urlopen(f"{origin}{base_path}/_static/switcher.json", timeout=10) as response:
+                      versions = json.load(response)
+                  assert len(versions) == 1 and versions[0]["version"] == get_version()
+                  assert versions[0]["url"] == os.environ["PAGES_BASE_URL"].rstrip("/") + "/"
+                  destination = urlsplit(versions[0]["url"]).path
+                  with urlopen(origin + destination, timeout=10) as response:
+                      assert response.status == 200, "Version-switcher destination is unavailable."
+              finally:
+                  server.shutdown()
+                  thread.join()
+
+      - name: Upload documentation artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ steps.docs.outputs.html_dir }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
