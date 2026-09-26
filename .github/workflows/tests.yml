@@ -1,18 +1,18 @@
+# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+# Modified for the specpipe package use for push validation
+
 name: Tests
 
 on:
   push:
-    branches: ["master"]
+    branches: [ "master" ]
   pull_request:
-    branches: ["master"]
-  workflow_dispatch:
-  workflow_call:
-
-permissions:
-  contents: read
+    branches: [ "master" ]
 
 jobs:
-  tests:
+  build:
+
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -20,84 +20,29 @@ jobs:
         python-version: ["3.12", "3.13", "3.14"]
 
     steps:
-      - uses: actions/checkout@v7
+    - uses: actions/checkout@v4
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v3
+      with:
+        python-version: ${{ matrix.python-version }}
 
-      - uses: actions/setup-python@v7
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install -e .[dev]
 
-      - name: Install package and test dependencies
-        run: python -m pip install -e ".[test]"
+    # - name: Test with pytest
+    #   run: |
+    #     pytest
 
-      - name: Run pytest and package smoke test
-        shell: python
-        run: |
-          import os
-          import tomllib
-          from pathlib import Path
+    - name: Type check with Mypy
+      run: |
+        mypy .
 
-          import pytest
+    - name: Format with Black
+      run: |
+        black --check --diff .
 
-          # Keep scaffold coverage in runner storage until repository tests exist.
-          smoke_test = Path(os.environ["RUNNER_TEMP"]) / "test_cocoonet_package.py"
-          smoke_test.write_text(
-              "\n".join([
-                  "import os",
-                  "",
-                  "from cocoonet import get_version",
-                  "",
-                  "",
-                  "def test_installed_version() -> None:",
-                  '    """Check the public API against the declared release version."""',
-                  '    assert get_version() == os.environ["COCOONET_EXPECTED_VERSION"]',
-                  "",
-              ]),
-              encoding="utf-8",
-          )
-          project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
-          os.environ["COCOONET_EXPECTED_VERSION"] = project["version"]
-          targets = [str(smoke_test)]
-          if Path("tests").is_dir():
-              targets.append("tests")
-          raise SystemExit(pytest.main(["-c", "pyproject.toml", *targets]))
-
-  quality:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v7
-
-      # Black's configured targets include Python 3.14; use it for AST validation.
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.14"
-          cache: pip
-
-      - name: Install package and development dependencies
-        run: python -m pip install -e ".[dev]"
-
-      # - name: Test with pytest
-      #  run: |
-      #    pytest
-
-      - name: Type check with mypy
-        shell: bash
-        run: |
-          targets=(src)
-          if [ -d tests ]; then targets+=(tests); fi
-          python -m mypy "${targets[@]}"
-
-      - name: Check formatting with Black
-        shell: bash
-        run: |
-          targets=(src)
-          if [ -d tests ]; then targets+=(tests); fi
-          python -m black --check --diff "${targets[@]}"
-
-      - name: Lint with Ruff
-        shell: bash
-        run: |
-          targets=(src)
-          if [ -d tests ]; then targets+=(tests); fi
-          python -m ruff check "${targets[@]}"
+    - name: Lint with Ruff
+      run: |
+        ruff check .

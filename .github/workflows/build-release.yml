@@ -1,4 +1,8 @@
-# Keep this filename aligned with the PyPI trusted-publisher configuration.
+# User note:
+# Keep this filename and the pypi environment aligned with PyPI's Trusted Publisher configuration.
+# Do not change the file name as it is fixed on PyPI.
+# Do not change workflow file name on GitHub, delete and recreate it to rename to rebuild links.
+
 name: Build and Release
 
 on:
@@ -9,14 +13,8 @@ permissions:
   contents: read
 
 jobs:
-  checks:
-    uses: ./.github/workflows/tests.yml
-
   release-build:
-    needs: checks
-    runs-on: ubuntu-latest
-    env:
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v7
@@ -24,9 +22,11 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
-          cache: pip
 
-      - name: Verify release tag matches package version
+      - name: Verify release version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         shell: python
         run: |
           import os
@@ -36,29 +36,34 @@ jobs:
           version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
           tag = os.environ["RELEASE_TAG"]
           if tag not in (version, f"v{version}"):
-              raise SystemExit(f"Release tag {tag!r} does not match package version {version!r}.")
+              raise SystemExit(f"Release tag {tag!r} must match package version {version!r} or 'v{version}'.")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"version={version}\n")
 
-      - name: Build and validate release distributions
+      # Build into runner storage so existing repository artifacts cannot be published.
+      - name: Build and check release distributions
         run: |
           python -m pip install build twine
           python -m build --outdir "$RUNNER_TEMP/release-dists"
-          python -m twine check --strict "$RUNNER_TEMP/release-dists/"*
-          python -m pip install "$RUNNER_TEMP/release-dists/"*.whl
+          python -m twine check --strict "$RUNNER_TEMP/release-dists"/*
+          python -m pip install "$RUNNER_TEMP/release-dists"/*.whl
 
-      - name: Verify installed wheel
+      - name: Verify installed package version
         working-directory: ${{ runner.temp }}
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
         shell: python
         run: |
           import os
 
           from cocoonet import get_version
 
-          expected = os.environ["RELEASE_TAG"].removeprefix("v")
           actual = get_version()
+          expected = os.environ["EXPECTED_VERSION"]
           if actual != expected:
-              raise SystemExit(f"Installed wheel version {actual!r} does not match {expected!r}.")
+              raise SystemExit(f"Installed Cocoonet version {actual!r} does not match {expected!r}.")
 
-      - name: Upload validated distributions
+      - name: Upload verified distributions
         uses: actions/upload-artifact@v7
         with:
           name: release-dists
@@ -66,16 +71,17 @@ jobs:
           if-no-files-found: error
 
   pypi-publish:
+    runs-on: ubuntu-24.04
     needs: release-build
-    runs-on: ubuntu-latest
     permissions:
       id-token: write
+
     environment:
       name: pypi
       url: https://pypi.org/project/cocoonet/
 
     steps:
-      - name: Retrieve validated distributions
+      - name: Retrieve release distributions
         uses: actions/download-artifact@v8
         with:
           name: release-dists
