@@ -244,8 +244,7 @@ constraints:
   sample/class alignment, and check the formula's mathematical meaning. Request clarification only for a missing
   custom definition or an actual contradiction; explain contradictions with an example. Expected undefined values
   of a well-defined formula remain governed by Scientific Formula Fidelity and are not ambiguities.
-- Do not invent project-specific metric variants. Continue authorized work that does not depend on an unresolved
-  custom definition.
+- Do not invent project-specific metric variants. Apply the phase-contract gate below to unresolved custom definitions.
 - Keep detailed worker device failure policies in later architecture or implementation documentation; this overview
   establishes worker ownership of device configuration and the required model reconstruction information.
 
@@ -307,6 +306,33 @@ constraints:
   remains failed; the separately scheduled next round follows Online Connection Rounds and Allocation and does not
   reset any delivery retry budget.
 
+**Roadmap-Driven Development:**
+
+Before planning or implementing a phase, process project guidance in this order:
+
+1. Read the complete root `AGENTS.md` and apply all relevant sections.
+2. Read the relevant parts of `docs/architecture.md`.
+3. Read `docs/roadmap.md`, the project-wide roadmap, and identify the current phase.
+4. Read the corresponding `docs/roadmaps/roadmap_phase_<n>.md`, or create it under the phase-planning gate below.
+5. Before each implementation unit, inspect the relevant code and tests.
+
+- Before implementing a phase, its exact `docs/roadmaps/roadmap_phase_<n>.md` must exist, with `<n>` matching the
+  project-wide phase number. Convert that phase into an implementation-level plan defining, where applicable:
+  scope and completion criteria; data models, structures, types, and invariants; public APIs and signatures;
+  computation formulas and numerical behavior; planned classes, functions, and methods with concise responsibilities
+  and corresponding tests; dependency-safe implementation order; validation requirements; and decisions explicitly
+  deferred to later phases. Keep detailed architecture and protocol design in the design documents, not `AGENTS.md`.
+- Resolve every contract required to implement the current phase before implementation. Only decisions needed solely
+  by later phases may remain explicitly deferred. If guidance sources conflict or a required current-phase contract
+  remains unresolved, stop and report the issue instead of implementing; resolve it through authorized planning.
+- After creating or materially revising a phase roadmap, stop and wait for explicit user approval before implementing
+  the phase. Phase-roadmap approval and approval to implement a particular unit are separate gates: approval of the
+  plan alone does not authorize production changes.
+- Follow the approved phase roadmap. If implementation reveals that an approved API, data model, formula, function
+  boundary, dependency, or other phase contract must change, stop implementation, report the discrepancy, propose the
+  required phase-roadmap amendment, and wait for explicit user approval before continuing. Do not silently redesign
+  the phase during implementation.
+
 **Documentation-First Gatekeeping:**
 
 - Functional improvements include new features and performance improvements. Fixes, scaffolding, and internal tooling
@@ -319,9 +345,9 @@ constraints:
 - If a required design document is absent or lacks the relevant design, pause the affected implementation and request
   authorization to create or update the documents, unless the user has already authorized that documentation work.
   Complete the required documentation step before the corresponding implementation step.
-- This gate concerns updates to the two design documents. Scaffolding and internal tooling functions or methods must
-  still have docstrings describing their purpose and behavior, with detailed logic explained in comments above the
-  relevant code line or block.
+- Exemptions from updating these two design documents do not waive the phase-roadmap or single-unit approval gates.
+  Scaffolding and internal tooling functions or methods must still have docstrings describing their purpose and
+  behavior, with detailed logic explained in comments above the relevant code line or block.
 
 **Manual Commits:**
 
@@ -331,23 +357,39 @@ constraints:
 
 **Single-Unit Production Changes:**
 
-- By default, implement or change only one production function or class method in one source file per user-approved
-  implementation step. After completing that unit and its applicable tests, stop for user approval before further
-  production changes. Keep necessary imports and declarations limited to that unit; they do not authorize behavioral
-  changes to other production units. Documentation-only edits remain limited to the user's requested document scope.
-- If correctness requires simultaneous changes to multiple production functions or methods, explain the affected
-  units and request explicit permission before changing them. Explicit permission already given in the user's prompt
-  for that bounded set of units is sufficient; never silently expand the set.
-- Compose a new function that needs helpers unit by unit. Explain each helper's responsibility, add one helper at a
-  time, and wait for user approval before proceeding to the next helper or composing the calling function.
-- Existing functions and their helpers may be modified together only with explicit user approval for those units.
-- Large-scale changes must be divided into bounded implementation steps, with user approval between steps. Never
-  perform a large-scale modification in one implementation, even when a broad prompt requests the whole change.
+- For new development, by default add or change only one production function or one class method per implementation
+  response, with only its directly corresponding tests, required typing/docstring updates, and minimal supporting
+  edits. This default covers the entire turn, including all tool calls, subject to the helper-bundle exception below.
+- A new class, schema, or other declaration may instead be its own approved change unit; a class declaration alone
+  does not authorize bundling methods. Normally develop new classes method by method and explain, develop, and obtain
+  approval for new helpers one unit at a time before composing their caller.
+- When necessary or materially more coherent, propose an exact bounded set of tightly coupled helpers, or a caller
+  together with those helpers, for one response. Identify every function/method and explain the grouping; do not
+  implement the bundle until the user explicitly approves those exact units. A broad feature, phase, or roadmap
+  request is not bundle approval. Do not use helper bundling to introduce unrelated behavior, reusable abstractions,
+  or additional scope.
+- Revisions to existing behavior may change related existing functions/methods together, including across files, when
+  the requested revision is inherently cross-cutting or consistency requires coordinated edits. Use the smallest
+  coherent bounded change and identify the affected units and why they belong together. Examples include parameter
+  renames across callers/callees, shared type or signature changes, protocol-field updates across dependent handlers,
+  and coordinated compatibility fixes. Do not force intermediate states that leave the repository inconsistent.
+- Keep multi-unit revisions narrowly scoped to the requested revision. This allowance does not authorize unrelated
+  new behavior, new abstractions, or new production functions/methods. New feature development does not qualify for
+  this allowance merely because it edits existing code.
+- If a revision also requires a new helper/function/method, identify that addition separately and apply the
+  new-development default and helper-bundle approval rules above. Revision approval alone does not authorize a
+  new-code bundle.
+- An explicitly approved helper bundle or permitted bounded revision is one change unit for approval and targeted
+  testing. Split large changes into bounded reviewable steps whenever they can be separated safely. The existing
+  roadmap, documentation, validation, and approval gates apply to both new development and revisions.
+- Even if the user requests an entire phase, feature, or roadmap item, complete only the next approved change unit,
+  validate it, report the result, and stop. Obtain explicit user approval before the next change unit; do not advance
+  automatically in the same response. Documentation-only edits remain limited to the user's requested document scope.
 
 **Tests for the Targeted Unit:**
 
-- The single-unit production restriction excludes testing code. A complete testing unit dedicated to the targeted
-  production unit may be added or updated in the same step, including the test functions needed to verify it.
+- The production change limits exclude testing code. A complete testing unit dedicated to the approved change unit
+  may be added or updated in the same step, including the test functions needed to verify it.
 - Keep tests focused on the approved production work; do not generate unrelated or project-wide test suites.
 - If a production unit does not yet provide independently verifiable functionality, tests may be deferred. Explain
   what cannot yet be verified and why, then wait for user approval of that working unit before continuing.
@@ -355,8 +397,8 @@ constraints:
 **No Unsolicited Scope Expansion:**
 
 - Do not introduce dependencies, utilities, abstractions, or unrelated edits outside the immediate approved scope.
-- A required helper or coordinated change does not override the unit-by-unit workflow. Explain the dependency and
-  obtain any required approval before expanding production changes.
+- A required helper or coordinated revision does not expand the approved scope or waive the new-unit limit and
+  approval gates above.
 
 ---
 
@@ -762,10 +804,6 @@ constraints:
   guideline, not a mechanical acceptance criterion. Do not pad short functions or split coherent logic just to meet it.
 - Decompose around coherent operations when it improves readability, testability, reuse, or separation of
   responsibilities. Avoid trivial wrappers and unnecessary abstractions introduced only to shorten a function.
-- A coherent implementation unit may include directly necessary private helpers only when explicit user approval
-  covers the additional functions/methods. Treat that as the bounded multi-function approval described in Agent
-  Instructions; it does not authorize unrelated changes or waive the mandatory one-change-unit approval gate.
-  Without that explicit approval, add helpers one at a time and wait for approval between production units.
 - Comment non-obvious reasoning, scientific assumptions, invariants, algorithmic decisions, performance-sensitive
   behavior, and constraints that cannot reliably be understood from the code alone. Explain why, not clear syntax.
 - Prefer clear names and straightforward control flow to comments that restate the code. Preserve any specifically
