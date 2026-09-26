@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cocoonet"
-version = "0.0.0"
+version = "0.0.1"
 description = "Scientific evaluation of machine learning models with local and distributed workers."
 readme = "README.md"
 # Extend the ceiling and tool targets when the next stable Python series is supported.
