@@ -231,6 +231,20 @@ Schedule invariants:
 - This is the complete logical schedule. Parent records hold a reference to it, not an embedded second authoritative
   storage copy. In-memory/worker inputs may contain it; durable single-file storage belongs to Phase 2/4.
 
+Group-separation clarification: every fold must have disjoint training and testing groups, regardless of
+splitting method. Every sample has a group value; Phase 4 normalization assigns distinct per-sample values
+when groups are absent and preserves supplied groups. Phase 1 validates existing values and memberships;
+it does not generate groups or alter partitions.
+
+This clarification supersedes the `group_separated` field and its conditional rules above. `PartitionSchedule`
+has exactly three fields: `reference: PartitionReference`, `samples: tuple[SampleRecord, ...]`, and
+`folds: tuple[FoldRecord, ...]`. No flag enables or disables group separation.
+
+`validate_partition_schedule(value: PartitionSchedule) -> None` checks group separation unconditionally.
+Its tests must reject a shared group across distinct training/testing samples and accept both separated
+repeated groups and distinct per-sample groups, subject to the other schedule invariants. Strategy-specific
+compatibility remains Phase 4 work and must preserve the universal separation rule.
+
 ### 4.2 Configuration and execution records
 
 | Record / enum | Fields / values |

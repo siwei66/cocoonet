@@ -133,6 +133,11 @@ Train/test rows have the same logical structure, and file overlap does not imply
 grouped k-fold, LOGO, k-fold, LOO, train-test, and applicable classification stratification follow the configured
 splitting contract, group separation, and mask eligibility.
 
+Apply one group-separation rule to every generated or reused partition: training and testing groups must be
+disjoint within each fold, regardless of splitting method. Missing groups receive distinct per-sample values
+during normalization; supplied groups remain unchanged. Reject incompatible splitting configurations explicitly,
+without changing the selected method or group values.
+
 Complete add_dataset() as dataset-plus-partition preparation. Load and validate a supplied split_path without running
 the splitter; otherwise require the splitting method/configuration, realize the whole schedule, validate it, and
 persist it once in one authoritative dill file before successful completion. Validate exact dataset identity,

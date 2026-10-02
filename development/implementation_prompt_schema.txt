@@ -1,0 +1,32 @@
+## Phase initial prompt schema:
+
+```text
+Read `AGENTS.md` and `roadmap_phase_1.md`, and the corresponding part of `architecture.md`, continue with the first unit of phase 1.
+```
+
+---
+
+## Phase initial prompt schema:
+
+```text
+Approved. Implement these proposed change directly. Do not make other changes.
+
+---
+
+Then for next unit step, propose these single line type declarations together as one unit.
+```
+
+Or revise the proposal before approval and continuing with the next unit.
+
+---
+
+## Attached requirement schema:
+
+```text
+- Prepare only the next planned change unit.
+- Show me the exact proposed implementation and corresponding tests, with a concise explanation of the change and any relevant implementation decision.
+- Read only the relevant AGENTS.md rules, the applicable section of roadmap_phase_1.md, and the directly affected code/tests.
+- Do not perform a broad repository audit unless required by a detected dependency.
+- Propose the exact change only.
+- Do not modify files for next unit.
+```

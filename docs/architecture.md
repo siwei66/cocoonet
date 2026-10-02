@@ -453,6 +453,14 @@ but forbid testing, while reserved validation rows can permit testing but forbid
 placement accepts the configured splitting randomness. Workers consume the saved outcome rather than resplitting.
 Groups and masks belong to the exact dataset representation and must agree with any reused partition's memberships.
 
+Group separation applies to every realized fold, regardless of splitting method: no group may occur in both
+training and testing populations. Every normalized sample has a group value. When groups are absent, distinct
+per-sample groups make this rule equivalent to sample disjointness. Preserve supplied groups; do not replace
+repeated groups to permit a split. Apply the same rule to newly generated and reused partitions. References
+to "applicable group separation" and "group-based validation" do not provide an exemption for other methods.
+Reject configurations that cannot satisfy both the selected splitting method and this invariant; do not
+silently substitute another method.
+
 Tensor reconstruction must be deterministic. Reject inconsistent shape/value information rather than silently
 padding, truncating, repairing, or inferring replacement data. `X_file` denotes logical/dataset-relative source
 reference(s), resolved through the representation's `dataset_id` and framework-managed local storage; a root-machine
