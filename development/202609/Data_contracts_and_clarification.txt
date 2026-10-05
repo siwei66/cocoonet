@@ -1,0 +1,446 @@
+Propose updates to the current contract in the related docs and `AGENTS.md` if corresponding content also exists in `AGENTS.md`, according to my following clarification of the contracts:
+
+
+
+- Inline features: sample label, target, feature values. --> This must be one or multiple csv or the first sheet of xls/xlsx table files
+- Inline tensors: sample label, target, flattened values and reconstructible shape. --> This must be one or multiple csv or the first sheet of xls/xlsx table files
+- File-backed data: sample label, target, logical `X_file` reference(s). --> This must be one csv or the first sheet of xls/xlsx table file
+- Optional groups and masks, subsequently normalized. --> 1. These are columns of the table file(s), these columns must present in the standardized storage file. 2. The standardized storage file is expected to be one csv or the first sheet of xls/xlsx table file like File-backed data, 3. for file-backed data input table, the table is standardized and the standardized file is stored as data\_reference.csv in the module work dir directly. 4. For Inline data, the table is referenced in the same way as file-backed data and standardized and stored as data\_reference.csv in the module work dir directly. 5. If the group value is not provided, unique group values for the samples are applied; 6. mask is not one column but two columns, train mask and test mask; 6. If the mask value of train mask or test mask is not provided, they are both default to True i.e. allowed and not masked off / forbidden in the corresponding train or test dataset.
+
+\---
+
+
+
+Do not modify any file. Propose the update only and wait approval.
+
+
+========================================================== Next prompt ==========================================================
+
+
+Make a tiny revision to your proposal:
+
+
+
+The input table data can also accept serialized python pandas dataframe like in .pkl and .dill, and .ods / .parquet / .orc / .feather / and the compressed csv .csv.gz and .csv.zst
+
+
+
+and add following clarification properly:
+
+
+
+For large tables larger than 16 MB, the root node must translate the tabular data into ZSTD compressed Parquet for transferring to worker nodes. The translated compressed parquet is persistent in root node under the same dir of the data path dir, and the compressed version is used as data source reference path instead. So one translation for all transferring to worker nodes.
+
+
+
+\---
+
+
+
+Requirements:
+
+- Keep other parts of your last proposal intact;
+- Check consistency with current design
+- Check and avoid redundancy with existing contracts in the update
+- Propose the complete updates to the corresponding docs
+- Optimize my description without changing the intention
+- Do not modify any file
+- Report any ambiguities if exist
+
+
+========================================================== Next prompt ==========================================================
+
+
+1. **16 MB:** decimal MB or binary MiB; stored file size, decompressed size, or in-memory table size; and per-file versus combined-table measurement. This matters especially for compressed CSV and multi-file inputs.
+
+\---
+
+
+
+Original data file size, regardless of formats
+
+1. **Conversion scope:** whether the rule also covers `data_reference.csv`, and whether an existing ZSTD-compressed Parquet input can be reused directly.
+
+Yes, must be re-used across the parent task. Do not compress for every data transferring
+
+
+
+\---
+
+
+
+1. **ODS worksheets:** whether to read only the first worksheet, matching Excel. The proposal does not silently extend that rule.
+
+Only the first. Document this behavior clearly.
+
+
+
+\---
+
+1. **Cache lifecycle:** derived filename, collision handling, identifying unchanged input, reuse after restart, and behavior when the source directory is not writable.
+
+Always in root node, need user manual removal in OS.
+
+
+
+\---
+
+1. **Conversion fidelity:** handling DataFrame values or metadata that cannot be represented faithfully in the chosen Parquet schema.
+
+No, there should not be pandas metadata and the pandas df must not contains real python objects in it, the values must be number or text / text object.
+
+
+
+\---
+
+
+
+1. **Existing unresolved details:** multiple-inline-table combination, inline row references, table-versus-image provenance, CSV scalar encoding, and preserving older parents when `data_reference.csv` is replaced.
+
+No, never make any replacement to the existing files, add a `_compressed` to the existing name if the original data is uncompressed Parquet, and do not translate if the original is already compressed Parquet data file.
+
+For other issues of this point, see following clarification:
+```markdown
+
+- **Multiple inline table files:** Division across files is by **samples only**. Different files contain different sample records. Division by columns/features across files is explicitly forbidden. Do not join multiple input files column-wise to construct one sample's feature vector.
+
+- **Translation fidelity:** Any required table translation, including the large-table ZSTD-compressed Parquet translation, must preserve the table content exactly. Translation changes the storage/transfer representation only; it must not change the dataset content or semantics.
+
+- **Source references and sample lookup:** `SourceReference` identifies the source by **file path only**. It must not contain row numbers, row positions, or other record locators. Samples within a referenced table are matched by `sample_id`, not by row number or row order. Row position therefore has no identity semantics.
+
+- **Standardized data types:** Use a defined standardized schema:
+  - identifiers, including `sample_id`, labels, groups, and other identifier-like values: **text**
+  - `train_mask` and `test_mask`: **bool**
+  - inline `X` values: **float**
+  - file/source paths and references: **text**
+
+  Do not attempt to preserve arbitrary original Python/pandas scalar types where the standardized contract defines one of these types.
+
+- **CSV encoding:** CSV input encoding must be automatically detected from the supplied CSV file. This is part of the input-reading behavior and should not remain listed as an ambiguity.
+```
+
+
+
+\---
+
+
+
+Additional clarification:
+
+
+
+For original data file larger than 1 GB, divide it into several smaller files for best data transferring performance.
+
+
+
+\---
+
+
+
+- Revise and provide the complete update to the corresponding docs and resolve the ambiguities you proposed.
+- Report any remaining ambiguities.
+
+
+========================================================== Next prompt ==========================================================
+
+
+1. Exact thresholds and shard sizes. Original stored size and per-file measurement are now resolved. Decimal MB/GB versus binary units remains unspecified, as does the target or maximum size of each output shard. “Best transfer performance” does not determine a unique size.
+unit size after division is kept less than 512 MB.
+1. Generated IDs versus unchanged original tables. Users currently supply labels, while Cocoonet generates sample_id. Lookup now requires that ID inside referenced tables. For an unchanged small original table lacking sample_id, the documents still need to specify where the ID-bearing table is materialized and which file is referenced.
+Initial development, no user, ignore.
+1. Artifact naming. _compressed resolves naming for a single uncompressed Parquet input. Names for other converted formats and multi-file outputs remain unspecified. The proposal resolves collision behavior conservatively: reuse only verified matching artifacts; otherwise fail without overwriting.
+Use the same suffix like `_compressed.parquet` regardless of the initial suffix.
+1. Fixed data_reference.csv and initialization. Changed dataset registration cannot replace an existing file under the new rule. Also, current explicit initialize(..., overwrite=True) clears managed root contents. Clarification is needed on whether manual-only deletion applies to transfer artifacts inside that root, and whether “never replace” changes the existing explicit initialization behavior.
+The reference path can be changed, I mean never replace the original data file with the new file, use the new compressed names for the new file.
+1. Target and conversion semantics. The standardized schema specifies inline X, identifiers, masks, and paths, but not regression-target types or all tensor-shape types. Numeric-to-text and numeric-to-float conversion also need rules for collisions or loss of precision; exact subsequent translation does not resolve input-standardization failures.
+
+1. File-backed provenance. It remains unspecified whether SampleRecord.sources includes the metadata table, referenced image/data files, or both. File-only references settle the locator structure, but not that membership.
+
+
+========================================================== Next prompt ==========================================================
+
+
+1. Exact thresholds and shard sizes. Original stored size and per-file measurement are now resolved. Decimal MB/GB versus binary units remains unspecified, as does the target or maximum size of each output shard. “Best transfer performance” does not determine a unique size.
+
+```text
+MY ADVICE: unit size after division is kept less than 512 MB.
+```
+
+1. Generated IDs versus unchanged original tables. Users currently supply labels, while Cocoonet generates sample_id. Lookup now requires that ID inside referenced tables. For an unchanged small original table lacking sample_id, the documents still need to specify where the ID-bearing table is materialized and which file is referenced.
+
+```text
+MY ADVICE: Initial development, no user, ignore.
+```
+
+1. Artifact naming. _compressed resolves naming for a single uncompressed Parquet input. Names for other converted formats and multi-file outputs remain unspecified. The proposal resolves collision behavior conservatively: reuse only verified matching artifacts; otherwise fail without overwriting.
+
+```text
+MY ADVICE: Use the same suffix like `_compressed.parquet` regardless of the initial suffix.
+```
+
+1. Fixed data_reference.csv and initialization. Changed dataset registration cannot replace an existing file under the new rule. Also, current explicit initialize(..., overwrite=True) clears managed root contents. Clarification is needed on whether manual-only deletion applies to transfer artifacts inside that root, and whether “never replace” changes the existing explicit initialization behavior.
+
+```text
+MY ADVICE: The reference path can be changed, I mean never replace the original data file with the new file, use the new compressed names for the new file.
+```
+
+1. Target and conversion semantics. The standardized schema specifies inline X, identifiers, masks, and paths, but not regression-target types or all tensor-shape types. Numeric-to-text and numeric-to-float conversion also need rules for collisions or loss of precision; exact subsequent translation does not resolve input-standardization failures.
+
+```text
+MY ADVICE:
+
+1. **Classification targets**
+   Standardize classification targets as **text**.
+   Text targets remain text. Integer classification targets are converted directly to their decimal text representation, for example `123345` → `"123345"`.
+   Floating-point values are not valid classification labels under the standardized contract and must fail explicitly rather than being converted to text.
+
+2. **Regression targets**
+   Regression targets are **numeric** and are standardized to the configured floating-point representation.
+   Non-numeric regression targets are invalid and must fail explicitly.
+   The exact floating-point precision/type is configurable by the later dataset input method/API and does not need to be decided as part of the current documentation issue.
+
+3. **Identifier-like values**
+   Standardized identifiers, including `sample_id`, sample labels, groups, and other identifier-like fields, are **text**.
+   - Existing text values remain text.
+   - Integer values may be converted directly to decimal text, e.g. `123345` → `"123345"`.
+   - Floating-point values are forbidden as identifier-like values and must fail explicitly. Do not convert values such as `1.0` to `"1.0"` or `"1"`.
+   After integer-to-text conversion, apply the normal uniqueness and association validation to the standardized values. If conversion creates a collision where uniqueness is required, fail explicitly. Do not introduce type prefixes or other special encodings to preserve the original scalar type.
+
+4. **Inline feature values**
+   Inline `X` values are floating-point numeric data.
+   The exact floating-point precision/type must be configurable in the later dataset input method/API composition. That configuration belongs to the later input design and is not an ambiguity that needs to be resolved in the current documentation update.
+   The current contract only needs to establish that inline `X` is standardized as floating-point data rather than preserving arbitrary original Python, NumPy, or pandas numeric scalar types.
+   
+5. **Tensor shape metadata**
+   Tensor shape consists of ordered **positive integer dimensions**.
+   Accept tensor shape input in the following forms:
+   - tuple, e.g. `(3, 224, 224)`
+   - list, e.g. `[3, 224, 224]`
+   - array containing the same ordered integer dimensions
+   - pure text containing the dimensions, e.g. `"3, 224, 224"`
+   For table formats that cannot natively represent iterable-like values, a textual representation is allowed, including forms such as `"(3, 224, 224)"`. Space `" "` in them can be omited, like `"(3,224, 224)"`.
+   All accepted representations must be parsed into the same ordered integer shape semantics. Reject malformed text, non-integer dimensions, non-positive dimensions, or unsupported structures explicitly.
+   Tensor shape is structural metadata and must not be treated as floating-point `X` data or identifier-like text.
+
+6. **Standardization versus transfer translation**
+   Keep these operations explicitly separate:
+   - **Input standardization** converts accepted user input into Cocoonet's standardized dataset representation according to the defined field contracts.
+   - **Storage/transfer translation**, including ZSTD-compressed Parquet conversion and file splitting, operates on the standardized dataset and must preserve its content and semantics exactly.
+   Therefore, exact preservation during transfer translation refers to the already-standardized representation. It does not require preserving arbitrary original Python, NumPy, or pandas scalar representations.
+```
+
+1. File-backed provenance. It remains unspecified whether SampleRecord.sources includes the metadata table, referenced image/data files, or both. File-only references settle the locator structure, but not that membership.
+
+```text
+MY ADVICE:
+
+- The input table describes each sample and contains its metadata, including the **data source path**.
+- The file identified by that path is the **actual data source** containing the sample's `X` data. For file-backed data, `SampleRecord.sources` references these actual data source file(s), not the input table.
+- For inline data, the input table contains `X`, so that table itself is the data source.
+- `data_reference.csv` and any potential `data_meta.csv` are **not source-referenced**. They are Cocoonet-managed artifacts in the module workdir on the root node.
+- On worker nodes, `data_reference.csv` must be generated in a standardized way by Cocoonet, because the module—not the user—determines the synchronized data location/path on the worker.
+```
+
+
+========================================================== Next prompt ==========================================================
+
+
+For Remaining key ambiguities:
+
+1. **Generated `sample_id` versus source-only lookup remains unresolved.**
+
+```text
+MY ADVICE:
+Initial identification uses sample_label provided by user.
+`sample_label` must be strictly unique across all samples.
+If the `sample_label` column completely absent in the initial data table provided by the user, directly generate sample_label by `<special identifier like #%>_<file name>_<row number>`.
+```
+
+2. **A strict 512 MB stored-size limit cannot be guaranteed by row-count partitioning before compression.**
+
+```text
+MY ADVICE: Well simply determine the number of shards by ceiling(initial size / stored-size limit), and divide the rows to the number of shards parts with approximately even row numbers. 512 MB size limit is no longer used as a strict limit but only a parameter to determine the shard number, and this must be configurable in the data input API.
+```
+
+3. **Existing ZSTD Parquet larger than 1 GB needs output naming.**
+
+```text
+MY ADVICE: `cocoonet_dataset_shard_<shard number>.parquet`.
+```
+
+4. **`data_reference.csv` lifecycle still conflicts with one fixed filename.**
+
+```text
+MY ADVICE:
+One project must have only one `data_reference.csv`.
+There can be multiple dataset files, but that is already represented in the source file reference path.
+Once the dataset file itself is changed, a new corresponding source `data_reference.csv` must be provided by the user and new `data_reference.csv` is generated. The new dataset and new `data_reference.csv` is synchorized on worker nodes in the new parent task.
+```
+
+5. **Manual removal and verified reuse need a durable identity mechanism.**
+
+```text
+MY ADVICE:
+- In one parent task execution, no verification is needed.
+- In a new execution, the user can use default or choose explicitly whether to use the existing file directly or re-generate them.
+- Default behavior is to regenerate in new executions if the file is changed, and direct using if the file is intact. You could keep the dataset file state in the computation instance on the root node if needed and regenerate if new instance is used with no dataset file state.
+```
+
+---
+
+- Revise and provide the COMPLETE update to the corresponding docs and resolve the ambiguities you proposed according to the above advices to the remaining ambiguities.
+- Report any key remaining ambiguities with example for clarification, and recommendation.
+- Before you determine a remaining ambiguity really exists, inspect current design and validate the ambiguity really exists under current interpretation, and need my decision.
+- Check consistency within the update proposal and between the update proposal and the existing content of the corresponding docs, avoid inconsistency. Stop and require user decision if major inconsistency is found.
+- Check current docs, avoid redundancy in the update proposal and avoid redundancy of the update proposal with the existing content.
+- Propose update and line number to add the update only, do not modify any file.
+
+
+========================================================== Next prompt ==========================================================
+
+
+For Remaining key ambiguities:
+
+1. **Partially missing `sample_label` values**
+
+```text
+MY ADVICE:
+Recommendation approved.
+```
+
+2. **Exact generated-label encoding**
+
+```text
+MY ADVICE:
+Recommendation approved.
+```
+
+3. **Shard-name collisions**
+
+```text
+MY ADVICE:
+Recommendation approved with this additional clarification:
+
+Use dataset-global shard numbering to avoid filename collisions, but keep **each source file as an independent preparation unit**. Process, read, compress, and shard sources one file at a time; global numbering must not require combining or materializing multiple source files together.
+
+Use a dataset-specific Cocoonet-managed preparation directory for the generated transfer representations.
+```
+
+4. **Meaning of “unchanged” for automatic reuse**
+
+```text
+MY ADVICE:
+For automatic reuse, do not use a content digest or perform content comparison.
+
+Define the persisted source state using filesystem metadata sufficient for ordinary change detection, specifically:
+
+- source path,
+- stored file size,
+- modification time,
+- and all preparation-relevant settings.
+
+Automatic reuse is allowed when these values match the persisted state; otherwise regenerate.
+
+This is intentionally a metadata-based change-detection contract rather than byte-level content verification. Cocoonet should not reread potentially very large source files solely to calculate a digest for reuse decisions. If content is changed while path, size, and modification time are deliberately preserved, that is outside automatic change detection; the user can explicitly request regeneration.
+
+Within an existing parent, the prepared representation remains fixed and is reused for all worker transfers without repeating this check.
+```
+
+5. **Boolean and nonfinite numeric input**
+
+```text
+MY ADVICE:
+Resolve this ambiguity as follows:
+
+- Reject boolean values wherever integer or numeric identifier/target conversion is expected. Bool is valid only for explicitly boolean fields such as `train_mask` and `test_mask`.
+- Reject `NaN`, `+Inf`, and `-Inf` globally in numeric dataset content, including regression targets and X values.
+- Cocoonet must not implicitly impute, drop, replace, clip, or otherwise cleanse nonfinite values. Users must cleanse them explicitly before dataset ingestion so that the preprocessing behavior is deterministic.
+```
+
+6. **Local serialized DataFrame trust boundary**
+
+```text
+MY ADVICE:
+Resolve this by **removing `.pkl` and `.dill` from supported dataset input formats entirely**.
+
+Cocoonet must not accept pickle/dill files as dataset sources, locally or over the network. Remove the proposed `.pkl`/`.dill` permissions and any related serialized-DataFrame rules from the documentation amendments.
+
+Supported dataset inputs should remain limited to the non-executable table formats already specified: CSV/compressed CSV, XLS/XLSX/ODS, Parquet, ORC, and Feather.
+```
+
+---
+
+Additional safety advices:
+
+```text
+Resolve the public-worker safety concerns with the simplest sound policy. Do not add CocooNet/PyPI installation-integrity validation or a general sandboxing design.
+
+### Public-worker model safety
+
+For **public workers only**, arbitrary serialized Python model objects are not permitted.
+
+Public workers must reject `.pkl`, `.pickle`, `.dill`, or equivalent pickle/dill model payloads and must not deserialize them.
+
+Instead, the root sends only a declarative model specification containing:
+
+- the supported model/component identity;
+- its construction hyperparameters;
+- the declarative structure required for supported model composition.
+
+The public worker reconstructs the model locally using its installed supported scikit-learn/PyTorch components.
+
+Permit supported scikit-learn composition mechanisms such as `Pipeline`, ensemble/boosting/meta-estimator structures, and CocooNet-native construction structures, provided the complete model can be represented declaratively and reconstructed from supported worker-local components.
+
+Do not permit custom Python classes, arbitrary import paths, user callables/lambdas, pickle/dill objects, or other user-provided executable Python objects on public workers. Model identifiers must resolve through CocooNet-controlled supported components rather than unrestricted dynamic imports.
+
+For **private workers**, retain the existing model trust and serialization policy. These additional restrictions apply only to public workers.
+
+### Public-worker registration safety
+
+Ordinary users cannot add workers to the public worker pool.
+
+Registration/provisioning of public workers is restricted to authenticated and authorized CocoonService developers/operators. CocoonService is authoritative for whether a worker belongs to the public pool.
+
+A locally configured worker cannot make itself public through a configuration flag or ordinary user/worker credentials. Normal users may request and use public workers allocated by CocoonService but cannot register new public workers.
+
+Keep the exact authentication/provisioning mechanism abstract at this stage; establish only this authorization boundary.
+
+### Modification scope
+
+Inspect the existing safety, worker, model-transfer, discovery, and serialization policies and make only the documentation/content changes necessary to establish these rules and resolve direct conflicts.
+
+In particular, revise existing wording if it currently:
+
+- permits pickle/dill or arbitrary executable/custom model payloads on public workers;
+- requires public workers to deserialize arbitrary user model objects;
+- permits ordinary users or ordinary worker credentials to register public workers.
+
+Preserve compatible existing policy unchanged.
+
+Do not broaden this into a general security redesign or introduce additional security mechanisms unless required to resolve a direct contradiction.
+
+Before modifying files, show the exact conflicting existing policies and the minimal proposed changes for approval.
+```
+
+
+========================================================== Next prompt ==========================================================
+
+
+For the remaining ambiguity, the weights are stored in compressed parquet data file and send to worker as the dataset, if less than 16MB, no need to compress, if larger compress, if larger than 1 GB, divide into shards, the same policy as dataset.
+
+\---
+
+Additional clarification to the safety issue.
+
+Those worker node safety policy of not accepting dill / pkl applied to public worker node only.
+
+For private online worker node or local worker node, the custom model is permited and supported, the receiving and deserialization for them is also permited. The private node safety is completely the user's responsibility.
+
+\---
+
+Revise the latest proposal of the updates and safety policy revisions according to my above reply to the ambiguity and additional clarification.
+
+
+========================================================== Next prompt ==========================================================
+
+

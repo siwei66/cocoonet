@@ -34,6 +34,8 @@ Throughout every phase:
 
 - Follow Python 3.12 through the latest stable release, excluding prereleases, and the existing dependency/tool
   configuration. Use asyncio/aiofiles for asynchronous I/O and dill exclusively for Cocoonet serialized payloads.
+  Dataset inputs are limited to the non-executable table formats defined by the dataset contract. Generated
+  CSV/Parquet artifacts do not introduce alternative Cocoonet payload serialization.
   Applicable pytest, mypy, Black, and Ruff checks must pass for approved implementation work; use targeted tests, not
   unrelated suites. Validate documentation accessibility and version switching when documentation is rebuilt.
 - Provide NumPy-style source docstrings for public and internal components, public-only API documentation, useful
@@ -151,6 +153,28 @@ default/explicit partition paths and identity restoration before consumers depen
 tensor-shape encoding support here without promising unsupported variants. Worker synchronization, model fitting, and
 runtime dispatch remain later work.
 
+Implement the dataset contracts from architecture Sections 3.1 and 3.5. Support CSV and compressed CSV with
+encoding detection, first-sheet XLS/XLSX/ODS, Parquet, ORC, and Feather. Reject pickle/dill dataset input.
+
+Accept multiple inline inputs only as sample-wise divisions. Reject column-wise assembly. Initially identify
+rows by globally unique sample labels; reject partial missing labels and generate reserved labels only when
+the column is entirely absent. Generate sample IDs after initial identification.
+
+Implement text identifier and classification-target conversion, configurable finite floating-point
+regression/X values, boolean masks, and positive-integer tensor-shape parsing. Reject booleans outside boolean
+fields, nonfinite numeric content, conversion collisions, and malformed shapes without cleansing input.
+
+Generate one managed `<root_dir>/data_reference.csv`. For file-backed samples, sources are actual X-bearing
+files; for inline samples, sources are input tables. Managed metadata files are not sample sources.
+
+Implement reusable transfer preparation: ZSTD Parquet above 16 MB and sample-row sharding above 1 GB.
+Calculate shard count from original stored size and the configurable target, defaulting to 512 MB. Process
+sources independently, use dataset-global shard numbering, and store representations in a dataset-specific
+managed preparation directory.
+
+Implement persisted metadata-based reuse state using source path, stored size, modification time, and
+preparation settings. Do not compute content digests solely for reuse decisions.
+
 ### 5. Technically enforced model execution boundary
 
 Before any executable model loading or invocation, establish and verify the worker-side isolation boundary using
@@ -174,11 +198,14 @@ bounded internal parallelism; optimization beyond the architectural resource pol
 
 ### 6. Scikit-learn and custom-model preparation and execution
 
-Build model adapters on Phase 5 and the stable Phase 1 prediction contracts. The root prepares authoritative
-model inputs and creates serialized model payloads; only workers deserialize them at the enforced boundary.
-For standard scikit-learn models, identify the supported type and reconstruct/configure through get_params/set_params
-as appropriate. Custom models receive only required-interface validation: fit/predict for regression and
-fit/predict/predict_proba with required class information for classification.
+Build model adapters on Phase 5 and the stable Phase 1 prediction contracts. For root-local and private
+workers, the root prepares authoritative model inputs and may create dill model payloads; those workers may
+deserialize trusted custom models at the enforced boundary. Trust in private/local serialized model content
+belongs to the user.
+
+Implement declarative model-description support needed by public-worker integration. Supported scikit-learn
+models and compositions reconstruct from controlled component identities, hyperparameters, and declarative
+structure. Public workers receive no serialized Python model objects.
 
 Implement initialization, training, and standardized prediction as separate responsibilities. Preserve supplied
 preprocessing, independent learned state between folds, sample ordering/alignment, and explicit probability-class
@@ -261,6 +288,20 @@ Consume the supplied training procedure, loss, optimizer, applicable scheduler, 
 data ordering, randomness settings, and dependency/custom-definition information. Support user-selected supplied
 weights or initialization patterns; transfer weights only when supplied weights are selected. Reconstruct other
 initialization on the worker and preserve supplied seeds without promising cross-device numerical identity.
+
+Implement the public-worker non-executable weight representation. Encode supplied public weights as Parquet
+model-data artifacts with explicit tensor identities, shapes, dtypes, order, and values. Apply the same 16 MB
+ZSTD-compression and 1 GB configurable-sharding thresholds used for tabular transfer preparation.
+
+Keep weight artifacts model-specific. They do not become part of the parent dataset or `dataset_id`. Prepare
+them once and reuse them across the unit task's attempts and worker transfers.
+
+Retain the existing custom model, dill payload, and supplied-weight paths for root-local and private workers.
+Those trusted paths remain the user's responsibility.
+
+Define the declarative supported-component representation needed for public-worker PyTorch reconstruction.
+Custom Python classes, arbitrary import paths, callables, and serialized model objects remain outside the
+public-worker contract. Private/local reconstruction retains its existing trusted-input scope.
 
 Device selection belongs to worker configuration. Keep device/training behavior separate from scikit-learn's
 multiprocessing policy. Resolve concrete device failure handling before implementing those operations within the
@@ -404,6 +445,10 @@ Use Phase 16's connection and Phases 4–15's existing contracts to add the onli
 owns exact representation validation, storage, readiness, and invalidation. Model synchronization owns transport/local
 artifact readiness; model initialization retains semantic validation and reconstruction responsibilities.
 
+Transfer Phase 4's fixed prepared representations and generate worker-local reference metadata. Reuse each
+parent's prepared files without per-transfer checks, recompression, or resharding. Root-side prepared files
+are not worker-cleanup targets.
+
 Synchronize dataset plus applicable saved partition/parent context before unit execution. Apply the configured dataset
 retention policy, subject to mandatory public-release cleanup in Phase 20. Reuse a retained ready
 dataset_id without retransmission, but always establish the applicable parent configuration and partition context.
@@ -468,6 +513,18 @@ Integrate requesting an idle worker, receiving connection information, root-init
 lifecycle/release notifications. The service owns selection, reservation/allocation, availability, timeout-based pool
 release, and applicable credential lifecycle. It does not proxy dataset/model/task/report traffic. Worker availability
 to its owning root does not release the allocation.
+
+Restrict public-pool registration and provisioning to authenticated, authorized CocoonService developers or
+operators. Normal users may request allocated public workers but cannot register workers into the pool, and
+a local worker cannot become public through ordinary configuration.
+
+For public execution, transfer only declarative model specifications and applicable non-executable Parquet
+weight artifacts. Public workers resolve supported component identities through Cocoonet-controlled
+worker-local components and reject pickle/dill model payloads, custom Python classes, arbitrary imports, and
+user callables.
+
+These restrictions apply only to public workers. Public integration must not remove or narrow the existing
+private/root-local trusted custom-model and deserialization capabilities.
 
 During release, stop prior user execution and clean all managed user data, models, task state, and reports before
 another user can be admitted; old work must not recreate state. Confirm cleanup or keep the worker locally unavailable

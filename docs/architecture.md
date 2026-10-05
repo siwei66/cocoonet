@@ -184,6 +184,10 @@ This section describes online workers. The separate root-local boundary is defin
 - The public-worker service is outside Cocoonet's scope, for example a separately planned `CocoonService`. It owns
   availability, idle-worker selection, reservation/allocation state, and decisions about availability after release.
   Pool state remains internal to that service; Cocoonet receives connection information rather than managing the pool.
+- Only authenticated, authorized CocoonService developers or operators may provision or register public-pool
+  workers. Ordinary users and ordinary worker credentials cannot add workers to the public pool. A locally
+  configured worker cannot make itself public through a configuration flag. CocoonService is authoritative for
+  public-pool membership; users may only request and use workers allocated by that service.
 - Cocoonet may send lifecycle notifications required by the supplied interface, such as release notices. Reservation
   durations, timeout-based release, and credential-renewal workflows for the public pool are not Cocoonet policies.
   Do not invent the endpoint, authentication, request/response format, connection-information format, or notification
@@ -253,6 +257,9 @@ Incomplete configuration is permitted: dataset registration may be pending and m
 split, or loads/validates an existing one. This is partition artifact preparation, not persistence of the parent's
 execution configuration. Start alone commits that execution configuration and makes the instance consolidated.
 
+The dataset artifact-preparation exception also covers managed `data_reference.csv` generation and reusable
+compressed or sharded transfer representations. These operations do not consolidate execution configuration.
+
 `start()` from `initialized` validates the current configuration, persists it in the root working directory,
 establishes a fresh parent, and begins the workflow. After configuration is committed to execution, state becomes
 `consolidated`. Start is the sole boundary converting mutable configuration into persisted execution configuration;
@@ -310,6 +317,12 @@ association is active at a time. Re-registration may replace it when configurati
 an artifact still required by an existing parent. Later instances and parents can reuse valid persisted partitions
 through `split_path`. Model-only changes do not invalidate the dataset/split itself, even though they require
 reinitialization before a fresh execution under the consolidation lifecycle.
+
+Each computation working directory contains one current managed `data_reference.csv`. When users provide
+changed source tables, Cocoonet generates a new reference file for the changed dataset and its new parent.
+Do not replace a reference file still required by a resumable parent. Use a fresh working directory when the
+previous execution must remain resumable; explicit fresh initialization and overwrite retain their existing
+managed-directory semantics.
 
 The normal workflow is construction/initialization, in-memory configuration and dataset/split preparation, fresh start,
 execution, and subsequent permitted reuse or recovery. No exact method ordering is required beyond dependencies.
@@ -473,6 +486,56 @@ Neither choice changes sample identity, saved partition membership, deterministi
 ownership of data access. Mixed-row support is not implicitly promised; either representation must resolve the shape
 and feature data of each sample unambiguously.
 
+#### Dataset input and standardization
+
+Users supply source input tables, not Cocoonet's managed `data_reference.csv`. Inline-feature and
+inline-tensor datasets accept one or more input tables; file-backed datasets accept exactly one input
+reference table.
+
+Supported formats are CSV (`.csv`, `.csv.gz`, `.csv.zst`), XLS, XLSX, ODS, Parquet, ORC, and Feather.
+Pickle/dill dataset inputs are prohibited. Read only the first worksheet of XLS, XLSX, and ODS files.
+Automatically detect CSV encoding from decompressed CSV content.
+
+Multiple inline inputs divide samples only. Each file contains complete, distinct sample records.
+Column-wise assembly of one sample from multiple files is forbidden.
+
+Initial ingestion identifies rows by `sample_label`, which must be unique across the complete dataset.
+Reject a present label column containing any missing value. When the column is entirely absent, generate:
+
+```text
+#%_<logical-source-reference>_<one-based-initial-row-number>
+```
+
+Reserve `#%_` for generated labels and reject supplied labels using that prefix. Generate `sample_id` after
+initial identification and preserve its association with the standardized label. Row ordering has no identity
+semantics after this step.
+
+The standardized field contracts are:
+
+- Identifier-like values are text. Preserve text; convert integers directly to decimal text; reject floats
+  and booleans. Validate uniqueness and associations after conversion and reject collisions.
+- Classification targets are text. Preserve text, convert integers directly to decimal text, and reject
+  floats and booleans.
+- Regression targets and inline X values are finite floating-point numeric data. Reject nonnumeric values,
+  booleans, NaN, and infinities. The dataset API selects the floating-point representation.
+- Masks are bool. Each missing mask independently defaults to True; preserve False.
+- Tensor shapes are ordered positive integer dimensions. Accept tuple, list, array, and textual forms and
+  normalize them to the same shape semantics. Reject booleans, malformed text, noninteger dimensions,
+  nonpositive dimensions, and unsupported structures.
+
+Cocoonet does not impute, drop, replace, clip, or otherwise cleanse invalid or nonfinite dataset values.
+Users must provide deterministic, valid input.
+
+Dataset preparation generates one managed `<root_dir>/data_reference.csv` for the current dataset. It records
+generated IDs, labels, groups, masks, targets, source associations, and tensor metadata. It is not user input.
+
+For file-backed samples, source references identify the actual X-bearing files named by the input table.
+For inline samples, the applicable input table is the source. Managed reference or metadata files are not
+sample sources.
+
+SourceReference contains a logical path only. Initial source-row matching uses the standardized sample label;
+subsequent internal associations use sample_id. SourceReference contains no row locator.
+
 Detailed data schemas, key encoding, and synchronization verification belong in the corresponding implementation
 design. The sample-identity scope is the active dataset; cross-dataset identity tracking is not required.
 Multiple-target and multilabel extensions are not established by this document; the influence formulas below
@@ -507,6 +570,14 @@ reconstruct/configure the corresponding worker-side model using `set_params` as 
 execution inputs. Custom scikit-learn-like models receive only the required API validation for their category;
 do not inspect their deeper dependencies, implementation, or execution compatibility.
 
+The custom-model path applies to root-local and private workers. Public workers accept only declarative
+supported-component structures. Public restrictions do not remove private/local custom-model or trusted
+dill-deserialization support.
+
+Supported public-worker scikit-learn composition may include Pipeline, ensemble, boosting, meta-estimator,
+and Cocoonet-native structures when fully declarative. Public workers reject custom Python classes,
+arbitrary imports, callables, lambdas, and executable model objects.
+
 These paths establish the information needed to attempt evaluation, not a guarantee that every supplied model will
 execute successfully. Execute directly after applicable validation and reconstruction. Do not add compatibility
 prediction, dependency negotiation or inspection, environment repair, fallback reconstruction, model substitution,
@@ -531,6 +602,40 @@ training inputs, not a requirement for Cocoonet to derive or maintain user-level
    initialization; otherwise reconstruct the chosen initialization on the worker.
 5. Training/data-order randomness controls and the dependency/version information and custom definitions needed to
    resolve the model and training procedure. This metadata does not introduce dependency negotiation or repair.
+
+#### Public-worker weight representation
+
+For public workers, supplied weight values are transferred as non-executable Parquet model-data artifacts.
+These artifacts belong to the applicable model/unit input. They are not dataset samples, do not participate
+in `dataset_id`, and do not alter the parent's dataset or partition.
+
+The Parquet representation must retain each tensor's declarative identity, ordered shape, dtype, element
+ordering, and values so the supported worker-local model can reconstruct the supplied initialization exactly.
+The exact column/container schema is defined with the Phase 10 model adapter.
+
+Apply the tabular transfer thresholds to the original prepared weight artifact's stored size:
+
+- At or below 16 MB, Parquet compression is optional.
+- Above 16 MB, use ZSTD-compressed Parquet.
+- Above 1 GB, calculate shard count using the configurable target-size policy, defaulting to 512 MB, and
+  write multiple Parquet shards.
+
+Weight sharding occurs only between complete tensor records unless the later schema explicitly defines a
+deterministic tensor-chunk representation with complete reconstruction metadata. It must never change tensor
+values or ordering.
+
+Store prepared weights in a model-specific Cocoonet-managed directory on the root. Prepare them once for the
+fixed unit-task model input and reuse them across attempts and worker transfers. Public workers validate the
+declarative association before applying the weights.
+
+Private and root-local workers retain the existing supplied-weight and serialized/custom-model paths and are
+not required to use this public-worker Parquet representation.
+
+For public workers, PyTorch definitions, components, training procedures, losses, optimizers, schedulers,
+and initialization patterns must resolve through supported Cocoonet-controlled component identities and
+declarative parameters. Public workers reject custom classes, arbitrary import references, custom callables,
+and serialized Python objects. Root-local and private workers retain the broader trusted reconstruction
+contract above.
 
 Device selection belongs to worker configuration. Workers may use different supported device types. Shared seeds and
 recorded configuration support auditability without promising identical numerical results across devices.
@@ -640,6 +745,46 @@ Workers may map these logical references to arbitrary local paths for synchroniz
 preserve the dataset-root-relative references so they remain interpretable by the root and user after worker
 cleanup, without exposing or depending on machine-specific paths. Concrete path encoding and local storage layouts
 belong in implementation design.
+
+#### Reusable tabular transfer representations
+
+Cocoonet generates worker-local `data_reference.csv` using synchronized paths selected by Cocoonet.
+Root-machine physical paths do not become worker physical paths.
+
+For tabular transfer preparation, measure each original table independently by stored file size. Use decimal
+MB and GB. Do not use decompressed size, memory use, or combined dataset size.
+
+Convert tables larger than 16 MB to ZSTD-compressed Parquet unless already ZSTD-compressed Parquet.
+For an unsharded conversion, remove the recognized suffix or compound suffix and append
+`_compressed.parquet`.
+
+For an original table larger than 1 GB, calculate:
+
+```text
+shard_count = max(2, ceil(original_stored_size / target_shard_size))
+```
+
+The configurable target defaults to 512 MB and determines shard count rather than a strict generated-file
+limit. Divide complete rows among shards as evenly as possible.
+
+Each source remains an independent preparation unit. Read and prepare one source at a time. Dataset-global
+shard numbering does not authorize combining or simultaneously materializing multiple source files.
+
+Store prepared files in a dataset-specific Cocoonet-managed root-node preparation directory. Name shards
+`cocoonet_dataset_shard_<zero-padded-one-based-number>.parquet`, using numbering unique across the prepared
+dataset.
+
+Preparation operates on standardized data and must preserve its content and semantics exactly. Never modify
+the original source. Establish a parent's prepared references before allocation and retain them unchanged.
+
+Within a parent, reuse prepared files without repeating metadata checks. Across executions, automatic reuse
+compares persisted source path, stored size, modification time, and preparation settings. Matching state
+permits reuse; changed state requires regeneration. This is intentionally metadata-based rather than
+content-digest verification.
+
+A new computation instance without persisted source state regenerates by default. Explicit reuse and
+regeneration remain later dataset-API choices. Prepared root-node files persist until manual OS removal and
+are not worker-cleanup targets.
 
 ## 4. Worker Evaluation
 
@@ -1299,8 +1444,13 @@ the acknowledgement, pending-delivery, retry-limit, and restart rules above.
 ### 7.2 Serialization ownership and compatibility
 
 - Use `dill` exclusively for Cocoonet serialized payloads; do not introduce a parallel `pickle` path.
-- Only the root creates model payloads for workers, following Section 3's model preparation contracts. Only workers
-  deserialize those payloads, within the technically enforced model-execution boundary.
+- Dataset table inputs and generated CSV/Parquet artifacts follow Sections 3.1 and 3.5. Their formats are
+  separate from Cocoonet payload serialization and do not alter model, result, protocol, or authoritative
+  partition serialization.
+- For root-local and private workers, only the root creates serialized model payloads, and only those workers
+  deserialize them within the enforced execution boundary.
+- Public workers do not accept or deserialize Python model payloads. The root sends a declarative model
+  specification, and the public worker reconstructs the model from supported worker-local components.
 - Workers construct and serialize standardized evaluation-result files. Only the root deserializes those files,
   outside the active receive event loop. Restrict model/result loading to their designated paths. Separately, the
   root loads its authoritative partition `dill` file through the designated dataset/partition preparation or recovery
@@ -1320,10 +1470,13 @@ Section 9, without deeper custom-model dependency inspection, environment repair
 
 ### 7.3 Enforced model execution boundary
 
-Online workers accept model payloads only from the authenticated owning root through the designated transfer path.
-The root-local worker receives models only through its owning root's designated local boundary. Authentication and
-required-API validation do not make executable model content safe. Do not execute arbitrary received payloads or
-expose a general-purpose remote-execution interface.
+Private online workers accept serialized model payloads only from their authenticated owning root. The
+root-local worker receives model inputs only through its owning root's local boundary. Both retain trusted
+custom-model and dill-deserialization support; the user is responsible for trusting that content.
+
+Public workers reject pickle/dill and equivalent serialized Python model objects. They accept only validated
+declarative specifications and non-executable model-data artifacts whose component identities resolve through
+Cocoonet-controlled supported components. No worker exposes general-purpose remote execution.
 
 User-provided model code has no direct filesystem read/write or network permission. Cocoonet manages dataset
 references, reads, and worker copies without taking ownership of user-provided root source files. It supplies in-memory
