@@ -782,3 +782,246 @@ that approval does not itself authorize implementing any production unit.
 
 Stop here and wait for explicit user approval. No Phase 1 source code or tests have been implemented by this planning
 task, and no automatic commit is authorized.
+
+## 13. Unified runtime type-validation amendment
+
+This additive amendment supersedes earlier Phase 1 statements that no generic validation framework or new
+third-party dependency is planned. It preserves the existing contract-specific validation responsibilities while
+adding one private Cocoonet type-validation utility before the remaining contract validators.
+
+### 13.1 Scope, dependencies, and completion criteria
+
+Phase 1 additionally includes a private unified runtime typing utility shared by Cocoonet validators. It provides a
+directly callable validator and a decorator backed by exactly the same validation engine, plus framework-specific
+dtype helpers for NumPy, pandas, and PyTorch. It performs strict validation without coercion and produces bounded,
+path-aware diagnostics containing the expected type, actual type, and actual value or an abbreviated value preview.
+
+NumPy, pandas, and PyTorch are permitted required scientific dependencies for the unified type and dtype validation
+utility. Before implementing the utility, add compatible dependency ranges to `pyproject.toml` as a separately
+reviewed dependency-configuration unit. The exact proposed ranges must support the project's declared Python versions
+and must be approved before the dependency file is changed. Do not add Pydantic, Typeguard, Beartype, another external
+validation framework, or a generic plugin, schema-registry, event-bus, or persistence framework.
+
+Using NumPy, pandas, and PyTorch runtime types and dtypes in the shared validation utility does not implement dataframe
+adapters, dataset normalization, tensor reconstruction, feature storage, device selection, model execution, or
+scientific input-value policies. Those responsibilities remain in their assigned later phases.
+
+Phase 1 completion additionally requires:
+
+- The unified typing utility validates its complete declared annotation vocabulary through both direct and decorator
+  use. Both forms produce the same acceptance, rejection, nested-path tracking, exception category, and diagnostic
+  content because the decorator delegates every annotated argument to `validate_declared_types`.
+- NumPy, pandas, and PyTorch type and dtype tests run against the actual required packages; they are not skipped,
+  replaced by fake framework classes, or inferred solely from module names.
+- Type-validation errors identify the failing argument or nested field, the expected type, the fully qualified actual
+  type, and a bounded representation of the actual value. Large sequences, mappings, arrays, tables, and tensors use
+  framework-aware abbreviated previews.
+
+### 13.2 Module and dependency boundary
+
+Place the shared utility in private module `src/cocoonet/_type_validation.py`, outside `_contracts`. Contract modules
+may import this utility; the utility must not import Cocoonet contract modules. This one-way dependency prevents
+cycles and makes the same type-validation behavior available to later internal components.
+
+The module may import NumPy, pandas, and PyTorch directly. It must not import or wrap an external runtime-validation
+library. Do not export the utility from the top-level `cocoonet` package during Phase 1.
+
+### 13.3 Unified runtime type and dtype validation
+
+Implement one strict runtime type-validation engine before the remaining contract validators. It validates declared
+runtime structure without converting, reconstructing, normalizing, repairing, or mutating the supplied value.
+
+The module provides these private Cocoonet interfaces:
+
+| Signature | Responsibility |
+| --- | --- |
+| `validate_declared_types(value: object, *, expected_type: object, field: str = "value") -> None` | Validate one value directly against the supported runtime interpretation of an annotation. |
+| `type_checked(func: F) -> F` | Validate every annotated input argument by calling `validate_declared_types`; it contains no independent type-matching implementation. |
+| `validate_numpy_dtype(value: np.ndarray[Any, Any] | np.generic, *, expected_dtype: object, field: str = "value") -> None` | Normalize the expected NumPy dtype with `np.dtype`, compare it with `value.dtype`, and report a bounded array/scalar preview on mismatch. |
+| `validate_pandas_dtype(value: pd.Series[Any] | pd.Index[Any] | pd.DataFrame, *, expected_dtype: object, field: str = "value") -> None` | Normalize the expected pandas dtype and require the series/index or every dataframe column to match it. Heterogeneous per-column schemas remain the owning validator's responsibility. |
+| `validate_torch_dtype(value: torch.Tensor, *, expected_dtype: torch.dtype, field: str = "value") -> None` | Require the tensor's dtype to equal the supplied PyTorch dtype without casting or moving the tensor. |
+
+The three dtype helpers share the same diagnostic formatter as `validate_declared_types`. They do not convert data.
+A dataframe validator requiring different dtypes by column calls `validate_pandas_dtype` on each selected series with
+a column-specific field path. Shape, dimensionality, finite-value, schema, target, and device rules remain explicit
+domain validation.
+
+`validate_declared_types` supports:
+
+- `Any`, `None`, `NoneType`, ordinary runtime classes, enums, and runtime-checkable protocols;
+- PEP 604 unions, `typing.Union`, `Optional`, strict `Literal`, and the base type of `Annotated`;
+- PEP 695 type aliases, `NewType` through its runtime supertype, and constrained, bounded, or unconstrained `TypeVar`;
+- `type[T]` and `Callable`, with callable checking limited to callability;
+- lists, sets, frozensets, dictionaries, mappings, sequences, fixed tuples, variadic tuples, and empty tuples;
+- typed dictionaries, named tuples, and dataclass instances, including their declared nested fields;
+- concrete NumPy scalar and array classes, pandas dataframe/series/index and extension-array classes, PyTorch tensors,
+  their dtype classes, and other ordinary runtime classes;
+- supported NumPy array annotations carrying dtype information, delegating their dtype comparison to
+  `validate_numpy_dtype` rather than implementing a second dtype comparison path.
+
+Built-in scalar annotations are strict. `bool` does not satisfy `int`, and `int` does not satisfy `float`. A declared
+union such as `str | int | float | bool` accepts all four explicit branches. `Literal` requires both equal value and
+equal runtime type, so `True` does not satisfy `Literal[1]`.
+
+Stable built-in containers, dataclasses, named tuples, and typed dictionaries are inspected recursively. Cyclic object
+graphs are protected by tracking visited value/annotation pairs. The first deterministic failing path is reported, for
+example `value.samples[2].sources[0].relative_path`.
+
+NumPy arrays, pandas objects, and PyTorch tensors are not traversed element by element for ordinary class validation.
+Their contents, shapes, and values are not inferred from their class annotations. Applicable dtype helpers operate
+through framework dtype APIs. Domain validators later apply shape and content rules directly or with vectorized
+framework operations.
+
+`Annotated` metadata is preserved during type-hint resolution but is not executed as arbitrary validation code.
+One-shot iterators and generators are checked for their declared runtime interface and are not consumed. Arbitrary
+third-party generic arguments erased at runtime, non-runtime-checkable protocols, and complete callable signatures
+must not be claimed as validated. Unsupported annotation forms fail descriptively rather than silently passing.
+
+The decorator is only a calling convenience:
+
+```python
+@type_checked
+def validate_source_reference(value: SourceReference) -> None:
+    path = value.relative_path
+    # Explicit logical-path value validation follows.
+```
+
+This must have the same type behavior as:
+
+```python
+def validate_source_reference(value: SourceReference) -> None:
+    validate_declared_types(value, expected_type=SourceReference)
+
+    path = value.relative_path
+    # Explicit logical-path value validation follows.
+```
+
+`type_checked` must:
+
+- preserve callable metadata with `functools.wraps`;
+- cache `inspect.signature` and `get_type_hints(..., include_extras=True)` results;
+- bind arguments with the original signature and apply defaults;
+- call `validate_declared_types` once for each annotated ordinary argument;
+- call `validate_declared_types` for every supplied `*args` member and every supplied `**kwargs` value;
+- use the parameter name as the initial diagnostic field path;
+- skip unannotated parameters;
+- validate arguments before the wrapped function body executes;
+- propagate exceptions from the wrapped function unchanged;
+- perform no separate type matching and no return-value validation in Phase 1.
+
+All resolved annotations are trusted Cocoonet or caller definitions. The utility is not an evaluator for annotation
+expressions received from untrusted payloads.
+
+### 13.4 Error and value-preview contract
+
+Every type or dtype mismatch raises `TypeError` using this logical structure:
+
+```text
+Type validation failed
+  path: value.samples[2].sources[0].relative_path
+  expected: builtins.str
+  actual type: builtins.int
+  actual value: 42
+  reason: value does not satisfy the declared type
+```
+
+The `reason` line is specific where useful, including missing or unexpected typed-dictionary keys, fixed-tuple length,
+invalid union membership, unsupported annotation, or dtype mismatch. Union failures report the complete expected union
+once rather than emitting one full message per rejected branch.
+
+Expected and actual types use stable qualified names where available. The actual value formatter is shared by direct,
+decorator, and dtype validation and follows these limits:
+
+- ordinary scalar values use their complete `repr` when it fits;
+- strings and bytes longer than 500 characters are truncated with an explicit omitted-length marker;
+- sequences, sets, and mappings show at most eight representative members plus total length;
+- dataclasses, named tuples, and typed dictionaries show at most eight fields or entries recursively;
+- NumPy arrays show class, shape, dtype, size, and at most eight flattened values;
+- pandas series and indexes show class, length, dtype, and at most five values;
+- pandas dataframes show shape, column names and dtypes, and at most five rows by eight columns;
+- CPU PyTorch tensors show class, shape, dtype, device, `requires_grad`, and at most eight detached values;
+- non-CPU PyTorch tensors show class, shape, dtype, device, and `requires_grad` without moving data to the CPU;
+- arbitrary objects use a bounded `reprlib` representation;
+- each individual value preview is limited to 500 characters, ending with a clear truncation marker when abbreviated.
+
+Diagnostic formatting must not mutate data, change framework display options, materialize a complete iterator, copy a
+complete array/table/tensor, move a tensor between devices, or replace the original validation failure if preview
+generation itself fails. If a preview cannot be generated safely, report the object's bounded type/metadata and
+`<value preview unavailable>`.
+
+These validators raise descriptive exceptions but do not write logs or files. Later owning components may record the
+exception and traceback under their established failure-tracking responsibilities.
+
+### 13.5 Direct tests
+
+Direct `validate_declared_types` tests cover:
+
+- strict built-in scalars, including explicit `bool` versus `int` and `int` versus `float`;
+- `Any`, `None`, both union forms, `Optional`, strict `Literal`, and `Annotated` base validation;
+- PEP 695 aliases, `NewType`, constrained/bounded `TypeVar`, enums, `type[T]`, and callables;
+- nested lists, sets, frozensets, mappings, dictionaries, sequences, and fixed/variadic/empty tuples;
+- typed dictionaries, named tuples, dataclasses, nested invalid fields, and cycle protection;
+- NumPy scalar/array classes and supported NumPy dtype-bearing annotations;
+- pandas dataframe, series, index, and supported extension-array classes;
+- PyTorch tensors and dtype objects;
+- unsupported annotations failing explicitly;
+- no coercion, mutation, iterator consumption, table-cell scan, tensor device movement, or wrapped function execution
+  after an argument-type failure.
+
+Dtype-helper tests use actual NumPy, pandas, and PyTorch objects and cover matching and mismatching dtypes, invalid dtype
+specifications, heterogeneous dataframe behavior, column-specific delegation, and absence of casting or device
+movement.
+
+Diagnostic tests assert the path, expected type, qualified actual type, actual value or preview, and specific reason.
+They also verify bounded messages for long strings, nested collections, large arrays, large dataframes, and tensors.
+Tests should assert essential diagnostic fields rather than one complete whitespace-sensitive message.
+
+Decorator tests prove that:
+
+- it delegates to the same direct engine for positional arguments, keyword arguments, defaults, methods, `*args`,
+  and `**kwargs`;
+- direct and decorated calls accept and reject the same values with equivalent diagnostic fields;
+- annotation and signature resolution are cached;
+- callable metadata and signature inspection are preserved;
+- the wrapped body is not called after type failure;
+- exceptions raised inside the wrapped body propagate unchanged.
+
+### 13.6 Dependency-safe implementation order
+
+The following units precede the remaining contract validators and supersede the earlier implementation order where
+necessary:
+
+| Order | Declarations, in dependency order | Then implement these function units, in order | Direct test module |
+| --- | --- | --- | --- |
+| 0a | Required dependency declarations for NumPy, pandas, and PyTorch; no validation-library dependency. | No production function. Verify imports and supported Python compatibility. | Dependency/import checks only. |
+| 0b | Private diagnostic constants and tightly coupled formatting helpers in `_type_validation.py`. | `validate_declared_types` and its private recursive matching helpers as one bounded core unit. | `tests/test_type_validation.py` |
+| 0c | No new declaration. | `validate_numpy_dtype` | `tests/test_type_validation.py` |
+| 0d | No new declaration. | `validate_pandas_dtype` | `tests/test_type_validation.py` |
+| 0e | No new declaration. | `validate_torch_dtype` | `tests/test_type_validation.py` |
+| 0f | Decorator typing support using `ParamSpec`/`TypeVar` as applicable. | `type_checked`, delegating exclusively to `validate_declared_types` | `tests/test_type_validation.py` |
+
+The diagnostic formatters and recursive matching helpers in order 0b are a tightly coupled private helper bundle
+because `validate_declared_types` cannot satisfy its required nested-path and bounded-preview contract without them.
+They do not become separate public validation APIs.
+
+The identity records and `validate_identifier`, `validate_label`, and `validate_unit_key` already existed when this
+amendment was proposed. After order 0f, revise those validators in their original order as separately approved units.
+Each revision may replace redundant explicit type branches with either `type_checked` or one direct
+`validate_declared_types` call, while preserving its value rules, signature, exception category, and tests. Complete
+that migration before implementing `validate_source_reference`.
+
+Every later Phase 1 contract validator uses one of the two calling forms. The choice between decorator and direct call
+does not change validation semantics. Use direct calls where an explicit validation sequence improves readability and
+the decorator where validating annotated inputs before the body is clearer.
+
+The approved `_type_validation.py` module is the sole general runtime typing utility planned in Phase 1. Do not add
+another validation engine or duplicate its matching logic inside the decorator or contract validators. If a contract
+validator needs a substantial semantic helper or an approved signature/data model must change, identify it and obtain
+approval before implementing the caller. Value-, association-, shape-, and scientific-rule logic remains in its owning
+validator.
+
+### 13.7 Resolution
+
+Repeated runtime type checks remain aligned with annotations through `validate_declared_types` as the single strict
+runtime engine. `type_checked` delegates every annotated argument to it. NumPy, pandas, and PyTorch dtype helpers share
+its diagnostic machinery, while domain validators retain value and association rules.
