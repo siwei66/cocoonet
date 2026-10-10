@@ -13,7 +13,7 @@ Approved. Implement these proposed change directly. Do not make other changes.
 
 ---
 
-Then for next unit step, propose these single line type declarations together as one unit.
+Then continue with the next unit. The requirements are same.
 ```
 
 Or revise the proposal before approval and continuing with the next unit.

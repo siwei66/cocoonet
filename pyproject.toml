@@ -34,6 +34,9 @@ classifiers = [
 dependencies = [
     "aiofiles>=25.1,<26",
     "dill>=0.4,<1",
+    "numpy>=2.5.3,<3",
+    "pandas>=3.0.6,<4",
+    "torch>=2.14.1,<3",
 ]
 
 [project.urls]

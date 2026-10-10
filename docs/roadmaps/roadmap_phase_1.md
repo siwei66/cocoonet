@@ -836,7 +836,7 @@ The module provides these private Cocoonet interfaces:
 | Signature | Responsibility |
 | --- | --- |
 | `validate_declared_types(value: object, *, expected_type: object, field: str = "value") -> None` | Validate one value directly against the supported runtime interpretation of an annotation. |
-| `type_checked(func: F) -> F` | Validate every annotated input argument by calling `validate_declared_types`; it contains no independent type-matching implementation. |
+| `validate_args(func: F) -> F` | Validate every annotated input argument by calling `validate_declared_types`; it contains no independent type-matching implementation. |
 | `validate_numpy_dtype(value: np.ndarray[Any, Any] | np.generic, *, expected_dtype: object, field: str = "value") -> None` | Normalize the expected NumPy dtype with `np.dtype`, compare it with `value.dtype`, and report a bounded array/scalar preview on mismatch. |
 | `validate_pandas_dtype(value: pd.Series[Any] | pd.Index[Any] | pd.DataFrame, *, expected_dtype: object, field: str = "value") -> None` | Normalize the expected pandas dtype and require the series/index or every dataframe column to match it. Heterogeneous per-column schemas remain the owning validator's responsibility. |
 | `validate_torch_dtype(value: torch.Tensor, *, expected_dtype: torch.dtype, field: str = "value") -> None` | Require the tensor's dtype to equal the supplied PyTorch dtype without casting or moving the tensor. |
@@ -880,7 +880,7 @@ must not be claimed as validated. Unsupported annotation forms fail descriptivel
 The decorator is only a calling convenience:
 
 ```python
-@type_checked
+@validate_args
 def validate_source_reference(value: SourceReference) -> None:
     path = value.relative_path
     # Explicit logical-path value validation follows.
@@ -896,7 +896,7 @@ def validate_source_reference(value: SourceReference) -> None:
     # Explicit logical-path value validation follows.
 ```
 
-`type_checked` must:
+`validate_args` must:
 
 - preserve callable metadata with `functools.wraps`;
 - cache `inspect.signature` and `get_type_hints(..., include_extras=True)` results;
@@ -914,40 +914,62 @@ expressions received from untrusted payloads.
 
 ### 13.4 Error and value-preview contract
 
-Every type or dtype mismatch raises `TypeError` using this logical structure:
+Every validator-detected type or dtype mismatch raises `TypeError`. Python displays the exception class before the
+message; the message itself uses this logical structure for an ordinary mismatch:
 
 ```text
 Type validation failed
   path: value.samples[2].sources[0].relative_path
   expected: builtins.str
-  actual type: builtins.int
-  actual value: 42
-  reason: value does not satisfy the declared type
+  got type: builtins.int
+  got value: 42
 ```
 
-The `reason` line is specific where useful, including missing or unexpected typed-dictionary keys, fixed-tuple length,
-invalid union membership, unsupported annotation, or dtype mismatch. Union failures report the complete expected union
-once rather than emitting one full message per rejected branch.
+The `path`, `expected`, `got type`, and `got value` lines are always present. Do not add a line that merely restates
+that the value failed its declared type.
 
-Expected and actual types use stable qualified names where available. The actual value formatter is shared by direct,
-decorator, and dtype validation and follows these limits:
+Add a `detail` line only when it communicates information not apparent from those four fields. Applicable details
+include missing or unexpected typed-dictionary keys, fixed-tuple length, an empty-tuple requirement, an unsupported
+annotation form, a non-runtime-checkable protocol, an unsatisfied `type[T]` superclass constraint, an invalid
+container annotation, or a dtype mismatch requiring additional context. For example:
+
+```text
+Type validation failed
+  path: value
+  expected: builtins.tuple[builtins.int, builtins.str]
+  got type: builtins.tuple
+  got value: tuple(length=3, values=[1, 'two', 3])
+  detail: fixed tuple length mismatch: expected 2, got 3
+```
+
+Union failures report the complete expected union once rather than emitting one public error for each rejected branch.
+The implementation may use a private mismatch signal to reject union or TypeVar branches, but the callable validation
+interface exposes a validator-detected failure as `TypeError`.
+
+Exceptions raised by operations required to inspect user-defined values are not ordinary validator-detected
+mismatches. Exceptions from user-defined equality, attribute or property access, abstract-container traversal,
+`__instancecheck__`, or `__subclasscheck__` propagate unchanged when the corresponding validation cannot be completed.
+The validator must not catch such exceptions as failed union or TypeVar branches merely because the exception inherits
+from `TypeError`.
+
+Expected and actual types use stable qualified names where available. Actual-value previews are protected and bounded:
 
 - ordinary scalar values use their complete `repr` when it fits;
 - strings and bytes longer than 500 characters are truncated with an explicit omitted-length marker;
-- sequences, sets, and mappings show at most eight representative members plus total length;
-- dataclasses, named tuples, and typed dictionaries show at most eight fields or entries recursively;
+- sequences, sets, and mappings show their type, total length when safely available, and at most eight representative
+  members;
 - NumPy arrays show class, shape, dtype, size, and at most eight flattened values;
-- pandas series and indexes show class, length, dtype, and at most five values;
-- pandas dataframes show shape, column names and dtypes, and at most five rows by eight columns;
+- pandas series and indexes show class, length, dtype, and bounded representative values;
+- pandas dataframes show shape and a bounded preview of column names, dtypes, and at most five rows by eight columns;
 - CPU PyTorch tensors show class, shape, dtype, device, `requires_grad`, and at most eight detached values;
 - non-CPU PyTorch tensors show class, shape, dtype, device, and `requires_grad` without moving data to the CPU;
-- arbitrary objects use a bounded `reprlib` representation;
-- each individual value preview is limited to 500 characters, ending with a clear truncation marker when abbreviated.
+- other objects use a protected bounded representation;
+- each complete value preview is limited to 500 characters and ends with a clear truncation marker when abbreviated.
 
 Diagnostic formatting must not mutate data, change framework display options, materialize a complete iterator, copy a
-complete array/table/tensor, move a tensor between devices, or replace the original validation failure if preview
-generation itself fails. If a preview cannot be generated safely, report the object's bounded type/metadata and
-`<value preview unavailable>`.
+complete array, table, or tensor, move a tensor between devices, or replace an established validation failure when
+preview generation fails. If a preview cannot be generated, retain the validation failure and use
+`<value preview unavailable: exception-type>` as the value preview.
 
 These validators raise descriptive exceptions but do not write logs or files. Later owning components may record the
 exception and traceback under their established failure-tracking responsibilities.
@@ -972,9 +994,16 @@ Dtype-helper tests use actual NumPy, pandas, and PyTorch objects and cover match
 specifications, heterogeneous dataframe behavior, column-specific delegation, and absence of casting or device
 movement.
 
-Diagnostic tests assert the path, expected type, qualified actual type, actual value or preview, and specific reason.
-They also verify bounded messages for long strings, nested collections, large arrays, large dataframes, and tensors.
-Tests should assert essential diagnostic fields rather than one complete whitespace-sensitive message.
+Diagnostic tests assert the path, expected type, qualified `got type`, and `got value` or preview. Ordinary mismatches
+must omit a redundant `detail` line. Structural, unsupported-annotation, and dtype failures include `detail` only when
+it adds information not apparent from the required fields. Tests also verify bounded messages for long strings, nested
+collections, large arrays, large dataframes, and tensors, and verify that representation or preview failures cannot
+replace an established mismatch. Tests assert essential diagnostic fields rather than one complete
+whitespace-sensitive message.
+
+Focused failure-path tests verify that exceptions from required user-defined equality, structural attribute access,
+abstract-container traversal, and custom runtime instance checks propagate unchanged rather than being mislabeled as
+ordinary type mismatches.
 
 Decorator tests prove that:
 
@@ -998,7 +1027,7 @@ necessary:
 | 0c | No new declaration. | `validate_numpy_dtype` | `tests/test_type_validation.py` |
 | 0d | No new declaration. | `validate_pandas_dtype` | `tests/test_type_validation.py` |
 | 0e | No new declaration. | `validate_torch_dtype` | `tests/test_type_validation.py` |
-| 0f | Decorator typing support using `ParamSpec`/`TypeVar` as applicable. | `type_checked`, delegating exclusively to `validate_declared_types` | `tests/test_type_validation.py` |
+| 0f | Decorator typing support using `ParamSpec`/`TypeVar` as applicable. | `validate_args`, delegating exclusively to `validate_declared_types` | `tests/test_type_validation.py` |
 
 The diagnostic formatters and recursive matching helpers in order 0b are a tightly coupled private helper bundle
 because `validate_declared_types` cannot satisfy its required nested-path and bounded-preview contract without them.
@@ -1006,7 +1035,7 @@ They do not become separate public validation APIs.
 
 The identity records and `validate_identifier`, `validate_label`, and `validate_unit_key` already existed when this
 amendment was proposed. After order 0f, revise those validators in their original order as separately approved units.
-Each revision may replace redundant explicit type branches with either `type_checked` or one direct
+Each revision may replace redundant explicit type branches with either `validate_args` or one direct
 `validate_declared_types` call, while preserving its value rules, signature, exception category, and tests. Complete
 that migration before implementing `validate_source_reference`.
 
@@ -1023,5 +1052,5 @@ validator.
 ### 13.7 Resolution
 
 Repeated runtime type checks remain aligned with annotations through `validate_declared_types` as the single strict
-runtime engine. `type_checked` delegates every annotated argument to it. NumPy, pandas, and PyTorch dtype helpers share
+runtime engine. `validate_args` delegates every annotated argument to it. NumPy, pandas, and PyTorch dtype helpers share
 its diagnostic machinery, while domain validators retain value and association rules.
