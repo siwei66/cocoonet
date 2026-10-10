@@ -788,6 +788,9 @@ Before planning or implementing a phase, process project guidance in this order:
 ## Technical Stack
 
 - Language support: Python 3.12 through the latest stable Python release, excluding prereleases.
+- Implement file reading, path handling, and persisted storage so their behavior and logical content are invariant
+  across supported operating systems; do not depend on platform-native path separators, newline conventions, default
+  text encodings, or filesystem iteration order, and confine physical-path normalization to defined I/O boundaries.
 
 **Asynchronous I/O and Worker Connections:**
 

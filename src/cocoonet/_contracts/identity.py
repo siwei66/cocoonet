@@ -5,6 +5,8 @@ from enum import StrEnum
 from math import isfinite
 from typing import NewType
 
+from cocoonet._type_validation import validate_declared_types
+
 # Preserve scalar label values without coercing them to strings.
 # Finite-float and uniqueness requirements are enforced by later validators.
 type ScalarLabel = str | int | float | bool
@@ -72,12 +74,16 @@ def validate_identifier(value: str, *, field: str) -> None:
     Raises
     ------
     TypeError
-        If the identifier is not a string.
+        If the identifier is not a string or ``field`` is not a string.
     ValueError
         If the identifier is empty.
     """
-    if not isinstance(value, str):
-        raise TypeError(f"{field} must be a string; got {type(value).__name__}.")
+    validate_declared_types(
+        value,
+        expected_type=str,
+        field=field,
+    )
+
     if not value:
         raise ValueError(f"{field} must be a nonempty string.")
 
@@ -95,12 +101,17 @@ def validate_label(value: ScalarLabel, *, field: str) -> None:
     Raises
     ------
     TypeError
-        If the label is not a string, integer, float, or boolean.
+        If the label is not a string, integer, float, or boolean, or if
+        ``field`` is not a string.
     ValueError
         If a float label is not finite.
     """
-    if not isinstance(value, (str, int, float, bool)):
-        raise TypeError(f"{field} must be a str, int, float, or bool; got {type(value).__name__}.")
+    validate_declared_types(
+        value,
+        expected_type=ScalarLabel,
+        field=field,
+    )
+
     # Check floats only: arbitrary-size integer labels need no float conversion.
     if isinstance(value, float) and not isfinite(value):
         raise ValueError(f"{field} must be finite; got {value!r}.")
@@ -121,7 +132,10 @@ def validate_unit_key(value: UnitKey) -> None:
     ValueError
         If either identifier is empty.
     """
-    if not isinstance(value, UnitKey):
-        raise TypeError(f"value must be a UnitKey; got {type(value).__name__}.")
+    validate_declared_types(
+        value,
+        expected_type=UnitKey,
+    )
+
     validate_identifier(value.parent_id, field="parent_id")
     validate_identifier(value.model_id, field="model_id")

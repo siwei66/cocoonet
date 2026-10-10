@@ -140,9 +140,25 @@ def test_validate_identifier_rejects_non_strings(value: object) -> None:
     value : object
         Non-string candidate supplied to the runtime validation boundary.
     """
-    # The cast affects static typing only; the original object reaches validation.
-    with pytest.raises(TypeError, match=r"^model_id must be a string; got "):
+    with pytest.raises(TypeError) as error:
         validate_identifier(cast(str, value), field="model_id")
+
+    message = str(error.value)
+    assert "path: model_id" in message
+    assert "expected: builtins.str" in message
+    assert f"got type: {type(value).__module__}.{type(value).__qualname__}" in message
+
+
+def test_validate_identifier_rejects_non_string_field() -> None:
+    """Reject a diagnostic field name that is not a string."""
+    with pytest.raises(TypeError) as error:
+        validate_identifier("model-a", field=cast(str, 1))
+
+    message = str(error.value)
+    assert "path: field" in message
+    assert "expected: builtins.str" in message
+    assert "got type: builtins.int" in message
+    assert "got value: 1" in message
 
 
 @pytest.mark.parametrize(
@@ -185,12 +201,25 @@ def test_validate_label_rejects_unsupported_types(value: object) -> None:
     value : object
         Unsupported label candidate.
     """
-    # The cast affects static typing only; the original object reaches validation.
-    with pytest.raises(
-        TypeError,
-        match=r"^sample_label must be a str, int, float, or bool; got ",
-    ):
+    with pytest.raises(TypeError) as error:
         validate_label(cast(ScalarLabel, value), field="sample_label")
+
+    message = str(error.value)
+    assert "path: sample_label" in message
+    assert "expected: builtins.str | builtins.int | builtins.float | builtins.bool" in message
+    assert f"got type: {type(value).__module__}.{type(value).__qualname__}" in message
+
+
+def test_validate_label_rejects_non_string_field() -> None:
+    """Reject a diagnostic field name that is not a string."""
+    with pytest.raises(TypeError) as error:
+        validate_label("sample-a", field=cast(str, 1))
+
+    message = str(error.value)
+    assert "path: field" in message
+    assert "expected: builtins.str" in message
+    assert "got type: builtins.int" in message
+    assert "got value: 1" in message
 
 
 @pytest.mark.parametrize(
@@ -227,9 +256,13 @@ def test_validate_unit_key_rejects_other_objects(value: object) -> None:
     value : object
         Invalid record candidate.
     """
-    # The cast affects static typing only; validation receives the original object.
-    with pytest.raises(TypeError, match=r"^value must be a UnitKey; got "):
+    with pytest.raises(TypeError) as error:
         validate_unit_key(cast(UnitKey, value))
+
+    message = str(error.value)
+    assert "path: value" in message
+    assert "expected: cocoonet._contracts.identity.UnitKey" in message
+    assert f"got type: {type(value).__module__}.{type(value).__qualname__}" in message
 
 
 @pytest.mark.parametrize("field", ["parent_id", "model_id"])
@@ -261,5 +294,13 @@ def test_validate_unit_key_rejects_invalid_identifiers(
         model_id=cast(ModelId, model_id),
     )
 
-    with pytest.raises(error, match=rf"^{field} must be "):
+    with pytest.raises(error) as raised:
         validate_unit_key(key)
+
+    message = str(raised.value)
+    if error is ValueError:
+        assert message == f"{field} must be a nonempty string."
+    else:
+        assert f"path: value.{field}" in message
+        assert "expected: builtins.str" in message
+        assert f"got type: {type(invalid_id).__module__}." f"{type(invalid_id).__qualname__}" in message
