@@ -172,8 +172,9 @@ already-terminal or unnecessary pending handling ends immediately. Late results 
   textual forms such as `"3,224,224"` or `"(3, 224, 224)"`. Normalize accepted forms to the same ordered
   integer semantics. Reject booleans, malformed text, noninteger or nonpositive dimensions, and unsupported
   structures.
-- Standardized `train_mask` and `test_mask` values are bool. Each absent mask independently defaults to
-  `True`; preserve supplied `False`. Bool is valid only for explicitly boolean fields.
+- Standardized `train_mask` and `test_mask` values are integers exactly `0` or `1`, excluding `bool`.
+  Each absent mask independently defaults to `1`; `1` means allowed and `0` means not allowed for the corresponding
+  training or testing population.
 - Missing groups receive unique text values without colliding with supplied groups. Group separation remains
   unconditional.
 - Input standardization and storage/transfer translation are separate. Standardization applies the field
@@ -461,6 +462,10 @@ Before planning or implementing a phase, process project guidance in this order:
 
 **Single-Unit Production Changes:**
 
+- Never implement a change unit, revision, helper, or validation-driven fix before presenting the exact proposed
+  change and receiving the user's explicit approval. If implementation or validation reveals that the approved
+  proposal must change, stop before making that additional change, report the issue and proposed revision, and wait
+  for explicit approval.
 - For new development, by default add or change only one production function or one class method per implementation
   response, with only its directly corresponding tests, required typing/docstring updates, and minimal supporting
   edits. This default covers the entire turn, including all tool calls, subject to the helper-bundle exception below.
@@ -953,10 +958,11 @@ Before planning or implementing a phase, process project guidance in this order:
 - Require typed definitions and return checking under the configured mypy baseline, not full strict mode. Missing
   third-party import typing is ignored as specified in Technical Stack. Project-owned code must pass its configured
   type-checking and linting rules.
-- Permit narrow suppressions only for external dependency typing limitations: incomplete/inaccurate type information
-  or external runtime behavior the checker cannot represent correctly. Keep each suppression local to the affected
-  expression or line, use the most specific applicable error code, and briefly explain the external limitation.
-- Do not use blanket suppressions or conceal errors in project-owned interfaces, implementation logic, or complexity.
-  A suppression is not a substitute for correcting project code or seeking approval for necessary decomposition.
+- Do not add a mypy or Ruff suppression without the user's explicit approval. With explicit approval, add only the
+  exact suppression approved, keep it local to the affected expression or line, use the most specific applicable
+  error code, and briefly explain why the suppression is required.
+- Do not use blanket suppressions. Without explicit approval, do not conceal errors in project-owned interfaces,
+  implementation logic, or complexity. A suppression is not a substitute for correcting project code or seeking
+  approval for necessary decomposition.
 - Applicable pytest, mypy, Black, and Ruff checks must pass with only the explicitly permitted exclusions and
   suppressions. When documentation is rebuilt, also verify local accessibility and version switching.
