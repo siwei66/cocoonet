@@ -6,7 +6,6 @@ from typing import cast
 import pytest
 
 from cocoonet._contracts.data import (
-    DatasetReference,
     FoldRecord,
     PartitionReference,
     PartitionSchedule,
@@ -17,25 +16,6 @@ from cocoonet._contracts.data import (
     validate_source_reference,
 )
 from cocoonet._contracts.identity import DatasetId, FoldId, PartitionId, SampleId, TargetValue
-
-
-def test_dataset_reference_equality_uses_dataset_id() -> None:
-    """Treat matching dataset identities as equal and different identities as distinct."""
-    reference = DatasetReference(dataset_id=DatasetId("dataset-a"))
-    same = DatasetReference(dataset_id=DatasetId("dataset-a"))
-    other = DatasetReference(dataset_id=DatasetId("dataset-b"))
-
-    assert reference == same
-    assert reference != other
-
-
-def test_dataset_reference_rejects_identity_mutation() -> None:
-    """Prevent reassignment of the referenced dataset identity."""
-    reference = DatasetReference(dataset_id=DatasetId("dataset-a"))
-
-    # Exercise runtime mutation rejection without a statically invalid assignment.
-    with pytest.raises(FrozenInstanceError):
-        reference.__setattr__("dataset_id", DatasetId("dataset-b"))
 
 
 def test_source_reference_preserves_exact_path_identity() -> None:

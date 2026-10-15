@@ -16,24 +16,6 @@ from cocoonet._type_validation import validate_declared_types
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class DatasetReference:
-    """Reference one exact dataset representation by its assigned identity.
-
-    Parameters
-    ----------
-    dataset_id : DatasetId
-        Identity assigned to the dataset representation.
-
-    Notes
-    -----
-    Construction stores the candidate identity without validating it.
-    This record does not load data or verify dataset contents.
-    """
-
-    dataset_id: DatasetId
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
 class SourceReference:
     """Reference a source file relative to its dataset root.
 

@@ -195,12 +195,21 @@ All fields in the following tables are required unless an explicit default is sh
 
 | Record | Fields |
 | --- | --- |
-| `DatasetReference` | `dataset_id: DatasetId` |
 | `SourceReference` | `relative_path: str` |
 | `SampleRecord` | `sample_id: SampleId`, `sample_label: ScalarLabel`, `group: ScalarLabel`, `train_mask: int`, `test_mask: int`, `target: TargetValue`, `sources: tuple[SourceReference, ...]` |
 | `PartitionReference` | `partition_id: PartitionId`, `dataset_id: DatasetId` |
 | `FoldRecord` | `fold_id: FoldId`, `training_sample_ids: tuple[SampleId, ...]`, `testing_sample_ids: tuple[SampleId, ...]` |
 | `PartitionSchedule` | `reference: PartitionReference`, `samples: tuple[SampleRecord, ...]`, `folds: tuple[FoldRecord, ...]`, `group_separated: bool` |
+
+`PartitionReference` is the single identity handle for a prepared dataset/partition association.
+Its `dataset_id` identifies the exact dataset representation, and its `partition_id` identifies
+the complete realized partition schedule. No separate dataset-reference or dataset-binding record
+is used. `PartitionSchedule`, configuration snapshots, and committed parents carry this reference
+directly.
+
+`PartitionReference` contains identities only. It does not contain sample memberships, dataset
+content, physical paths, or the authoritative partition artifact. Wherever a parent and schedule
+are consumed together, the parent's partition reference must equal `PartitionSchedule.reference`.
 
 `SampleRecord` is common population metadata; it is neither an input dataframe nor a feature-data container. Features,
 tensor layouts, and file readers remain in Phase 4. Both training and testing refer to these same records; predictions
@@ -253,10 +262,9 @@ compatibility remains Phase 4 work and must preserve the universal separation ru
 | `ModelFamily` | `sklearn`, `sklearn_like`, `pytorch` |
 | `ModelReference` | `model_id: ModelId`, `model_label: ScalarLabel`, `family: ModelFamily`, `task_kind: TaskKind` |
 | `EvaluationReference` | `configuration_id: EvaluationConfigId`, `task_kind: TaskKind`, `class_labels: tuple[ScalarLabel, ...]`, `influence_requested: bool` |
-| `DatasetBinding` | `dataset: DatasetReference`, `partition: PartitionReference` |
-| `ComputationSnapshot` | `root_dir: str`, `consolidation: ConsolidationState`, `dataset: DatasetBinding | None`, `evaluation: EvaluationReference | None`, `models: tuple[ModelReference, ...]`, `worker_ids: tuple[WorkerId, ...]`, `parent_id: ParentId | None` |
+| `ComputationSnapshot` | `root_dir: str`, `consolidation: ConsolidationState`, `partition: PartitionReference | None`, `evaluation: EvaluationReference | None`, `models: tuple[ModelReference, ...]`, `worker_ids: tuple[WorkerId, ...]`, `parent_id: ParentId | None` |
 | `UnitTask` | `key: UnitKey`, `model: ModelReference` |
-| `ParentEvaluation` | `parent_id: ParentId`, `dataset: DatasetBinding`, `evaluation: EvaluationReference`, `units: tuple[UnitTask, ...]` |
+| `ParentEvaluation` | `parent_id: ParentId`, `partition: PartitionReference`, `evaluation: EvaluationReference`, `units: tuple[UnitTask, ...]` |
 | `AttemptInputs` | `attempt_id: AttemptId`, `unit: UnitKey`, `worker_id: WorkerId` |
 
 `ConsolidationState` has exactly `initialized`, `consolidated`, and `unconsolidated`.
@@ -264,12 +272,15 @@ compatibility remains Phase 4 work and must preserve the universal separation ru
 `root_dir` is the user-selected location recorded as a nonempty string; no normalization or filesystem validation
 happens in Phase 1. The configuration component later enforces ownership before initializing/reassigning it.
 
-`ComputationSnapshot` is a read-only description, not the mutable public computation. It intentionally permits no
-dataset, no settings, no models, and no workers in initialized state. `parent_id` is absent for initialized state and
-required for consolidated/unconsolidated state; in unconsolidated state it identifies the previous execution, not a
-new parent for the prospective configuration. Models/worker references are unique, including model labels within
-the prospective configuration. An incomplete prospective configuration after a permitted removal is representable.
-The validator does not compare changed configuration with an old parent or perform a state transition.
+`ComputationSnapshot` is a read-only description, not the mutable public computation. It intentionally
+permits no active dataset/partition association, no settings, no models, and no workers in initialized
+state. `partition=None` means that the prospective configuration has no active dataset and realized
+partition. `parent_id` is absent for initialized state and required for consolidated/unconsolidated
+state; in unconsolidated state it identifies the previous execution, not a new parent for the
+prospective configuration. Models and worker references are unique, including model labels within
+the prospective configuration. An incomplete prospective configuration after a permitted removal is
+representable. The validator does not compare changed configuration with an old parent or perform a
+state transition.
 
 Each `ModelReference` identifies the fixed supplied model input; the owning configuration component retains that
 input and later creates the payload. No executable object is stored here. Each `EvaluationReference` identifies all
@@ -284,9 +295,11 @@ missing probabilities. All models in a parent match its task kind; their familie
 
 Parent and attempt invariants:
 
-- A parent has one dataset/split binding and one evaluation reference, and at least one unit. Dataset IDs in the
-  binding agree. Unit keys name that parent and match their model reference; model IDs and labels are unique there.
-- The referenced configuration, dataset/split, and model inputs remain fixed throughout every attempt's lifetime.
+- A parent has one partition reference, one evaluation reference, and at least one unit. The partition
+  reference fixes both the exact dataset identity and realized partition identity. Unit keys name that
+  parent and match their model reference; model IDs and labels are unique there.
+- The referenced evaluation configuration, dataset, partition, and model inputs remain fixed throughout
+  every attempt's lifetime.
   A worker-only configuration edit does not redefine them or create a parent.
 - `AttemptInputs` resolves its model and all scientific inputs through its unit's parent. It has no independent
   dataset, settings, split, or model override. Duplicate attempts differ in attempt identity and potentially worker,
@@ -304,10 +317,14 @@ Parent and attempt invariants:
 | `validate_partition_schedule(value: PartitionSchedule) -> None` | Validate complete logical associations and per-fold eligibility/disjointness/group rules. | Duplicate ID/label/fold; unknown ID; forbidden membership; group leakage; legal file overlap; reordered metadata; empty populations; repeated cross-fold use. |
 | `validate_model_reference(value: ModelReference) -> None` | Check identity/label and declared family/task-kind tags. | Valid families/kinds; invalid tags; no model object/API inspection or derived descriptions. |
 | `validate_evaluation_reference(value: EvaluationReference) -> None` | Check settings handle, task kind, class order, influence flag. | Regression/classification class rules; equality collisions; one class allowed; no sorting/coercion. |
-| `validate_dataset_binding(value: DatasetBinding) -> None` | Check reference identities and matching dataset association. | Matching IDs; mismatched partition dataset; invalid identity. No file or content verification. |
-| `validate_computation_snapshot(value: ComputationSnapshot) -> None` | Check structural consolidation/parent relationship, references, uniqueness; allow incomplete configuration. | All three states; zero models/workers/dataset; missing required parent; unchanged parent after worker-list edit; snapshot unchanged by validation. |
-| `validate_parent_evaluation(value: ParentEvaluation) -> None` | Check fixed parent structure, known unit set, labels, model/task-kind agreement. | Empty units; mixed task kinds; duplicate IDs/labels; wrong unit parent/model; same label in different parents allowed. |
+| `validate_computation_snapshot(value: ComputationSnapshot) -> None` | Check structural consolidation/parent relationships, the optional partition and evaluation references, and model/worker uniqueness while allowing incomplete configuration. | All three states; zero models/workers/partition; present partition with valid or invalid partition/dataset identity; missing required parent; unchanged parent after worker-list edit; snapshot unchanged by validation. |
+| `validate_parent_evaluation(value: ParentEvaluation) -> None` | Check the required partition-reference identities, fixed parent structure, known unit set, labels, and model/task-kind agreement. | Empty or invalid partition/dataset identity; empty units; mixed task kinds; duplicate IDs/labels; wrong unit parent/model; same label in different parents allowed. |
 | `validate_attempt_inputs(value: AttemptInputs, *, parent: ParentEvaluation) -> None` | Resolve the exact unit/model context and validate attempt/worker identities. | Unknown/cross-parent unit; duplicates with different attempts/workers; no independent scientific override. |
+
+When an execution record contains a `PartitionReference`, its validator validates both
+`partition_id` and `dataset_id` with `validate_identifier`. Execution-record validation does not
+load the partition artifact or verify dataset contents. Validators receiving both a parent and a
+schedule require `parent.partition == schedule.reference`.
 
 Collection association checks use ID-indexed lookup and sets where possible; do not introduce quadratic pairwise
 searches or caches. Runtime label comparisons follow Section 3.2. No identity generator is implemented in Phase 1.
@@ -464,7 +481,7 @@ Complete attempt rules:
 | `validate_regression_predictions(value: RegressionPredictions, *, fold: FoldRecord) -> None` | Validate aligned vectors, numeric statuses, failure-reference shape, and fold identity. | Reordered/unknown/excluded IDs; length mismatch; NaN undefined vs unavailable; defined NaN rejected; empty test set; no input changes. |
 | `validate_classification_predictions(value: ClassificationPredictions, *, fold: FoldRecord, class_labels: tuple[ScalarLabel, ...]) -> None` | Validate class/sample alignment, matrix shapes, label membership, numeric/status/failure combinations. | Swapped classes; ragged matrices; missing/unknown class labels; independently unavailable class cells; bad probability range; no probability filling/reordering. |
 | `validate_report_outcome[T](value: ReportOutcome[T]) -> None` | Validate generic outcome name/status/payload/failure relationship only. | Every status; complete immutable payload containing NaN; failed/blocked with preserved structure; empty failure references rejected where required. |
-| `validate_attempt_result[V, P, R, Z, I](value: AttemptResult[V, P, R, Z, I], *, parent: ParentEvaluation, schedule: PartitionSchedule) -> None` | Compose prior validators; validate all contextual links and complete/failure-only result rules. | Regression/classification completion; baseline failure without reports; reject leaked reports; optional influence; partial prediction/report failures; undefined-only completion; wrong attempt/fold/class; dangling errors; ordinary operation failure excluded. |
+| `validate_attempt_result[V, P, R, Z, I](value: AttemptResult[V, P, R, Z, I], *, parent: ParentEvaluation, schedule: PartitionSchedule) -> None` | Compose prior validators; require `parent.partition == schedule.reference`; validate all remaining contextual links and complete/failure-only result rules. | Regression/classification completion; mismatched parent/schedule partition or dataset identity; baseline failure without reports; reject leaked reports; optional influence; partial prediction/report failures; undefined-only completion; wrong attempt/fold/class; dangling errors; ordinary operation failure excluded. |
 
 The type-parameter notation above uses Python 3.12 generic syntax. Declaration and validator units remain separate;
 the notation does not authorize bundling helpers with their caller.
@@ -623,7 +640,7 @@ method signatures, IPC, or messages. Later component implementations call the ap
 | Owner / boundary | Consumes | Produces / obligation | Implementing phase |
 | --- | --- | --- | --- |
 | Root configuration | User inputs; later validated source ownership | `ComputationSnapshot`, fixed model/evaluation references; keep authoritative inputs behind immutable handles. | 3–4 |
-| Dataset preparation | User source representation and split configuration or saved artifact | Validated `DatasetBinding` and `PartitionSchedule`; exact identity/content verification and one authoritative durable schedule. | 2–4 |
+| Dataset preparation | User source representation and split configuration or saved artifact | Validated `PartitionSchedule`, whose `PartitionReference` is the sole dataset/partition identity handle; exact identity/content verification and one authoritative durable schedule. | 2–4 |
 | Root parent commitment | Complete validated configuration and durable partition reference | `ParentEvaluation` and known unit set; never alter old snapshots for prospective edits. | 3, 13 |
 | Root coordination | Fixed parent, readiness, unit/attempt/reception observations | `AttemptInputs`, progress/selection/acceptance observations; allocation and duplicate policy remain separate from records. | 13–18 |
 | Worker control/readiness | Applicable local/online parent context, owned worker | `WorkerObservation`, `AttemptProgress`; no model execution in the coordinator or control path. | 5, 13–17 |
@@ -648,8 +665,8 @@ approved unit. Generated dataclass methods do not imply planned custom methods.
 | Order | Declarations, in dependency order | Then implement these function units, in order | Direct test module |
 | --- | --- | --- | --- |
 | 1 | Scalar/target aliases; each ID alias; `ReportName`; `UnitKey` | `validate_identifier`; `validate_label`; `validate_unit_key` | `tests/contracts/test_identity.py` |
-| 2 | `DatasetReference`; `SourceReference`; `SampleRecord`; `PartitionReference`; `FoldRecord`; `PartitionSchedule` | `validate_source_reference`; `validate_sample_record`; `validate_partition_schedule` | `tests/contracts/test_data.py` |
-| 3 | `TaskKind`; `ModelFamily`; `ConsolidationState`; `ModelReference`; `EvaluationReference`; `DatasetBinding`; `ComputationSnapshot`; `UnitTask`; `ParentEvaluation`; `AttemptInputs` | `validate_model_reference`; `validate_evaluation_reference`; `validate_dataset_binding`; `validate_computation_snapshot`; `validate_parent_evaluation`; `validate_attempt_inputs` | `tests/contracts/test_execution.py` |
+| 2 | `SourceReference`; `SampleRecord`; `PartitionReference`; `FoldRecord`; `PartitionSchedule` | `validate_source_reference`; `validate_sample_record`; `validate_partition_schedule` | `tests/contracts/test_data.py` |
+| 3 | `TaskKind`; `ModelFamily`; `ConsolidationState`; `ModelReference`; `EvaluationReference`; `ComputationSnapshot`; `UnitTask`; `ParentEvaluation`; `AttemptInputs` | `validate_model_reference`; `validate_evaluation_reference`; `validate_computation_snapshot`; `validate_parent_evaluation`; `validate_attempt_inputs` | `tests/contracts/test_execution.py` |
 | 4 | `FailureScope`; `TraceContext`; `FailureRecord`; `ValueStatus` | `validate_trace_context`; `validate_failure_record`; `validate_failure_links` | `tests/contracts/test_failure.py` |
 | 5 | `RegressionPredictions`; `ClassificationPredictions`; `PredictionBatch` | `validate_regression_predictions`; `validate_classification_predictions` | `tests/contracts/test_prediction.py` |
 | 6 | `ReportStatus`; `ReportOutcome`; `EvaluationOutcome`; `AttemptResult` | `validate_report_outcome`; `validate_attempt_result` | `tests/contracts/test_result.py` |

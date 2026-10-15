@@ -9,11 +9,12 @@ Read `AGENTS.md` and `roadmap_phase_1.md`, and the corresponding part of `archit
 ## Phase initial prompt schema:
 
 ```text
-Approved. Implement these proposed change directly. Do not make other changes.
+Approved. Implement these proposed changes directly. Do not make other change.
+After finishing, propose a standard one-line git commit message with scope.
 
 ---
 
-Then continue with the next unit. The requirements are same.
+Then continue with the next unit. Proposal only. The requirements are same.
 ```
 
 Or revise the proposal before approval and continuing with the next unit.
