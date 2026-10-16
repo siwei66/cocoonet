@@ -3,10 +3,15 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
+from cocoonet._contracts.data import PartitionReference
 from cocoonet._contracts.identity import (
+    AttemptId,
     EvaluationConfigId,
     ModelId,
+    ParentId,
     ScalarLabel,
+    UnitKey,
+    WorkerId,
 )
 
 
@@ -145,3 +150,129 @@ class EvaluationReference:
     task_kind: TaskKind
     class_labels: tuple[ScalarLabel, ...]
     influence_requested: bool
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ComputationSnapshot:
+    """Describe the current root-side computation configuration.
+
+    Parameters
+    ----------
+    root_dir : str
+        User-selected Cocoonet-managed working directory.
+    consolidation : ConsolidationState
+        Relationship between the prospective evaluation configuration and
+        its committed parent task.
+    partition : PartitionReference | None
+        Active dataset and realized-partition identities, or ``None`` when
+        no dataset and partition are currently configured.
+    evaluation : EvaluationReference | None
+        Active evaluation-settings reference, or ``None`` when evaluation
+        settings are not currently configured.
+    models : tuple[ModelReference, ...]
+        Ordered model references in the prospective configuration.
+    worker_ids : tuple[WorkerId, ...]
+        Ordered configured execution-target identities.
+    parent_id : ParentId | None
+        Existing committed parent-task identity. Initialized state uses
+        ``None``; consolidated and unconsolidated states retain the existing
+        parent identity.
+
+    Notes
+    -----
+    This immutable record describes configuration state only. Construction
+    preserves candidate values without validating paths, identities,
+    uniqueness, consolidation relationships, or configuration completeness.
+    It does not initialize storage, create a parent task, or own runtime
+    worker resources.
+    """
+
+    root_dir: str
+    consolidation: ConsolidationState
+    partition: PartitionReference | None
+    evaluation: EvaluationReference | None
+    models: tuple[ModelReference, ...]
+    worker_ids: tuple[WorkerId, ...]
+    parent_id: ParentId | None
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class UnitTask:
+    """Associate one logical unit task with its fixed model reference.
+
+    Parameters
+    ----------
+    key : UnitKey
+        Parent-task and model identities forming the logical unit identity.
+    model : ModelReference
+        Fixed model reference evaluated by the unit task.
+
+    Notes
+    -----
+    Construction preserves candidate values without validating that
+    ``key.model_id`` matches ``model.model_id``. That contextual association
+    is validated as part of the owning parent evaluation. This record does
+    not contain dataset, partition, evaluation-settings, worker, or attempt
+    overrides.
+    """
+
+    key: UnitKey
+    model: ModelReference
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ParentEvaluation:
+    """Describe the fixed scientific inputs and units of one parent task.
+
+    Parameters
+    ----------
+    parent_id : ParentId
+        Identity of the committed parent task.
+    partition : PartitionReference
+        Fixed dataset and realized-partition identities used by every unit
+        and attempt in the parent task.
+    evaluation : EvaluationReference
+        Fixed task-wide evaluation-settings reference.
+    units : tuple[UnitTask, ...]
+        Ordered set of model-specific unit tasks belonging to the parent.
+
+    Notes
+    -----
+    Construction preserves candidate values without validating identities,
+    unit presence or uniqueness, task-kind agreement, or unit-key
+    associations. Those relationships are enforced by
+    ``validate_parent_evaluation``. This record does not embed partition
+    memberships, model objects, worker state, or execution attempts.
+    """
+
+    parent_id: ParentId
+    partition: PartitionReference
+    evaluation: EvaluationReference
+    units: tuple[UnitTask, ...]
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class AttemptInputs:
+    """Identify one worker execution attempt for an existing unit task.
+
+    Parameters
+    ----------
+    attempt_id : AttemptId
+        Identity of this execution attempt.
+    unit : UnitKey
+        Logical unit whose parent task supplies the fixed scientific inputs.
+    worker_id : WorkerId
+        Execution target assigned to the attempt.
+
+    Notes
+    -----
+    This record contains attempt-routing identities only. It does not contain
+    independent dataset, partition, evaluation-settings, or model overrides.
+    Construction preserves candidate values without validating identities or
+    confirming that the unit belongs to a supplied parent task. Those checks
+    are performed by ``validate_attempt_inputs``.
+    """
+
+    attempt_id: AttemptId
+    unit: UnitKey
+    worker_id: WorkerId
