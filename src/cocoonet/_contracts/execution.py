@@ -12,7 +12,11 @@ from cocoonet._contracts.identity import (
     ScalarLabel,
     UnitKey,
     WorkerId,
+    validate_identifier,
+    validate_label,
+    validate_unit_key,
 )
+from cocoonet._type_validation import validate_declared_types
 
 
 class TaskKind(StrEnum):
@@ -121,6 +125,40 @@ class ModelReference:
     task_kind: TaskKind
 
 
+def validate_model_reference(value: ModelReference) -> None:
+    """Validate identifying metadata for one fixed model input.
+
+    Parameters
+    ----------
+    value : ModelReference
+        Model identity, user label, construction family, and scientific task
+        kind to validate.
+
+    Raises
+    ------
+    TypeError
+        If ``value`` is not a ModelReference or a field has an incorrect
+        runtime type, including an undeclared model family or task kind.
+    ValueError
+        If the model identity is empty or the model label is a nonfinite
+        floating-point value.
+
+    Notes
+    -----
+    Runtime type validation enforces the declared ``ModelFamily`` and
+    ``TaskKind`` vocabularies. Explicit value validation checks the opaque
+    model identity and scalar model label. This function does not inspect,
+    load, derive metadata from, or execute a model object.
+    """
+    validate_declared_types(
+        value,
+        expected_type=ModelReference,
+    )
+
+    validate_identifier(value.model_id, field="model_id")
+    validate_label(value.model_label, field="model_label")
+
+
 @dataclass(frozen=True, kw_only=True, slots=True)
 class EvaluationReference:
     """Reference one fixed task-wide evaluation configuration.
@@ -150,6 +188,62 @@ class EvaluationReference:
     task_kind: TaskKind
     class_labels: tuple[ScalarLabel, ...]
     influence_requested: bool
+
+
+def validate_evaluation_reference(value: EvaluationReference) -> None:
+    """Validate one fixed task-wide evaluation reference.
+
+    Parameters
+    ----------
+    value : EvaluationReference
+        Evaluation-settings identity, task kind, ordered class vocabulary,
+        and influence request to validate.
+
+    Raises
+    ------
+    TypeError
+        If ``value`` is not an EvaluationReference or a field has an
+        incorrect runtime type, including an undeclared task kind or a
+        non-boolean influence request.
+    ValueError
+        If the configuration identity is empty, a class label is invalid,
+        regression declares class labels, classification has no class label,
+        or classification labels are not unique under Python scalar equality.
+
+    Notes
+    -----
+    Regression requires an empty class-label tuple. Classification requires
+    at least one unique class label; this structural layer permits a
+    single-class vocabulary. Validation preserves the authoritative class
+    order and does not sort, coerce, add, or remove labels. It does not inspect
+    the complete evaluation-settings payload identified by
+    ``configuration_id``.
+    """
+    validate_declared_types(
+        value,
+        expected_type=EvaluationReference,
+    )
+
+    validate_identifier(
+        value.configuration_id,
+        field="configuration_id",
+    )
+
+    seen_labels: set[ScalarLabel] = set()
+    for index, label in enumerate(value.class_labels):
+        validate_label(label, field=f"class_labels[{index}]")
+        if label in seen_labels:
+            raise ValueError(
+                "class_labels must be unique under Python scalar equality; "
+                f"duplicate at class_labels[{index}]: {label!r}."
+            )
+        seen_labels.add(label)
+
+    if value.task_kind is TaskKind.REGRESSION:
+        if value.class_labels:
+            raise ValueError("Regression evaluation requires class_labels to be empty.")
+    elif not value.class_labels:
+        raise ValueError("Classification evaluation requires at least one class label.")
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -194,6 +288,92 @@ class ComputationSnapshot:
     models: tuple[ModelReference, ...]
     worker_ids: tuple[WorkerId, ...]
     parent_id: ParentId | None
+
+
+def validate_computation_snapshot(value: ComputationSnapshot) -> None:  # noqa: C901
+    """Validate a root-side computation-configuration snapshot.
+
+    Parameters
+    ----------
+    value : ComputationSnapshot
+        Prospective configuration and consolidation relationship to validate.
+
+    Raises
+    ------
+    TypeError
+        If the snapshot or a nested field has an incorrect runtime type.
+    ValueError
+        If the root directory or an identity is empty, a nested reference is
+        invalid, model or worker identities are duplicated, model labels
+        collide, or the parent identity conflicts with consolidation state.
+
+    Notes
+    -----
+    Initialized snapshots must not have a parent identity. Consolidated and
+    unconsolidated snapshots retain an existing parent identity. Incomplete
+    prospective configuration remains representable; this validator does not
+    apply start prerequisites, compare against an older snapshot, access the
+    filesystem, or perform a lifecycle transition.
+    """
+    # Validate the complete declared snapshot structure before semantic checks.
+    validate_declared_types(
+        value,
+        expected_type=ComputationSnapshot,
+    )
+
+    # Validate the recorded root-directory value without filesystem access.
+    validate_identifier(value.root_dir, field="root_dir")
+
+    # Validate both identities when a dataset/partition reference is present.
+    if value.partition is not None:
+        validate_identifier(
+            value.partition.partition_id,
+            field="partition.partition_id",
+        )
+        validate_identifier(
+            value.partition.dataset_id,
+            field="partition.dataset_id",
+        )
+
+    # Validate the optional evaluation reference through its complete contract.
+    if value.evaluation is not None:
+        validate_evaluation_reference(value.evaluation)
+
+    # Validate model references and enforce configuration-scoped uniqueness.
+    model_ids: set[ModelId] = set()
+    model_labels: set[ScalarLabel] = set()
+    for index, model in enumerate(value.models):
+        validate_model_reference(model)
+
+        if model.model_id in model_ids:
+            raise ValueError(
+                "models must have unique model_id values; " f"duplicate at models[{index}]: {model.model_id!r}."
+            )
+        model_ids.add(model.model_id)
+
+        if model.model_label in model_labels:
+            raise ValueError(
+                "models must have unique model_label values under Python scalar equality; "
+                f"duplicate at models[{index}]: {model.model_label!r}."
+            )
+        model_labels.add(model.model_label)
+
+    # Validate worker identities and enforce configuration-scoped uniqueness.
+    worker_ids: set[WorkerId] = set()
+    for index, worker_id in enumerate(value.worker_ids):
+        validate_identifier(worker_id, field=f"worker_ids[{index}]")
+        if worker_id in worker_ids:
+            raise ValueError("worker_ids must be unique; " f"duplicate at worker_ids[{index}]: {worker_id!r}.")
+        worker_ids.add(worker_id)
+
+    # Validate whether parent identity presence agrees with consolidation state.
+    if value.consolidation is ConsolidationState.INITIALIZED:
+        if value.parent_id is not None:
+            raise ValueError("Initialized snapshots must not have parent_id.")
+    else:
+        if value.parent_id is None:
+            raise ValueError("Consolidated and unconsolidated snapshots require parent_id.")
+        validate_identifier(value.parent_id, field="parent_id")
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -251,6 +431,96 @@ class ParentEvaluation:
     units: tuple[UnitTask, ...]
 
 
+def validate_parent_evaluation(value: ParentEvaluation) -> None:
+    """Validate the fixed scientific context and units of one parent task.
+
+    Parameters
+    ----------
+    value : ParentEvaluation
+        Parent identity, partition reference, evaluation reference, and known
+        unit set to validate.
+
+    Raises
+    ------
+    TypeError
+        If the parent record or a nested field has an incorrect runtime type.
+    ValueError
+        If an identity or nested reference is invalid, no unit is present, a
+        unit references another parent or model, a model uses another task
+        kind, or model identities or labels are duplicated within the parent.
+
+    Notes
+    -----
+    Every unit must resolve to this parent and its own fixed model reference.
+    Every model uses the parent's task-wide evaluation kind, while model
+    families may differ. Model identities and labels are unique within this
+    parent only. Validation does not load partition memberships, model
+    objects, or evaluation-settings payloads.
+    """
+    # Validate the complete declared parent structure before semantic checks.
+    validate_declared_types(
+        value,
+        expected_type=ParentEvaluation,
+    )
+
+    # Validate the parent and dataset/partition identities.
+    validate_identifier(value.parent_id, field="parent_id")
+    validate_identifier(
+        value.partition.partition_id,
+        field="partition.partition_id",
+    )
+    validate_identifier(
+        value.partition.dataset_id,
+        field="partition.dataset_id",
+    )
+
+    # Validate the fixed task-wide evaluation reference.
+    validate_evaluation_reference(value.evaluation)
+
+    # Require at least one model-specific unit in a committed parent.
+    if not value.units:
+        raise ValueError("units must contain at least one unit task.")
+
+    # Validate every unit association and parent-scoped model uniqueness.
+    model_ids: set[ModelId] = set()
+    model_labels: set[ScalarLabel] = set()
+    for index, unit in enumerate(value.units):
+        validate_unit_key(unit.key)
+        validate_model_reference(unit.model)
+
+        if unit.key.parent_id != value.parent_id:
+            raise ValueError(
+                f"units[{index}].key.parent_id must equal parent_id "
+                f"{value.parent_id!r}; got {unit.key.parent_id!r}."
+            )
+
+        if unit.key.model_id != unit.model.model_id:
+            raise ValueError(
+                f"units[{index}].key.model_id must equal its model.model_id "
+                f"{unit.model.model_id!r}; got {unit.key.model_id!r}."
+            )
+
+        if unit.model.task_kind is not value.evaluation.task_kind:
+            raise ValueError(
+                f"units[{index}].model.task_kind must equal evaluation task kind "
+                f"{value.evaluation.task_kind.value!r}; "
+                f"got {unit.model.task_kind.value!r}."
+            )
+
+        if unit.model.model_id in model_ids:
+            raise ValueError(
+                "units must have unique model_id values; " f"duplicate at units[{index}]: {unit.model.model_id!r}."
+            )
+        model_ids.add(unit.model.model_id)
+
+        if unit.model.model_label in model_labels:
+            raise ValueError(
+                "units must have unique model_label values under Python scalar equality; "
+                f"duplicate at units[{index}]: {unit.model.model_label!r}."
+            )
+        model_labels.add(unit.model.model_label)
+
+
 @dataclass(frozen=True, kw_only=True, slots=True)
 class AttemptInputs:
     """Identify one worker execution attempt for an existing unit task.
@@ -276,3 +546,60 @@ class AttemptInputs:
     attempt_id: AttemptId
     unit: UnitKey
     worker_id: WorkerId
+
+
+def validate_attempt_inputs(
+    value: AttemptInputs,
+    *,
+    parent: ParentEvaluation,
+) -> None:
+    """Validate one attempt's routing identities against its fixed parent.
+
+    Parameters
+    ----------
+    value : AttemptInputs
+        Attempt identity, logical unit key, and assigned worker to validate.
+    parent : ParentEvaluation
+        Fixed parent task through which the unit and scientific inputs resolve.
+
+    Raises
+    ------
+    TypeError
+        If the attempt, parent, or a nested field has an incorrect runtime
+        type.
+    ValueError
+        If an identity is empty, the supplied parent is invalid, the unit
+        names another parent, or the unit is not present in the parent.
+
+    Notes
+    -----
+    Different attempts may reference the same unit and may use different
+    workers. This validator does not require attempt or worker uniqueness
+    across a collection. It does not allocate work, inspect worker state, or
+    introduce independent dataset, partition, evaluation, or model inputs.
+    """
+    # Validate the declared attempt structure and its routing identities.
+    validate_declared_types(
+        value,
+        expected_type=AttemptInputs,
+    )
+    validate_identifier(value.attempt_id, field="attempt_id")
+    validate_unit_key(value.unit)
+    validate_identifier(value.worker_id, field="worker_id")
+
+    # Validate the fixed parent context before resolving unit membership.
+    validate_parent_evaluation(parent)
+
+    # Reject a unit key that explicitly identifies another parent task.
+    if value.unit.parent_id != parent.parent_id:
+        raise ValueError(
+            f"unit.parent_id must equal parent.parent_id " f"{parent.parent_id!r}; got {value.unit.parent_id!r}."
+        )
+
+    # Resolve membership by the complete parent/model unit identity.
+    known_units = {unit.key for unit in parent.units}
+    if value.unit not in known_units:
+        raise ValueError(
+            f"unit must identify a known parent unit; got model_id "
+            f"{value.unit.model_id!r} for parent_id {value.unit.parent_id!r}."
+        )
