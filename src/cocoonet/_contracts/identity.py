@@ -31,7 +31,12 @@ ArtifactId = NewType("ArtifactId", str)
 
 
 class ReportName(StrEnum):
-    """Identify report categories shared by outcomes and failure context."""
+    """Identify report categories shared by outcomes and failure context.
+
+    Notes
+    -----
+    Node usage scope: Shared - Used by both root and worker nodes.
+    """
 
     VALIDATION = "validation"
     PERFORMANCE = "performance"
@@ -55,6 +60,7 @@ class UnitKey:
     -----
     Construction stores candidate identities without validating their values.
     Dataset and evaluation settings resolve through the parent.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
 
     parent_id: ParentId
@@ -77,6 +83,10 @@ def validate_identifier(value: str, *, field: str) -> None:
         If the identifier is not a string or ``field`` is not a string.
     ValueError
         If the identifier is empty.
+
+    Notes
+    -----
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
     validate_declared_types(
         value,
@@ -105,6 +115,10 @@ def validate_label(value: ScalarLabel, *, field: str) -> None:
         ``field`` is not a string.
     ValueError
         If a float label is not finite.
+
+    Notes
+    -----
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
     validate_declared_types(
         value,
@@ -131,6 +145,10 @@ def validate_unit_key(value: UnitKey) -> None:
         If the value is not a UnitKey or either identifier is not a string.
     ValueError
         If either identifier is empty.
+
+    Notes
+    -----
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
     validate_declared_types(
         value,

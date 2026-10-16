@@ -17,6 +17,10 @@ def get_version() -> str:
     ------
     importlib.metadata.PackageNotFoundError
         If CocooNet's installation metadata is unavailable.
+
+    Notes
+    -----
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
     # Read distribution metadata to keep pyproject.toml as the version source.
     return _version("cocoonet")

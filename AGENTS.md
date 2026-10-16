@@ -925,6 +925,11 @@ Before planning or implementing a phase, process project guidance in this order:
 
 - Every class, function, and method, including private/internal components, must have a source docstring explaining
   its purpose and responsibility. Use NumPy-style sections only where applicable to the documented object.
+- Every non-helper class and function must end its NumPy-style docstring's `Notes` section with one concise node-usage
+  statement selected from: `Node usage scope: Root only - Used exclusively by the root node.`, `Node usage scope: Worker only - Used exclusively by worker
+  nodes.`, or `Node usage scope: Shared - Used by both root and worker nodes.` Add a `Notes` section when one is otherwise unnecessary.
+  Determine the category from the object's actual or planned responsibilities and consumers; associated classes,
+  functions, and validators may have different scopes. Internal helper functions and helper classes are exempt.
 - Use NumPy-style `Parameters`, rather than `Args`, for parameters requiring documentation, with types and
   descriptions; omit the section when none apply.
 - Include `Returns` only for meaningful return values and `Yields` for yielded values. Classes and constructors do

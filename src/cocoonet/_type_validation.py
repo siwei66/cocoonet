@@ -1417,6 +1417,7 @@ def validate_declared_types(
     inside per-sample, per-row, or per-batch loops can therefore add material
     overhead. Dataset-scale content rules should use the applicable vectorized
     NumPy, pandas, or PyTorch operations.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
     try:
         if type(field) is not str:
@@ -1452,6 +1453,10 @@ def validate_numpy_dtype(
     TypeError
         If the value is not a NumPy array or scalar, the dtype specification
         is invalid, or the value has a different dtype.
+
+    Notes
+    -----
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
     try:
         validate_declared_types(
@@ -1577,6 +1582,7 @@ def validate_pandas_dtype(
     this helper repeatedly for very wide dataframes can add overhead
     proportional to the number of inspected columns. A heterogeneous schema
     should validate only its selected series with column-specific calls.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
     try:
         validate_declared_types(
@@ -1618,6 +1624,10 @@ def validate_torch_dtype(
     TypeError
         If ``value`` is not a tensor, ``expected_dtype`` is not a PyTorch
         dtype, or the tensor has a different dtype.
+
+    Notes
+    -----
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
     try:
         validate_declared_types(
@@ -1672,6 +1682,7 @@ def validate_args(
     element, may incur material overhead. This decorator is intended for API,
     configuration, and contract-validation boundaries rather than hot
     computational loops.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
     signature = inspect.signature(func)
     type_hints = get_type_hints(func, include_extras=True)

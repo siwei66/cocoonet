@@ -28,6 +28,7 @@ class SourceReference:
     -----
     Construction preserves the candidate path without validating or normalizing it.
     This record does not access the filesystem.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
 
     relative_path: str
@@ -56,6 +57,7 @@ def validate_source_reference(value: SourceReference) -> None:
     Validation is lexical and does not access the filesystem, resolve
     symlinks, establish physical containment, or normalize the supplied path.
     Physical-path resolution belongs to the later dataset I/O boundary.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
     validate_declared_types(
         value,
@@ -106,6 +108,7 @@ class SampleRecord:
     Training and testing populations use this same record structure.
     Construction does not normalize or validate candidate field values.
     Feature data and computed predictions are represented separately.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
 
     sample_id: SampleId
@@ -141,6 +144,7 @@ def validate_sample_record(value: SampleRecord) -> None:
     files, or enforce dataset-wide sample-ID or sample-label uniqueness.
     Target admissibility for a particular task belongs to the later dataset
     input design.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
     validate_declared_types(
         value,
@@ -191,6 +195,7 @@ class PartitionReference:
     -----
     Construction stores candidate identities without validating their association.
     This reference neither stores partition memberships nor accesses an artifact.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
 
     partition_id: PartitionId
@@ -215,6 +220,7 @@ class FoldRecord:
     Construction preserves candidate memberships without validating them.
     Empty populations are structurally representable.
     This record does not generate or alter a split.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
 
     fold_id: FoldId
@@ -240,6 +246,7 @@ class PartitionSchedule:
     Valid schedules require disjoint training and testing groups in every fold.
     Construction preserves candidate values without validating the schedule.
     This record does not generate groups, alter memberships, or persist an artifact.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
 
     reference: PartitionReference
@@ -272,6 +279,7 @@ def validate_partition_schedule(value: PartitionSchedule) -> None:  # noqa: C901
     not infer a splitting strategy, regenerate a split, require nonempty
     fold populations, require every sample to appear, or access persistent
     partition artifacts.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
     # Validate the complete nested record structure before accessing fields.
     validate_declared_types(

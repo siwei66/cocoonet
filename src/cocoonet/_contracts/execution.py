@@ -28,6 +28,10 @@ class TaskKind(StrEnum):
         Evaluation predicts a numeric target.
     CLASSIFICATION : str
         Evaluation predicts membership in a declared class vocabulary.
+
+    Notes
+    -----
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
 
     REGRESSION = "regression"
@@ -55,6 +59,7 @@ class ModelFamily(StrEnum):
     A Cocoonet-native composition has the ``COCOONET`` family. Each constituent
     model retains its own family identity, including ``COCOONET`` for nested
     native compositions. Standard scikit-learn ensembles remain ``SKLEARN``.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
 
     SKLEARN = "sklearn"
@@ -88,6 +93,7 @@ class ConsolidationState(StrEnum):
     Changed evaluation configuration follows ``CONSOLIDATED`` to
     ``UNCONSOLIDATED`` to ``INITIALIZED`` to ``CONSOLIDATED``. Copying an
     instance preserves its state. Execution and worker status are separate.
+    Node usage scope: Root only - Used exclusively by the root node.
     """
 
     INITIALIZED = "initialized"
@@ -117,6 +123,7 @@ class ModelReference:
     component retains the supplied model input and later prepares its payload.
     Construction preserves candidate values without validating them or
     inspecting, storing, or executing a model object.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
 
     model_id: ModelId
@@ -149,6 +156,7 @@ def validate_model_reference(value: ModelReference) -> None:
     ``TaskKind`` vocabularies. Explicit value validation checks the opaque
     model identity and scalar model label. This function does not inspect,
     load, derive metadata from, or execute a model object.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
     validate_declared_types(
         value,
@@ -182,6 +190,7 @@ class EvaluationReference:
     does not contain their complete implementation-specific payload. The same
     identity must not be reused for changed settings. Construction preserves
     candidate values without validating task-kind or class-label consistency.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
 
     configuration_id: EvaluationConfigId
@@ -218,6 +227,7 @@ def validate_evaluation_reference(value: EvaluationReference) -> None:
     order and does not sort, coerce, add, or remove labels. It does not inspect
     the complete evaluation-settings payload identified by
     ``configuration_id``.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
     validate_declared_types(
         value,
@@ -279,6 +289,7 @@ class ComputationSnapshot:
     uniqueness, consolidation relationships, or configuration completeness.
     It does not initialize storage, create a parent task, or own runtime
     worker resources.
+    Node usage scope: Root only - Used exclusively by the root node.
     """
 
     root_dir: str
@@ -314,6 +325,7 @@ def validate_computation_snapshot(value: ComputationSnapshot) -> None:  # noqa: 
     prospective configuration remains representable; this validator does not
     apply start prerequisites, compare against an older snapshot, access the
     filesystem, or perform a lifecycle transition.
+    Node usage scope: Root only - Used exclusively by the root node.
     """
     # Validate the complete declared snapshot structure before semantic checks.
     validate_declared_types(
@@ -394,6 +406,7 @@ class UnitTask:
     is validated as part of the owning parent evaluation. This record does
     not contain dataset, partition, evaluation-settings, worker, or attempt
     overrides.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
 
     key: UnitKey
@@ -423,6 +436,7 @@ class ParentEvaluation:
     associations. Those relationships are enforced by
     ``validate_parent_evaluation``. This record does not embed partition
     memberships, model objects, worker state, or execution attempts.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
 
     parent_id: ParentId
@@ -456,6 +470,7 @@ def validate_parent_evaluation(value: ParentEvaluation) -> None:
     families may differ. Model identities and labels are unique within this
     parent only. Validation does not load partition memberships, model
     objects, or evaluation-settings payloads.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
     # Validate the complete declared parent structure before semantic checks.
     validate_declared_types(
@@ -541,6 +556,7 @@ class AttemptInputs:
     Construction preserves candidate values without validating identities or
     confirming that the unit belongs to a supplied parent task. Those checks
     are performed by ``validate_attempt_inputs``.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
 
     attempt_id: AttemptId
@@ -577,6 +593,7 @@ def validate_attempt_inputs(
     workers. This validator does not require attempt or worker uniqueness
     across a collection. It does not allocate work, inspect worker state, or
     introduce independent dataset, partition, evaluation, or model inputs.
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
     # Validate the declared attempt structure and its routing identities.
     validate_declared_types(
