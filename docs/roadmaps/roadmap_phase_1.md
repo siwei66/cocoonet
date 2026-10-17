@@ -335,23 +335,28 @@ searches or caches. Runtime label comparisons follow Section 3.2. No identity ge
 
 | Record / enum | Fields / values |
 | --- | --- |
-| `FailureScope` | `configuration`, `startup`, `unit_evaluation`, `shared_intermediate`, `report`, `measure`, `influence_sample`, `operation`, `worker_process` |
+| `FailureScope` | `fit_prediction`, `report`, `measure`, `sample_influence`, `data_preparation`, `data_sync`, `worker_management`, `result_transfer`, `result_persistence`, `worker_process` |
 | `TraceContext` | `stage: str`, `parent_id: ParentId | None = None`, `model_id: ModelId | None = None`, `attempt_id: AttemptId | None = None`, `worker_id: WorkerId | None = None`, `fold_id: FoldId | None = None`, `sample_id: SampleId | None = None`, `class_label: ScalarLabel | None = None`, `report_name: ReportName | None = None`, `operation_id: OperationId | None = None` |
 | `FailureRecord` | `failure_id: FailureId`, `scope: FailureScope`, `context: TraceContext`, `exception_type: str`, `message: str`, `traceback: str`, `origin_failure_id: FailureId | None = None` |
 
 `ReportName` is the shared enum `validation`, `performance`, `residual`, `visualization`, `influence`; place it in
 `identity.py` to avoid a failure/result import cycle. Stage names are descriptive nonempty strings rather than a
-premature exhaustive enum of future algorithms. Reconstruction and baseline fitting use `unit_evaluation` scope and
-distinct stages such as `reconstruction` and `baseline_fit`.
+premature exhaustive enum of future algorithms. Reconstruction, baseline fitting, and prediction use
+`fit_prediction` scope with distinct stages such as `reconstruction`, `baseline_fit`, and `prediction`. The stage and
+attempt outcome distinguish a required reconstruction or baseline-fit failure from an isolated prediction failure.
+Configuration and startup errors are reported directly through the root-side API and are not represented by
+`FailureScope` or `FailureRecord`.
 
-- Scope describes the affected object, not the whole process. Startup may have no model/parent; it is not baseline
-  failure. A worker-process failure identifies a worker and is not inferred from any other error.
+- Scope describes the affected object or operation, not the whole process. A worker-process failure identifies an
+  unavailable worker process and is not inferred from any scientific, transfer, persistence, synchronization, or
+  management error.
 - Model context requires parent context; attempt context requires parent/model/worker context; fold/sample context
   requires parent context. Class-specific context requires a class label. `None` means not applicable/known, not an
   anonymous replacement ID. A known class or sample must never be dropped from an error record.
-- Report/measure failure requires `report_name`; influence-sample failure requires model, attempt, fold, sample, and
-  influence report context. Operation failure requires an operation ID. Evaluation failures in attempt results carry
-  that attempt's parent/model/worker context.
+- Report/measure failure requires `report_name`; sample-influence failure requires model, attempt, fold, sample, and
+  influence report context. Data-preparation, data-sync, worker-management, result-transfer, and result-persistence
+  failures require an operation ID. Fit/prediction failures included in attempt results carry that attempt's
+  parent/model/worker context.
 - Exception type and message are nonempty. Preserve the full supplied traceback as a string. It may be empty only
   for a failure detected without a caught exception; never replace a captured traceback with an empty value.
 - A dependent skip refers to its originating failure by ID. An origin must resolve in the accompanying failure set;
@@ -377,8 +382,8 @@ distinct stages such as `reconstruction` and `baseline_fit`.
 
 | Signature | Responsibility | Direct tests |
 | --- | --- | --- |
-| `validate_trace_context(value: TraceContext) -> None` | Validate applicable identity/label fields and context dependencies. | Startup without model; complete attempt/fold/sample context; orphan model/attempt/sample; invalid stage. |
-| `validate_failure_record(value: FailureRecord) -> None` | Check scope-specific context, error text, and non-self origin. | Each scope; operation without operation ID; report without name; influence without sample; worker failure without worker; captured text preserved. |
+| `validate_trace_context(value: TraceContext) -> None` | Validate applicable identity/label fields and context dependencies. | Minimal stage-only context; complete attempt/fold/sample context; orphan model/attempt/sample; invalid stage. |
+| `validate_failure_record(value: FailureRecord) -> None` | Check scope-specific context, error text, and non-self origin. | Each scope; operational scope without operation ID; report without name; sample influence without sample; worker failure without worker; captured text preserved. |
 | `validate_failure_links(values: tuple[FailureRecord, ...]) -> None` | Check unique IDs, resolved origins, and acyclic same-context dependency references. | Dangling/self/cyclic origins; valid shared origin; unrelated attempt origin; duplicate failure ID. |
 
 ## 6. Standardized predictions and complete result contracts
@@ -452,8 +457,9 @@ Report outcome rules:
 Complete attempt rules:
 
 - `baseline_failed` covers essential reconstruction or any required baseline-fit failure. All report fields are
-  `None`, predictions are empty, and there is a `unit_evaluation` failure with stage `reconstruction` or `baseline_fit`.
-  This is a complete failure-only outcome eligible for the same later reception/acceptance process as success.
+  `None`, predictions are empty, and there is a `fit_prediction` failure with stage `reconstruction` or
+  `baseline_fit`. This is a complete failure-only outcome eligible for the same later reception/acceptance process
+  as success.
 - For either completed outcome, the four required report fields exist with matching names; influence exists and
   matches `influence_requested` (`not_requested` when false, a requested status otherwise). A failed requested report
   remains an outcome record. Predictions contain one batch for each schedule fold in schedule order, including
@@ -467,8 +473,9 @@ Complete attempt rules:
 - Failures and all fold/sample/class contexts resolve against the same parent, attempt, schedule, and class vocabulary.
   A sample-specific influence error names a training member of its stated fold; prediction errors naming a sample
   refer to that fold's testing population. A shared fold-level error need not invent a sample/class identity.
-  The envelope's failure list describes computation, not later transfer, persistence, configuration, or worker-process
-  incidents. Those operations retain their own records.
+  The envelope's failure list describes scientific computation, not later data preparation, data synchronization,
+  worker management, result transfer, result persistence, configuration, startup, or worker-process incidents.
+  Those failures remain at their owning boundaries.
 - Interruption/cancellation is not a fabricated baseline failure or complete result. A stopped attempt is represented
   by Section 7's state; this phase does not define a new cancelled-result file.
 - One envelope describes one attempt; result files, dill bytes, completion publication, report loading, and user-facing
@@ -481,7 +488,7 @@ Complete attempt rules:
 | `validate_regression_predictions(value: RegressionPredictions, *, fold: FoldRecord) -> None` | Validate aligned vectors, numeric statuses, failure-reference shape, and fold identity. | Reordered/unknown/excluded IDs; length mismatch; NaN undefined vs unavailable; defined NaN rejected; empty test set; no input changes. |
 | `validate_classification_predictions(value: ClassificationPredictions, *, fold: FoldRecord, class_labels: tuple[ScalarLabel, ...]) -> None` | Validate class/sample alignment, matrix shapes, label membership, numeric/status/failure combinations. | Swapped classes; ragged matrices; missing/unknown class labels; independently unavailable class cells; bad probability range; no probability filling/reordering. |
 | `validate_report_outcome[T](value: ReportOutcome[T]) -> None` | Validate generic outcome name/status/payload/failure relationship only. | Every status; complete immutable payload containing NaN; failed/blocked with preserved structure; empty failure references rejected where required. |
-| `validate_attempt_result[V, P, R, Z, I](value: AttemptResult[V, P, R, Z, I], *, parent: ParentEvaluation, schedule: PartitionSchedule) -> None` | Compose prior validators; require `parent.partition == schedule.reference`; validate all remaining contextual links and complete/failure-only result rules. | Regression/classification completion; mismatched parent/schedule partition or dataset identity; baseline failure without reports; reject leaked reports; optional influence; partial prediction/report failures; undefined-only completion; wrong attempt/fold/class; dangling errors; ordinary operation failure excluded. |
+| `validate_attempt_result[V, P, R, Z, I](value: AttemptResult[V, P, R, Z, I], *, parent: ParentEvaluation, schedule: PartitionSchedule) -> None` | Compose prior validators; require `parent.partition == schedule.reference`; validate all remaining contextual links and complete/failure-only result rules. | Regression/classification completion; mismatched parent/schedule partition or dataset identity; baseline failure without reports; reject leaked reports; optional influence; partial prediction/report failures; undefined-only completion; wrong attempt/fold/class; dangling errors; non-computational failure scopes excluded. |
 
 The type-parameter notation above uses Python 3.12 generic syntax. Declaration and validator units remain separate;
 the notation does not authorize bundling helpers with their caller.
@@ -560,8 +567,10 @@ in retries must explicitly convert to this total; no default retry count or dela
 - Failed has at least one attempt and a last failure. When its count reaches the limit it is exhausted. No extra
   exhausted status or independent flag may contradict the count/status pair.
 - Cancelled may have zero or more attempts and does not imply success, acceptance, or worker-process unavailability.
-- The last failure, when present, has operation scope and names the same operation ID/context. Its failure ID is local
-  to this operation record, not a computational error in the result envelope.
+- The last failure, when present, names the same operation ID and context and uses the applicable detailed operational
+  scope. `connection_round` uses `worker_management`; `transfer` uses `data_sync` or `result_transfer` according to
+  the transferred artifact; `persistence` uses `data_preparation` or `result_persistence` according to the persisted
+  artifact. Its failure ID is local to this operation record, not a scientific error in the result envelope.
 - Separate connection rounds use separate operation identities. This allows a later scheduled round without resetting
   an exhausted delivery operation. Records preserve counts; Phase 1 has no automatic retry or count-reset method.
 
