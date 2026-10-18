@@ -41,9 +41,11 @@ Throughout every phase:
 - Provide NumPy-style source docstrings for public and internal components, public-only API documentation, useful
   examples, and comments explaining non-obvious logic. Preserve the typing, narrow suppression, decomposition,
   simplicity, efficiency, and line-length rules in AGENTS.md.
-- Preserve defined formulas, populations, class/sample alignment, and normalization. Undefined values remain NaN;
-  small denominators and randomness effects remain as computed. Do not add epsilon, clipping, imputation, fallback
-  probabilities, NaN-skipping aggregation, favorable-run selection, or corrective fitting.
+- Preserve defined formulas, populations, class/sample alignment, and normalization. Formula-defined undefined values
+  remain `NaN`; mathematically permitted infinities remain infinite; computationally unavailable values are `None`
+  with applicable failure provenance; and schema-defined non-applicable values are `None` without failures. Do not add
+  a redundant per-value status enum. Do not add epsilon, clipping, imputation, fallback probabilities, NaN-skipping
+  aggregation, favorable-run selection, or corrective fitting.
 - Keep configuration/startup, scientific computation, bounded operation, logical-result acceptance, and worker-process
   availability distinct. Errors must be descriptive and traceable at the smallest applicable failure boundary.
 - Do not execute user model code in the coordinator or use an unenforced temporary model boundary. Do not introduce
@@ -70,8 +72,9 @@ Compatibility metadata must be readable without loading executable model or repo
 Establish the logical state needed for configuration consolidation, worker readiness/availability, immutable attempt
 inputs, stop disposition, report status, result selection, durable acceptance, and bounded-operation progress.
 Define standardized prediction/class alignment and the single-attempt result envelope, including the failure-only
-outcome, before their producers and consumers. Distinguish scientific undefined values from operational errors in
-these records and define trace context for stage, model, fold, sample/class, exception, message, and traceback.
+outcome, before their producers and consumers. Distinguish formula-defined `NaN`, unavailable `None` with failure
+references, and schema-defined non-applicable `None` without introducing a parallel per-value status enum. Define trace
+context for stage, model, fold, sample/class, exception, message, and traceback.
 
 Before proceeding, identity scopes, ownership, required associations, state distinctions, and component input/output
 contracts must be stable. Exact containers and field names are chosen here where needed; wire encodings, lifecycle
@@ -229,8 +232,9 @@ predictions and inputs required by reports
 and influence so neither requires recovery fits or redundant baseline training.
 
 Required reconstruction or any baseline-fit failure stops the entire current unit evaluation and suppresses evaluation
-reports, producing the failure-only outcome for later packaging. Prediction/shared-intermediate failures mark only
-dependent values unavailable. Preserve successful independent computations and trace the originating error.
+reports, producing the failure-only outcome for later packaging. Prediction/shared-intermediate failures represent only
+dependent values as `None` with applicable failure references. Preserve successful independent computations and trace
+the originating error.
 
 Before proceeding, validation outputs, baseline/shared-intermediate failure boundaries, and complete required-fit
 status must be stable. This is a workflow stage, not a separately distributed fold task. Ordinary metrics, influence,
@@ -252,6 +256,15 @@ Regression includes Mean_Error, SDE, MAE, Normalized_MAE, CV_MAE, MSE, RMSE, Nor
 plus residual/standardized-residual reports and scatter/residual plotting data. User-facing reports identify samples
 and models by their user labels while internal records preserve identities and dataset-relative sources.
 
+Concrete report schemas apply the generated scientific-value contract: finite values and mathematically permitted
+infinities are floats, formula-defined undefined values are `NaN`, computationally unavailable values are `None` with
+applicable failure references, and explicitly non-applicable values are `None` without failures where the schema
+permits them. Exact count fields remain integers. Do not add per-value status fields.
+
+Human-readable reports use numeric output, `Inf`, `-Inf`, `NaN`, and `NA`. If CSV or another report export format is
+supported, define explicit encoding and round-trip validation so `NaN` and `None` cannot be collapsed by library
+defaults.
+
 Each report runs when its actual prerequisites are available. Its failure preserves other reports, identifiers, and
 successful values, with unavailable values and detailed errors represented as specified. Components return report
 data; they do not independently own filesystem persistence or retrain models. Before proceeding, report consumers
@@ -264,10 +277,12 @@ from Phases 7–8. Reuse the exact parent validation schedule. Omit each eligibl
 and compare predictions on that fold's unchanged test set. Held-out samples receive no removal evaluation or invented
 zero for that fold; no prediction of the omitted sample itself is required.
 
-Implement architecture Section 4.7 exactly: baseline held-out MSE against truth, actual input predictor count p,
+Implement architecture Section 4.7 exactly: baseline held-out MSE against truth, actual input predictor count `p`,
 class-specific probability influence or single-target regression influence, and aggregation divided by
-M_i = sum_{f in F_i} |V_f|. Count zero changes and repeated comparisons, retain comparison counts/status, and propagate
-undefined contributions through ordinary aggregation. Do not replace the divisor with fold count or training size.
+`M_i = sum_{f in F_i} |V_f|`. Count zero changes and repeated comparisons, retain exact comparison counts and
+applicable value-level failure references, and propagate formula-defined undefined contributions through ordinary
+aggregation. Do not add a separate influence evaluation-status field or replace the divisor with fold count or
+training size. Define the minimal concrete influence payload in Phase 9.
 
 Contain removal-refit/calculation failures at the sample/class boundary, preserve independently computable class
 values, and continue independent samples. Baseline-fit failure still suppresses the entire unit's evaluation reports.
@@ -336,9 +351,9 @@ Root task scheduling, result delivery, and optimization beyond the defined resou
 
 Once evaluation producers and Phase 11 resource control are stable, complete worker report persistence and result
 packaging using Phase 2. Construct exactly one standardized dill result file per completed execution attempt,
-containing its reports,
-successful/unavailable values, statuses, and traceable failures. Required baseline failure instead creates the complete
-failure-only file without evaluation reports.
+containing its reports, successful values, formula-defined `NaN`, permitted infinities, non-applicable or unavailable
+`None`, and traceable failures. Preserve value-level failure associations without storing redundant value-status
+vectors. Required baseline failure instead creates the complete failure-only file without evaluation reports.
 
 Preserve parent/unit/attempt associations, model identity, fold/sample/class alignment, and the context needed for root
 report processing and provenance. Evaluation components remain separate from persistence; delivery receives a completed
@@ -547,6 +562,8 @@ Verify the declared Python support range and cross-supported-version dill/model/
 Cocoonet releases. Exercise resource limits and responsiveness, fixed partitions and identifiers, all report/failure
 outcomes, duplicate acceptance, persistence/acknowledgement interruption, exhausted retry preservation, connection
 rounds, data retention/reuse, configuration copying/reuse, and public cleanup through the supplied integration.
+Verify that result and supported report-export round trips preserve finite values, permitted infinities, `NaN`, `None`,
+and value-level failure associations without collapsing `NaN` and `None`.
 
 Complete public workflow documentation and examples using the implemented APIs, keeping internal details in source
 documentation. Confirm asynchronous receipt does not deserialize in the active event loop and that worker application

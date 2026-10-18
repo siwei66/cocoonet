@@ -366,19 +366,57 @@ Configuration and startup errors are reported directly through the root-side API
 - Capturing exceptions, assigning stages, writing logs, retrying, and deciding where to catch errors are producer
   responsibilities in later phases. These records support those boundaries without implementing them.
 
-### 5.2 Defined, undefined, and unavailable values
+### 5.2 Defined, undefined, unavailable, and non-applicable values
 
-`ValueStatus` has `defined`, `undefined`, and `unavailable`.
+Phase 1 does not define a `ValueStatus` enum. Generated value meaning is derived from the value, its owning schema, and
+its aligned value-level failure references.
 
-- `defined`: an actual computed value, unchanged. A float marked defined cannot be NaN.
-- `undefined`: the computation's formula has no defined value. Represent it as float NaN; no exception/failure record
-  is required solely because the formula is undefined.
-- `unavailable`: an operation or prerequisite failure prevented a value. Numeric slots contain NaN and reference the
-  relevant failure. A missing predicted class label uses `None`, with status/failure, rather than inventing a class.
-- Scientific `None`, such as macro-averaged confusion counts, is distinct from numeric NaN and missing predictions.
-  Concrete report schemas define those fields in Phase 8; Phase 1 does not flatten them into a generic metric cell.
-- Do not coerce NaN to zero, clip extreme values, fill missing probabilities, normalize model outputs, or aggregate
-  while skipping NaN. No arithmetic metric routine is implemented here.
+| Condition | Internal Python representation | Value-level failure references | Human-readable output |
+| --- | --- | --- | --- |
+| Finite, mathematically defined measure | `float` | Empty | Numeric value |
+| Mathematically permitted positive infinity | `float("inf")` | Empty | `Inf` |
+| Mathematically permitted negative infinity | `float("-inf")` | Empty | `-Inf` |
+| Mathematically undefined measure | `float("nan")` | Empty | `NaN` |
+| Computationally unavailable value | `None` | Nonempty | `NA` |
+| Explicitly non-applicable value | `None` | Empty, only where the schema permits it | `NA` |
+
+A required value cannot be `None` without an applicable failure. A present value cannot carry a value-level
+unavailability failure. `NaN` is reserved for mathematical undefinedness and does not require a failure solely because
+it is undefined. Exceptions and failed prerequisites produce `None` with failure provenance rather than `NaN`.
+
+Exact identifiers, categorical labels, booleans, and integer counts retain their declared types. A generated
+categorical prediction is either a valid label without a value-level failure or `None` with applicable failure
+references. Report-level `ReportStatus` remains separate because it describes the outcome of a whole report rather
+than the state of one value.
+
+Infinity is accepted only where the corresponding measure's documented formula permits an extended-real result.
+Standardized regression predictions and class probabilities must be finite when present. Invalid nonfinite model
+outputs are computational failures represented as `None` with failure provenance.
+
+Every class that owns generated scientific values or generated categorical predictions must explain its applicable
+representation conditions in the `Notes` section of its NumPy-style docstring. The explanation must state, for every
+condition accepted by that class:
+
+- the internal value representation;
+- whether value-level failure references must be empty or nonempty;
+- the corresponding human-readable output;
+- the meaning of `None` and `NaN`, when either can appear.
+
+When a potentially confusing condition is forbidden by the class, its `Notes` section must say so explicitly. For
+example, the prediction classes must state that present predictions are finite, that `None` means computationally
+unavailable and requires failure references, and that `NaN`, infinity, and non-applicable `None` are not accepted
+prediction values. Future concrete report-payload classes must document any permitted finite, infinite, `NaN`,
+unavailable `None`, and non-applicable `None` cases in the same way.
+
+`ReportOutcome` must document that its `status` is report-level and does not replace or reinterpret the payload
+class's value/failure contract. Do not introduce base classes, helper objects, runtime descriptors, or duplicate status
+fields solely to satisfy this documentation requirement. Review the required `Notes` content with each declaration;
+do not add brittle tests that compare exact docstring wording.
+
+Do not coerce `NaN` to zero, clip extreme values, fill missing probabilities, normalize model outputs, or aggregate
+while skipping `NaN`. No arithmetic metric routine is implemented here. Result serialization is deferred, but its
+later contract must preserve `float`, infinity, `NaN`, `None`, and failure-reference distinctions. Human-readable
+output must use numeric values and the exact tokens `Inf`, `-Inf`, `NaN`, and `NA`.
 
 | Signature | Responsibility | Direct tests |
 | --- | --- | --- |
@@ -397,25 +435,30 @@ testing IDs. Class columns use the parent evaluation's explicit order.
 
 | Record | Fields |
 | --- | --- |
-| `RegressionPredictions` | `fold_id: FoldId`, `sample_ids: tuple[SampleId, ...]`, `values: tuple[float, ...]`, `statuses: tuple[ValueStatus, ...]`, `failure_ids: tuple[tuple[FailureId, ...], ...]` |
-| `ClassificationPredictions` | `fold_id: FoldId`, `sample_ids: tuple[SampleId, ...]`, `class_labels: tuple[ScalarLabel, ...]`, `predicted_labels: tuple[ScalarLabel | None, ...]`, `label_statuses: tuple[ValueStatus, ...]`, `label_failure_ids: tuple[tuple[FailureId, ...], ...]`, `probabilities: tuple[tuple[float, ...], ...]`, `probability_statuses: tuple[tuple[ValueStatus, ...], ...]`, `probability_failure_ids: tuple[tuple[tuple[FailureId, ...], ...], ...]` |
+| `RegressionPredictions` | `fold_id: FoldId`, `sample_ids: tuple[SampleId, ...]`, `values: tuple[float | None, ...]`, `failure_ids: tuple[tuple[FailureId, ...], ...]` |
+| `ClassificationPredictions` | `fold_id: FoldId`, `sample_ids: tuple[SampleId, ...]`, `class_labels: tuple[ScalarLabel, ...]`, `predicted_labels: tuple[ScalarLabel | None, ...]`, `label_failure_ids: tuple[tuple[FailureId, ...], ...]`, `probabilities: tuple[tuple[float | None, ...], ...]`, `probability_failure_ids: tuple[tuple[tuple[FailureId, ...], ...], ...]` |
 
 `PredictionBatch = RegressionPredictions | ClassificationPredictions` is a type alias, not another wrapper class.
-Per-class status allows an independently computable probability to survive a missing class or failed component.
+Per-value and per-class failure references allow independently computed values to survive a failed component without
+introducing parallel status vectors.
 
 Prediction invariants:
 
-- For a fold with `n` saved testing IDs and `k` parent classes, regression vectors have length `n`; classification
-  label vectors have length `n` and probability/status/failure matrices have shape `(n, k)`.
+- For a fold with `n` saved testing IDs and `k` parent classes, regression value/failure vectors have length `n`;
+  classification label/failure vectors have length `n`, and probability/failure matrices have shape `(n, k)`.
 - IDs exactly match the saved testing sequence, not merely its length or set. Adapters explicitly align their outputs;
   the validator rejects misalignment rather than silently reordering. Class labels exactly match parent class order.
 - True targets, labels, groups, masks, and source references resolve through `SampleRecord`; do not duplicate a
   competing truth vector or different train/test sample schema inside predictions.
-- Defined predicted class labels belong to the parent class vocabulary; label status cannot be `undefined`.
-  Unavailable labels are `None` and have at least one failure ID.
-- Numeric undefined/unavailable entries are NaN. Defined probabilities are finite and in `[0, 1]`; defined regression
-  values are floats other than NaN. Undefined entries carry no operational failure merely for being undefined;
-  unavailable entries require a failure reference. Defined entries have no failure reference.
+- A present predicted class label belongs to the parent class vocabulary and has no value-level failure reference.
+  An unavailable predicted label is `None` and has at least one applicable failure ID. Non-applicability is not valid
+  for a prediction corresponding to a saved testing sample.
+- Present regression predictions are finite floats. Present probabilities are finite floats in `[0, 1]`. `NaN` and
+  infinity are invalid standardized model outputs rather than formula-defined prediction values. An unavailable
+  regression prediction or probability is `None` with at least one applicable failure ID.
+- A present prediction has no value-level failure reference. A `None` prediction has a nonempty failure-reference
+  tuple. Formula-defined `NaN` and mathematically permitted infinity belong to later report measures, not standardized
+  model prediction records.
 - Probability normalization and raw-model numerical admissibility belong to model adapters. This structural layer
   does not introduce a probability-sum tolerance, renormalization, clipping, or reconstructed missing probabilities.
 - Empty testing sequences yield empty aligned rows. There is no fabricated prediction for an excluded sample.
@@ -445,14 +488,15 @@ reference, not inferred descriptions.
 
 Report outcome rules:
 
-- `complete`: payload present, no operational failure references; formula-defined NaN values may still exist inside it.
+- `complete`: payload present, no operational failure references; formula-defined `NaN`, mathematically permitted
+  infinities, and schema-defined non-applicable `None` values may still exist inside it.
 - `partial`: payload present with preserved successful/identified unavailable entries and nonempty failure references.
 - `failed`: nonempty failures; retain the identified result structure if available, otherwise payload may be absent.
 - `blocked`: nonempty references to originating prerequisite failures; retain an unavailable result structure if
   available. Do not generate inputs or retrain to make a payload.
 - `not_requested`: no payload or failures; allowed only for unrequested optional influence in the attempt envelope.
 - Result-level validation resolves report/prediction failure references against the envelope's failure set. Detailed
-  report field/status consistency is checked by its later concrete payload validator.
+  report value/failure consistency is checked by its later concrete payload validator.
 
 Complete attempt rules:
 
@@ -463,9 +507,9 @@ Complete attempt rules:
 - For either completed outcome, the four required report fields exist with matching names; influence exists and
   matches `influence_requested` (`not_requested` when false, a requested status otherwise). A failed requested report
   remains an outcome record. Predictions contain one batch for each schedule fold in schedule order, including
-  unavailable entries when prediction generation failed.
-- `completed` has no failures and no partial/failed/blocked report or unavailable prediction. Scientific undefined
-  values alone do not turn it into `completed_with_errors`.
+  unavailable `None` entries with failure references when prediction generation failed.
+- `completed` has no failures and no partial/failed/blocked report or unavailable prediction. Formula-defined `NaN`,
+  permitted infinities, and non-applicable `None` values alone do not turn it into `completed_with_errors`.
 - `completed_with_errors` has at least one applicable computational failure and at least one affected report or
   prediction. Required baseline failure cannot be downgraded into this category.
 - The supplied schedule's partition and dataset IDs must exactly match the parent's binding. Failure-only outcomes
@@ -485,10 +529,10 @@ Complete attempt rules:
 
 | Signature | Responsibility | Direct tests |
 | --- | --- | --- |
-| `validate_regression_predictions(value: RegressionPredictions, *, fold: FoldRecord) -> None` | Validate aligned vectors, numeric statuses, failure-reference shape, and fold identity. | Reordered/unknown/excluded IDs; length mismatch; NaN undefined vs unavailable; defined NaN rejected; empty test set; no input changes. |
-| `validate_classification_predictions(value: ClassificationPredictions, *, fold: FoldRecord, class_labels: tuple[ScalarLabel, ...]) -> None` | Validate class/sample alignment, matrix shapes, label membership, numeric/status/failure combinations. | Swapped classes; ragged matrices; missing/unknown class labels; independently unavailable class cells; bad probability range; no probability filling/reordering. |
-| `validate_report_outcome[T](value: ReportOutcome[T]) -> None` | Validate generic outcome name/status/payload/failure relationship only. | Every status; complete immutable payload containing NaN; failed/blocked with preserved structure; empty failure references rejected where required. |
-| `validate_attempt_result[V, P, R, Z, I](value: AttemptResult[V, P, R, Z, I], *, parent: ParentEvaluation, schedule: PartitionSchedule) -> None` | Compose prior validators; require `parent.partition == schedule.reference`; validate all remaining contextual links and complete/failure-only result rules. | Regression/classification completion; mismatched parent/schedule partition or dataset identity; baseline failure without reports; reject leaked reports; optional influence; partial prediction/report failures; undefined-only completion; wrong attempt/fold/class; dangling errors; non-computational failure scopes excluded. |
+| `validate_regression_predictions(value: RegressionPredictions, *, fold: FoldRecord) -> None` | Validate sample alignment, vector lengths, finite present values, and value/failure-reference relationships. | Reordered/unknown/excluded IDs; length mismatch; finite value without failure; `None` with failure; reject `None` without failure, present value with failure, `NaN`, infinity, bool, and wrong numeric type; empty test set; no input changes. |
+| `validate_classification_predictions(value: ClassificationPredictions, *, fold: FoldRecord, class_labels: tuple[ScalarLabel, ...]) -> None` | Validate class/sample alignment, matrix shapes, label membership, finite probabilities, and value/failure-reference relationships. | Swapped classes; ragged matrices; missing/unknown labels; independently unavailable label/class cells; reject `None` without failure, present value with failure, `NaN`, infinity, bool, and out-of-range probability; no probability filling/reordering. |
+| `validate_report_outcome[T](value: ReportOutcome[T]) -> None` | Validate generic outcome name/status/payload/failure relationship only. | Every report status; complete immutable payload containing `NaN`, permitted infinity, or schema-defined `None`; failed/blocked with preserved structure; empty failure references rejected where required. |
+| `validate_attempt_result[V, P, R, Z, I](value: AttemptResult[V, P, R, Z, I], *, parent: ParentEvaluation, schedule: PartitionSchedule) -> None` | Compose prior validators; require `parent.partition == schedule.reference`; validate all remaining contextual links and complete/failure-only result rules. | Regression/classification completion; mismatched parent/schedule partition or dataset identity; baseline failure without reports; reject leaked reports; optional influence; partial prediction/report failures; undefined-only completion; permitted-infinity/non-applicable completion; wrong attempt/fold/class; dangling errors; non-computational failure scopes excluded. |
 
 The type-parameter notation above uses Python 3.12 generic syntax. Declaration and validator units remain separate;
 the notation does not authorize bundling helpers with their caller.
@@ -654,7 +698,7 @@ method signatures, IPC, or messages. Later component implementations call the ap
 | Root coordination | Fixed parent, readiness, unit/attempt/reception observations | `AttemptInputs`, progress/selection/acceptance observations; allocation and duplicate policy remain separate from records. | 13–18 |
 | Worker control/readiness | Applicable local/online parent context, owned worker | `WorkerObservation`, `AttemptProgress`; no model execution in the coordinator or control path. | 5, 13–17 |
 | Model initialization/execution | Resolved fixed model input and framework-supplied sample data | Aligned standardized predictions or scoped failures; executable loading only inside enforced worker boundary. | 5–7, 10 |
-| Validation/report components | Saved schedule, sample metadata, aligned predictions and valid prerequisites | Typed report payloads and `ReportOutcome`; preserve labels/classes/NaN and failures, no independent file persistence. | 7–10 |
+| Validation/report components | Saved schedule, sample metadata, aligned predictions and valid prerequisites | Typed report payloads and `ReportOutcome`; preserve labels/classes, finite values, permitted infinities, `NaN`, `None`, and failures without redundant value statuses or independent file persistence. | 7–10 |
 | Attempt workflow/packaging | Report outcomes and computational failure records for one attempt | `AttemptResult`; one complete file later, or failure-only baseline outcome. No report-specific delivery state. | 7–12 |
 | Worker report persistence | Complete result envelope | Published worker artifact resolved by `ArtifactId`; preserve attempt identity. | 2, 12 |
 | Root reception/persistence | Selected existing artifact and its unit/attempt identity | Durable selection/result evidence and acceptance/acknowledgement after complete persistence. No active-loop report loading. | 2, 13–18 |
@@ -676,7 +720,7 @@ approved unit. Generated dataclass methods do not imply planned custom methods.
 | 1 | Scalar/target aliases; each ID alias; `ReportName`; `UnitKey` | `validate_identifier`; `validate_label`; `validate_unit_key` | `tests/contracts/test_identity.py` |
 | 2 | `SourceReference`; `SampleRecord`; `PartitionReference`; `FoldRecord`; `PartitionSchedule` | `validate_source_reference`; `validate_sample_record`; `validate_partition_schedule` | `tests/contracts/test_data.py` |
 | 3 | `TaskKind`; `ModelFamily`; `ConsolidationState`; `ModelReference`; `EvaluationReference`; `ComputationSnapshot`; `UnitTask`; `ParentEvaluation`; `AttemptInputs` | `validate_model_reference`; `validate_evaluation_reference`; `validate_computation_snapshot`; `validate_parent_evaluation`; `validate_attempt_inputs` | `tests/contracts/test_execution.py` |
-| 4 | `FailureScope`; `TraceContext`; `FailureRecord`; `ValueStatus` | `validate_trace_context`; `validate_failure_record`; `validate_failure_links` | `tests/contracts/test_failure.py` |
+| 4 | `FailureScope`; `TraceContext`; `FailureRecord` | `validate_trace_context`; `validate_failure_record`; `validate_failure_links` | `tests/contracts/test_failure.py` |
 | 5 | `RegressionPredictions`; `ClassificationPredictions`; `PredictionBatch` | `validate_regression_predictions`; `validate_classification_predictions` | `tests/contracts/test_prediction.py` |
 | 6 | `ReportStatus`; `ReportOutcome`; `EvaluationOutcome`; `AttemptResult` | `validate_report_outcome`; `validate_attempt_result` | `tests/contracts/test_result.py` |
 | 7 | Execution/attempt/stop enums; `ParentProgress`; `StopDisposition`; `AttemptProgress` | `validate_parent_progress`; `validate_stop_disposition`; `validate_attempt_progress` | `tests/contracts/test_state.py` |
@@ -686,7 +730,7 @@ approved unit. Generated dataclass methods do not imply planned custom methods.
 | 11 | `CompatibilityMetadata`; declared supported-series constant | `validate_compatibility_metadata`; `require_compatible` | `tests/contracts/test_compatibility.py` |
 | 12 | No new production declaration/function | Review completed contract coverage and run applicable phase checks; report approval status and deferred boundaries. | Existing targeted modules only. |
 
-Place `ConsolidationState` in `execution.py`, `ValueStatus` in `prediction.py`, and `ReportName` in `identity.py`.
+Place `ConsolidationState` in `execution.py` and `ReportName` in `identity.py`. No `ValueStatus` declaration is created.
 `failure.py` has no import from prediction/result/state; `state.py` may consume execution/failure records. This prevents
 cyclic dependencies while keeping the record definitions beside their responsibility.
 
@@ -707,9 +751,11 @@ the approved influence denominator, classwise/micro/macro accuracy distinctions,
 residual axis, and formula-defined NaN behavior are not reopened here.
 
 Numerical checks in this phase are structural: integer count bounds, finite label/timestamp metadata, aligned vector
-dimensions, probability bounds, and status/NaN consistency. Compare NaN through `math.isnan`, not equality. Preserve
-all supplied values; do not convert scientific outcomes to a preferred finite result. The operation count inequality
-is `0 <= attempts_made <= attempt_limit`, with `attempt_limit >= 1`; it is not a retry scheduling algorithm.
+dimensions, probability bounds, and value/failure-reference consistency. Standardized prediction values must be finite
+when present; compare `NaN` through `math.isnan` and infinity through `math.isinf` when rejecting nonfinite prediction
+outputs or testing preserved later report payloads. Preserve all supplied valid values; do not convert scientific
+outcomes to a preferred finite result. The operation count inequality is
+`0 <= attempts_made <= attempt_limit`, with `attempt_limit >= 1`; it is not a retry scheduling algorithm.
 
 For each approved implementation unit:
 
@@ -744,7 +790,7 @@ No production tests are added or run merely to validate a documentation-only pla
 | How can inputs be fixed before detailed settings/model schemas exist? | Immutable typed references to snapshots owned by the later configuration producer; no mutable/executable objects embedded or independently overrideable attempt fields. |
 | How much dataset/report schema belongs here? | Sample/source/membership and prediction alignment plus generic report/envelope structure. Feature adapters and concrete metric payloads remain Phase 4/8–10. |
 | Which fields/types are selected now? | The explicit internal aliases, dataclasses, enums, tuple ordering, scalar label domain, logical source syntax, and validators above, subject to plan approval. |
-| Does undefined science mean an operation failed? | No. Value status and failure references distinguish them; complete reports may contain formula-defined NaN. |
+| Does undefined science mean an operation failed? | No. Formula-defined `NaN` has no failure solely for being undefined; computationally unavailable `None` has applicable failure references; schema-defined non-applicable `None` has none. No per-value status enum is needed. |
 | Does a failure-only result finish delivery or terminate a worker? | No. It is a complete scientific outcome, independently selected/persisted/accepted later. |
 | What does a retry count mean? | Total begun attempts including the first, bounded by a supplied total limit; no policy defaults or timers chosen. |
 | Are frozen records proof of durable acceptance or isolation? | No. They describe evidence/references; storage, ownership, concurrency, and enforced execution boundaries remain later obligations. |
@@ -782,7 +828,7 @@ specifies observations and associations; later phases implement their owners and
 | Concrete model input and prediction adapters, class conversion, raw-output validation and numerical checks, fit-state reset | Phases 6 and 10. |
 | Concrete fold/validation report payloads and baseline workflow | Phase 7. |
 | Conventional metric/report conventions, concrete residual/visualization payloads and any actual unresolved custom formula | Phase 8; do not reopen established standard formulas or expected undefined values as ambiguities. |
-| Concrete influence payload/count/status representation and removal workflow under architecture 4.7 | Phase 9; formula and populations already fixed. |
+| Concrete influence payload, exact comparison count, value/failure-reference representation, and removal workflow under architecture 4.7 | Phase 9; formula, populations, failure traceability, successful-result preservation, and absence of a separate evaluation-status field are already fixed. |
 | PyTorch reconstruction/training/device failure details and process-pool/CPU-detection mechanics | Phases 10–11, preserving architecture 3.3/8. |
 | Result serialization/publication and envelope payload loading restrictions | Phase 12 using Phase 2; no extra authoritative partition copy. |
 | Local IPC, readiness verification, start/assignment/acceptance algorithms, process lifetime | Phase 13, with interruption/reconciliation in Phase 15. |

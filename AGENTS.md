@@ -357,16 +357,39 @@ constraints:
 
 - Implement defined evaluation metrics directly according to their formulas, input populations, and normalization
   rules. Preserve their mathematical meaning and specified output behavior.
-- Represent undefined metric values as `NaN`. Preserve small denominators and the resulting defined values.
-  Do not introduce epsilon, clipping, imputation, invented probabilities, fallback values, or NaN-skipping
-  aggregation to manufacture a defined or preferred result.
-- Report formula-defined edge cases and risks clearly. Expected `NaN`, extreme defined values, and other consequences
-  of a well-defined formula are not ambiguities and do not require requests for alternative handling.
-  Request clarification only when the definition itself is missing or contradictory.
+- Use the following internal representation for generated scientific results:
+  - finite, mathematically defined measure values use `float`;
+  - mathematically permitted positive and negative infinity use `float("inf")` and `float("-inf")`;
+  - mathematically undefined values use `float("nan")`;
+  - computationally unavailable values use `None` with applicable nonempty value-level failure references;
+  - explicitly non-applicable values use `None` without value-level failure references only where the owning schema
+    permits non-applicability.
+- Derive a generated value's meaning from its representation, owning schema, and value-level failure references.
+  Do not introduce a parallel per-value status enum or status structure that can contradict those facts.
+- Exact identifiers, categorical labels, booleans, and integer count fields retain their declared types. Generated
+  categorical predictions follow the same availability rule: a present label has no value-level failure reference,
+  while an unavailable label is `None` with applicable failure references.
+- Reserve `NaN` for mathematical undefinedness. An exception, failed prerequisite, invalid model output, or other
+  computational failure produces `None` in the affected value position with failure provenance; it must not be
+  represented as formula-defined `NaN`.
+- Accept infinity only where the corresponding measure's documented mathematical definition permits an extended-real
+  result. Floating-point overflow or a nonfinite model output where infinity is not mathematically permitted is
+  computational unavailability, not a valid infinite result.
+- Preserve small denominators and the resulting defined values. Do not introduce epsilon, clipping, imputation,
+  invented probabilities, fallback values, or NaN-skipping aggregation to manufacture a defined or preferred result.
+- Human-readable reports render finite values numerically and use the exact tokens `Inf`, `-Inf`, `NaN`, and `NA`.
+  Serialization and report exporters must preserve the distinction between `NaN` and `None`. CSV output must write
+  these tokens deliberately rather than relying on library missing-value defaults. Other supported report formats
+  must define a typed or explicit format-specific representation that preserves the same distinctions.
+- These generated-result rules do not change dataset-input validation. User-provided regression targets and feature
+  values continue to reject `NaN`, positive infinity, and negative infinity.
+- Report formula-defined edge cases and risks clearly. Expected `NaN`, permitted infinite values, extreme finite
+  values, and other consequences of a well-defined formula are not ambiguities and do not require requests for
+  alternative handling. Request clarification only when the definition itself is missing or contradictory.
 - Accept randomness effects from the configured computation. Do not manipulate results, select favorable runs,
   or introduce corrective procedures to suppress those effects.
-- Raise clear, descriptive errors for failed operations or invalid inputs. Leave related undefined metrics as
-  `NaN`; do not conceal failures through fallback calculations or replacement values.
+- Raise clear, descriptive errors for failed operations or invalid inputs. Preserve applicable failure provenance and
+  affected `None` values; do not conceal failures through fallback calculations or replacement values.
 - Keep all module code simple, clear, direct, and efficient. Avoid speculative abstractions, unnecessary computation,
   and special-case machinery. Improve performance while preserving the defined computation and output semantics.
 
@@ -380,9 +403,10 @@ constraints:
 - The worker process is a long-running execution service expected to operate continuously, potentially for months.
   Contain normal application-level failures at the smallest applicable scope: measure, report, influence sample,
   unit-task evaluation, or bounded operation. None of these failures implies worker-process failure or termination.
-- A measure failure leaves its affected values `NaN` or missing as defined, logs the error, and allows the remaining
-  evaluation to continue subject to actual dependencies. A unit-task evaluation failure produces its defined failure
-  outcome; the worker remains running and continues with subsequent work.
+- A measure failure leaves its affected values `None` with applicable failure references and allows the remaining
+  evaluation to continue subject to actual dependencies. Formula-defined undefined values remain `NaN` without a
+  failure solely because they are undefined. A unit-task evaluation failure produces its defined failure outcome;
+  the worker remains running and continues with subsequent work.
 - A worker failure specifically means that the worker process itself has become unavailable, for example through
   an unrecoverable process crash, machine shutdown, external termination, or comparable infrastructure/runtime failure.
   Restarting the worker is not normal task or operation error recovery. If the process actually stops, external
@@ -398,9 +422,18 @@ constraints:
   information, without evaluation reports. This is a complete task outcome for delivery and arbitration, not termination
   of the worker process.
 - After required baseline training succeeds, handle each report independently. A report failure must not invalidate successful reports or prevent other reports with available inputs from running. Ordinary report generation must not retrain the model to recover from an error.
-- Respect actual computational dependencies. If shared predictions or intermediate results fail, mark only the dependent results unavailable and continue computations whose prerequisites remain valid. Independence does not justify fabricating missing inputs or repeating failed operations.
-- Isolate influence analysis by training sample. If a sample-removal refit or influence calculation fails, leave the affected sample’s influence values `NaN`, record the failure, and continue with other samples. Preserve independently computable class-specific values where applicable. Failure of an influence refit is local to that removal evaluation; it does not constitute failure of the original baseline training or invalidate other reports.
-- For report-level and sample-level failures, preserve sample identifiers, class identities, and successfully computed results. Represent unavailable result values as `NaN` within the defined output structure, accompanied by failure information. The essential baseline-training failure rule is the exception: it produces failure information without evaluation reports.
+- Respect actual computational dependencies. If shared predictions or intermediate results fail, represent only the
+  dependent values as `None` with applicable failure references and continue computations whose prerequisites remain
+  valid. Independence does not justify fabricating missing inputs or repeating failed operations.
+- Isolate influence analysis by training sample. If a sample-removal refit or influence calculation fails, represent
+  the affected sample's unavailable influence values as `None`, record the failure, and continue with other samples.
+  Formula-defined undefined influence values remain `NaN`. Preserve independently computable class-specific values
+  where applicable. Failure of an influence refit is local to that removal evaluation; it does not constitute failure
+  of the original baseline training or invalidate other reports.
+- For report-level and sample-level failures, preserve sample identifiers, class identities, and successfully computed
+  results. Represent unavailable result values as `None` within the defined output structure, accompanied by applicable
+  failure information. The essential baseline-training failure rule is the exception: it produces failure information
+  without evaluation reports.
 - Record detailed, traceable failure logs containing the evaluation/model identifier, computational stage, report name, fold and sample/class identifiers where applicable, exception type, descriptive message, and traceback. Identify the originating error when dependent computations are skipped. Capture errors at the appropriate isolation boundary so they remain visible without terminating the worker process.
 - Keep failure handling simple, explicit, and proportional to the affected computation. Use clear boundaries and direct dependency checks; avoid speculative recovery mechanisms, cascading retries, and unnecessary recomputation.
 - When any configured retry limit is reached, stop retrying and fail only the operation governed by that limit, such

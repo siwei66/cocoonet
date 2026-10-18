@@ -843,8 +843,9 @@ or authorize implementing multiple production units.
 - After required baseline training succeeds, isolate report/measure failures and continue computations with valid
   prerequisites. Shared prediction failures affect only their dependent results. Ordinary reports do not retrain
   models to recover from errors; influence removal refits are part of their specified computation.
-- Preserve identifiers and successful values. Undefined/unavailable values remain `NaN` as defined, with failures
-  logged at their applicable scope. No application-level evaluation failure terminates the worker process.
+- Preserve identifiers and successful values. Formula-defined undefined values remain `NaN`; computationally
+  unavailable values are `None` with applicable failure references. No application-level evaluation failure
+  terminates the worker process.
 
 Section 9 defines failure and formula fidelity rules. Specify output ordering, concrete fold representation, and
 report aggregation conventions during the corresponding schema/report design using conventional metric definitions
@@ -936,8 +937,9 @@ The predictions used for this computation belong to the test samples; no predict
 itself is required. Test samples receive no influence score from a fold in which they are held out. In cross-validation,
 a sample can receive contributions from other folds in which it belongs to the training partition.
 
-Apply the formulas in Section 4.7 with the following requirements. Retain each sample's prediction-comparison count
-and evaluation status with its influence values; their field encoding belongs to the report schema.
+Apply the formulas in Section 4.7 with the following requirements. Retain each sample's exact integer
+prediction-comparison count, influence values, and applicable value-level failure references; their field encoding
+belongs to the Phase 9 report schema. Do not add a separate per-value evaluation-status field.
 
 - Reuse the exact validation training and test partitions. Within each fold, omit each training sample once, refit
   the configured model, and compare baseline and removal-model probabilities on that fold's unchanged test set.
@@ -948,14 +950,16 @@ and evaluation status with its influence values; their field encoding belongs to
 - Aggregate using the approved prediction-comparison count `M_i = sum_{f in F_i} |V_f|`, including comparisons whose
   prediction change is zero. Retain the count with the report. Only folds in which the sample is a training candidate
   contribute; samples that are exclusively held out have no influence result.
-- Leave undefined influence values as `NaN`, including undefined division at zero MSE. Leave small positive MSE and
-  the resulting defined values unchanged. Do not add epsilon, thresholds, clipping, imputation, or other adjustments.
-- If a missing class or a failed fit/prediction prevents evaluation, leave the affected influence values `NaN` and
-  raise a clear, descriptive error identifying the affected fold, sample, and class where applicable. Do not fabricate
-  missing probabilities, introduce fallback fits, skip undefined contributions, or shrink the divisor to obtain a
-  numeric result. Undefined contributions propagate as `NaN` in the affected aggregate. Catch and log removal-evaluation
-  errors at their sample/class boundary and continue other independent computations. Essential baseline-fit failure
-  instead stops the entire model evaluation and produces no evaluation reports, as specified in Section 9.2.
+- Leave mathematically undefined influence values as `NaN`, including undefined division at zero MSE. Leave small
+  positive MSE and the resulting defined values unchanged. Do not add epsilon, thresholds, clipping, imputation, or
+  other adjustments.
+- If a missing class or failed fit/prediction prevents evaluation, represent the affected computationally unavailable
+  influence values as `None` and record a clear failure identifying the fold, sample, and class where applicable.
+  Do not fabricate missing probabilities, introduce fallback fits, remove comparisons, or shrink the divisor to obtain
+  a numeric result. Formula-defined undefined contributions propagate as `NaN`; computationally unavailable
+  contributions propagate as `None` with their failure provenance. Isolate removal-evaluation errors at their
+  sample/class boundary and continue other independent computations. Essential baseline-fit failure instead stops the
+  entire model evaluation and produces no evaluation reports, as specified in Section 9.2.
 - Use the model's configured fitting and preprocessing procedure for baseline and removal fits. Accept any randomness
   influence from that procedure. Do not introduce extra seed coupling, repeated fits to select a preferred result,
   or post-computation adjustments to remove stochastic effects.
@@ -999,17 +1003,20 @@ fields alongside the report-schema implementation.
 
 For single-target regression, use the common sample information in Section 4.4 for each omitted training sample:
 internal `sample_id`, user-facing label, source references, and true target value. Associate one generalized Cook's
-distance-like influence value per sample using Section 4.7, accompanied by its prediction-comparison count and
-evaluation status. This measures the mean normalized change in held-out target
-predictions caused by removing that sample from eligible training partitions.
+distance-like influence value per sample using Section 4.7, accompanied by its exact integer prediction-comparison
+count and applicable value-level failure references. Do not add a separate per-value evaluation-status field. This
+measures the mean normalized change in held-out target predictions caused by removing that sample from eligible
+training partitions.
 
 Baseline MSE compares the fold's baseline target predictions with its true held-out targets. Both baseline and removal
 fits predict on the fixed test set; a prediction for the omitted training sample itself is not required. Test samples
 receive no influence metric from a fold in which they are held out. A sample may contribute through other folds where
 it is in training; a sample never in training has no influence metric, rather than an observed zero.
 
-Keep undefined contributions as `NaN`, preserve the comparison population, and isolate removal-evaluation failures
-under Section 9.2. Count/status field encoding belongs to the report schema; it does not change the approved formula.
+Keep formula-defined undefined contributions as `NaN`, preserve the comparison population, and isolate
+removal-evaluation failures under Section 9.2. Computationally unavailable contributions are `None` with applicable
+failure references. Count and failure-reference field encoding belongs to the Phase 9 report schema; it does not
+change the approved formula.
 
 ### 4.7 Optional generalized Cook's distance-like influence
 
@@ -1161,12 +1168,13 @@ change, even though the reported quantity remains a mean per prediction comparis
   zero MSE and an undefined normalized influence. This is an expected outcome of the defined measure.
 - **Small MSE:** Use small positive MSE as it is. Do not add epsilon, impose a floor, clip a large influence value,
   or otherwise change the formula to obtain a preferred numerical result.
-- **Missing classes and removal-evaluation failures:** If a missing class or failed removal fit/prediction makes a
-  contribution undefined, leave the related influence values `NaN` and raise a clear, explicit error identifying the
-  fold, training sample, and class where applicable. Catch and log it at that boundary, preserve independently
-  computable class values, and continue with other samples. Removing the only training example of a class must not
-  trigger invented probabilities, zero filling, or fallback fits. Essential baseline-fit failure instead follows the
-  task-wide failure rule in Section 9.2; it produces no evaluation reports.
+- **Missing classes and removal-evaluation failures:** If a missing class or failed removal fit/prediction prevents a
+  contribution from being computed, represent the affected influence values as `None` with applicable failure
+  references. Record a clear failure identifying the fold, training sample, and class where applicable. Preserve
+  independently computable class values and continue with other samples. Removing the only training example of a
+  class must not trigger invented probabilities, zero filling, fallback fits, or formula-defined `NaN` unless the
+  formula itself is mathematically undefined. Essential baseline-fit failure instead follows the task-wide failure
+  rule in Section 9.2; it produces no evaluation reports.
 - **Randomness:** Apply the configured training and preprocessing procedure directly, including its configured
   randomness settings. Accept randomness effects on predictions and influence values. Do not add corrective refits,
   select favorable runs, or adjust computed values to suppress those effects.
@@ -1381,10 +1389,10 @@ preserve the row/sample associations and readiness invariant.
 ### 6.2 One file per evaluation attempt
 
 A completed attempt produces one evaluation-result file containing all its reports, results, and failure information.
-Independent computational failures preserve successful results alongside unavailable/`NaN` values and logged errors.
-The file represents the complete attempt outcome, including partial computation failures; individual reports do not
-have separate network-transfer or persistence states. Essential baseline failure produces a failure-only file with
-status/error information and no evaluation reports.
+Independent computational failures preserve successful results alongside unavailable `None` values and logged errors;
+formula-defined undefined results remain `NaN`. The file represents the complete attempt outcome, including partial
+computation failures; individual reports do not have separate network-transfer or persistence states. Essential
+baseline failure produces a failure-only file with status/error information and no evaluation reports.
 
 Result files are expected to be small. Use asynchronous I/O to write received serialized files promptly to local
 storage. Bounded-memory streaming and backpressure are not required by the initial design. Never deserialize a report
@@ -1455,6 +1463,11 @@ the acknowledgement, pending-delivery, retry-limit, and restart rules above.
   outside the active receive event loop. Restrict model/result loading to their designated paths. Separately, the
   root loads its authoritative partition `dill` file through the designated dataset/partition preparation or recovery
   path, validating the dataset association before reuse.
+- Result payload serialization must preserve finite floats, permitted infinities, `NaN`, `None`, and their failure
+  references without collapsing `NaN` and `None`. Dill result payloads preserve their Python representations.
+  Human-readable report output renders finite values numerically and uses `Inf`, `-Inf`, `NaN`, and `NA`. A CSV report
+  exporter must write and decode these tokens explicitly rather than relying on library missing-value inference.
+  Any additional report format must define a representation that round-trips the same distinctions before support.
 - Require identical complete Cocoonet version identifiers for root and worker. Online workers check during the
   handshake before normal protocol operation, dataset synchronization, assignment, or model loading; local checking
   requires no network handshake. For example: `1.2.3` accepts `1.2.3` and rejects `1.2.4`.
@@ -1587,16 +1600,19 @@ The new computation lifecycle and local execution path do not alter the scientif
 The worker is a long-running execution service expected to operate continuously, potentially for months. Handle
 normal application-level failures at the smallest applicable scope, respecting actual computational dependencies:
 
-- **Measure/report:** Leave affected values unavailable or `NaN` as defined, log the failure, preserve successful
-  results and identifiers, and continue reports with valid inputs. Ordinary reports do not retrain a model to recover.
-- **Shared predictions/intermediates:** Mark only dependent results unavailable and identify the originating error
-  when dependent work is skipped. Independence does not authorize fabricated inputs or repetition of failed work.
+- **Measure/report:** Represent formula-defined undefined values as `NaN` and computationally unavailable values as
+  `None` with applicable failure references. Preserve successful results and identifiers, log the failure, and continue
+  reports with valid inputs. Ordinary reports do not retrain a model to recover.
+- **Shared predictions/intermediates:** Represent only dependent unavailable results as `None` and identify the
+  originating failure when dependent work is skipped. Independence does not authorize fabricated inputs or repetition
+  of failed work.
 - **Required reconstruction or baseline fit:** Failure that prevents baseline training, including any required fold's
   baseline-fit failure, stops the entire current model evaluation and influence analysis. Return a failure-only file
   without evaluation reports. Do not automatically retry that training or perform downstream recovery fits.
 - **Influence removal evaluation:** A sample-removal refit/calculation failure is local to that sample's affected
-  contribution. Keep its undefined values `NaN`, preserve independently computable class values, log the failure,
-  and continue other samples. It is not failure of the original baseline model or unrelated reports.
+  contribution. Represent computationally unavailable values as `None` with failure provenance, preserve
+  formula-defined `NaN` and independently computable class values, and continue other samples. It is not failure of
+  the original baseline model or unrelated reports.
 - **Bounded operation:** Exhausting a transfer, persistence, connection, or other configured retry limit fails only
   that operation. Stop retries and log its identity, limit, attempts made, and final error. Follow its defined scope's
   normal failure policy without additional recovery, fallback, recomputation, or special action solely for exhaustion.
@@ -1620,18 +1636,43 @@ the worker is not normal task/error recovery; external intervention may be neede
 Root restart reconciliation, a failed delivery, or local unavailability to another user does not mean worker-process
 failure. Always state the actor, object, lifecycle stage, and scope of failure or termination.
 
-### 9.3 Formula fidelity
+### 9.3 Formula fidelity and generated scientific values
 
 Implement metrics directly using their defined formulas, populations, and normalization. Standard metrics use
 established conventional definitions unless a project-specific variation is explicit; record detailed formulas/report
 conventions during relevant planning and implementation without reopening standard metrics solely for absent detail.
 Cocoonet-specific/recomposed measures require explicit definitions, including Section 4.7's influence calculation.
 
-Undefined metrics remain `NaN`; small denominators and the resulting defined values remain unchanged. Do not introduce
-epsilon, clipping, imputation, invented probabilities, fallback calculations, or NaN-skipping aggregation to obtain a
-preferred result. Report formula-defined edge cases and risks, including accepted randomness, without treating them
-as ambiguities or reasons to alter the computation. Seek clarification only for an actually missing custom definition
-or contradiction after accounting for scope and context. Keep module computations simple, clear, direct, and efficient.
+Generated scalar scientific measure values use these internal representations:
+
+| Condition | Internal Python representation | Value-level failure references | Human-readable output |
+| --- | --- | --- | --- |
+| Finite and mathematically defined | `float` | Empty | Numeric value |
+| Mathematically permitted positive infinity | `float("inf")` | Empty | `Inf` |
+| Mathematically permitted negative infinity | `float("-inf")` | Empty | `-Inf` |
+| Mathematically undefined | `float("nan")` | Empty | `NaN` |
+| Computationally unavailable | `None` | Nonempty | `NA` |
+| Explicitly non-applicable | `None` | Empty, only when permitted by the owning schema | `NA` |
+
+Do not add a parallel per-value status enum. Derive the condition from the value, owning schema, and value-level failure
+references. Exact identifiers, categorical labels, booleans, and integer counts retain their declared types. Generated
+categorical predictions use a present label without a value-level failure or `None` with applicable failure references.
+
+A required scientific value cannot be `None` without applicable failure provenance. A concrete schema may permit
+`None` without failures only for a non-applicable field. Formula-defined `NaN` does not acquire a failure solely because
+it is undefined. A computational exception or failed prerequisite produces `None` with failure provenance rather than
+`NaN`.
+
+Accept infinity only where the measure's documented mathematical definition permits an extended-real result.
+Prediction adapters require finite regression predictions and finite class probabilities. An invalid nonfinite model
+output or floating-point overflow where infinity is not mathematically permitted is computational unavailability and
+must be traced as a failure.
+
+Small denominators and the resulting defined values remain unchanged. Do not introduce epsilon, clipping, imputation,
+invented probabilities, fallback calculations, or NaN-skipping aggregation to obtain a preferred result. Report
+formula-defined edge cases and risks, including accepted randomness, without treating them as ambiguities or reasons
+to alter the computation. Seek clarification only for an actually missing custom definition or contradiction after
+accounting for scope and context. Keep module computations simple, clear, direct, and efficient.
 
 ## 10. Subsequent Design Boundaries
 
