@@ -6,11 +6,25 @@ Read `AGENTS.md` and `roadmap_phase_1.md`, and the corresponding part of `archit
 
 ---
 
-## Phase initial prompt schema:
+## Phase continuing prompt schema:
 
 ```text
 Approved. Implement these proposed changes directly. Do not make other change.
 After finishing, propose a standard one-line git commit message with scope.
+
+---
+
+Then continue with the next unit. Proposal only. The requirements are same.
+```
+
+Ignoring ruff error C901 break:
+
+```text
+Use a local `# noqa: C901` to ignore the C901 error found without changing the approved implementation. The ignorance must be local and limited to the found error of the corresponding function or method.
+
+---
+
+Complete proposing the standard one-line git commit message with scope for the implemented new unit.
 
 ---
 
