@@ -89,8 +89,8 @@ corresponding tests pass, and:
   executable model objects.
 - Scientific undefined values, computational failures, stopped work, failed delivery, acceptance, and worker-process
   availability remain independently observable.
-- A complete failure-only envelope and a complete envelope with partial report failures can both be represented;
-  neither implies delivery, acceptance, or worker termination.
+- A complete failure-only envelope and a complete envelope containing failed reports that preserve successful results
+  can both be represented; neither implies delivery, acceptance, or worker termination.
 - Compatibility is decided using plain metadata; supported differing Python versions do not cause rejection.
 - Component obligations are covered by record-level tests without fake workers, sockets, splitters, model execution,
   files, or simulated lifecycle engines.
@@ -469,7 +469,7 @@ Prediction invariants:
 
 | Record / enum | Fields / values |
 | --- | --- |
-| `ReportStatus` | `complete`, `partial`, `failed`, `blocked`, `not_requested` |
+| `ReportStatus` | `complete`, `failed`, `blocked`, `not_requested` |
 | `ReportOutcome[T]` | `name: ReportName`, `status: ReportStatus`, `payload: T | None`, `failure_ids: tuple[FailureId, ...]` |
 | `EvaluationOutcome` | `completed`, `completed_with_errors`, `baseline_failed` |
 | `AttemptResult[V, P, R, Z, I]` | `inputs: AttemptInputs`, `outcome: EvaluationOutcome`, `predictions: tuple[PredictionBatch, ...]`, `validation: ReportOutcome[V] | None`, `performance: ReportOutcome[P] | None`, `residual: ReportOutcome[R] | None`, `visualization: ReportOutcome[Z] | None`, `influence: ReportOutcome[I] | None`, `failures: tuple[FailureRecord, ...]` |
@@ -490,8 +490,9 @@ Report outcome rules:
 
 - `complete`: payload present, no operational failure references; formula-defined `NaN`, mathematically permitted
   infinities, and schema-defined non-applicable `None` values may still exist inside it.
-- `partial`: payload present with preserved successful/identified unavailable entries and nonempty failure references.
-- `failed`: nonempty failures; retain the identified result structure if available, otherwise payload may be absent.
+- `failed`: one or more computational failures and nonempty failure references. Preserve successful and identified
+  unavailable entries in the payload when available; otherwise the payload may be absent. Any report-level
+  computational failure uses this status—there is no separate partial status.
 - `blocked`: nonempty references to originating prerequisite failures; retain an unavailable result structure if
   available. Do not generate inputs or retrain to make a payload.
 - `not_requested`: no payload or failures; allowed only for unrequested optional influence in the attempt envelope.
@@ -508,7 +509,7 @@ Complete attempt rules:
   matches `influence_requested` (`not_requested` when false, a requested status otherwise). A failed requested report
   remains an outcome record. Predictions contain one batch for each schedule fold in schedule order, including
   unavailable `None` entries with failure references when prediction generation failed.
-- `completed` has no failures and no partial/failed/blocked report or unavailable prediction. Formula-defined `NaN`,
+- `completed` has no failures and no failed/blocked report or unavailable prediction. Formula-defined `NaN`,
   permitted infinities, and non-applicable `None` values alone do not turn it into `completed_with_errors`.
 - `completed_with_errors` has at least one applicable computational failure and at least one affected report or
   prediction. Required baseline failure cannot be downgraded into this category.
@@ -531,8 +532,8 @@ Complete attempt rules:
 | --- | --- | --- |
 | `validate_regression_predictions(value: RegressionPredictions, *, fold: FoldRecord) -> None` | Validate sample alignment, vector lengths, finite present values, and value/failure-reference relationships. | Reordered/unknown/excluded IDs; length mismatch; finite value without failure; `None` with failure; reject `None` without failure, present value with failure, `NaN`, infinity, bool, and wrong numeric type; empty test set; no input changes. |
 | `validate_classification_predictions(value: ClassificationPredictions, *, fold: FoldRecord, class_labels: tuple[ScalarLabel, ...]) -> None` | Validate class/sample alignment, matrix shapes, label membership, finite probabilities, and value/failure-reference relationships. | Swapped classes; ragged matrices; missing/unknown labels; independently unavailable label/class cells; reject `None` without failure, present value with failure, `NaN`, infinity, bool, and out-of-range probability; no probability filling/reordering. |
-| `validate_report_outcome[T](value: ReportOutcome[T]) -> None` | Validate generic outcome name/status/payload/failure relationship only. | Every report status; complete immutable payload containing `NaN`, permitted infinity, or schema-defined `None`; failed/blocked with preserved structure; empty failure references rejected where required. |
-| `validate_attempt_result[V, P, R, Z, I](value: AttemptResult[V, P, R, Z, I], *, parent: ParentEvaluation, schedule: PartitionSchedule) -> None` | Compose prior validators; require `parent.partition == schedule.reference`; validate all remaining contextual links and complete/failure-only result rules. | Regression/classification completion; mismatched parent/schedule partition or dataset identity; baseline failure without reports; reject leaked reports; optional influence; partial prediction/report failures; undefined-only completion; permitted-infinity/non-applicable completion; wrong attempt/fold/class; dangling errors; non-computational failure scopes excluded. |
+| `validate_report_outcome[T](value: ReportOutcome[T]) -> None` | Validate generic outcome name/status/payload/failure relationship only. | Every report status; complete immutable payload containing `NaN`, permitted infinity, or schema-defined `None`; failed with preserved or absent payload; blocked with preserved structure; empty failure references rejected where required. |
+| `validate_attempt_result[V, P, R, Z, I](value: AttemptResult[V, P, R, Z, I], *, parent: ParentEvaluation, schedule: PartitionSchedule) -> None` | Compose prior validators; require `parent.partition == schedule.reference`; validate all remaining contextual links and complete/failure-only result rules. | Regression/classification completion; mismatched parent/schedule partition or dataset identity; baseline failure without reports; reject leaked reports; optional influence; unavailable predictions and failed reports with preserved results; undefined-only completion; permitted-infinity/non-applicable completion; wrong attempt/fold/class; dangling errors; non-computational failure scopes excluded. |
 
 The type-parameter notation above uses Python 3.12 generic syntax. Declaration and validator units remain separate;
 the notation does not authorize bundling helpers with their caller.

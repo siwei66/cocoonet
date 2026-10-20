@@ -1390,9 +1390,11 @@ preserve the row/sample associations and readiness invariant.
 
 A completed attempt produces one evaluation-result file containing all its reports, results, and failure information.
 Independent computational failures preserve successful results alongside unavailable `None` values and logged errors;
-formula-defined undefined results remain `NaN`. The file represents the complete attempt outcome, including partial
-computation failures; individual reports do not have separate network-transfer or persistence states. Essential
-baseline failure produces a failure-only file with status/error information and no evaluation reports.
+formula-defined undefined results remain `NaN`. A report with any computational failure has report status `failed`,
+even when its payload preserves successful or identified unavailable results; there is no separate partial-report
+status. The file represents the complete attempt outcome, including failed reports that retain usable results;
+individual reports do not have separate network-transfer or persistence states. Essential baseline failure produces
+a failure-only file with status/error information and no evaluation reports.
 
 Result files are expected to be small. Use asynchronous I/O to write received serialized files promptly to local
 storage. Bounded-memory streaming and backpressure are not required by the initial design. Never deserialize a report

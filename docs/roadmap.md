@@ -71,6 +71,8 @@ Compatibility metadata must be readable without loading executable model or repo
 
 Establish the logical state needed for configuration consolidation, worker readiness/availability, immutable attempt
 inputs, stop disposition, report status, result selection, durable acceptance, and bounded-operation progress.
+Any report containing a computational failure has `failed` report status, even when successful results remain in its
+payload; no separate partial-report status is used.
 Define standardized prediction/class alignment and the single-attempt result envelope, including the failure-only
 outcome, before their producers and consumers. Distinguish formula-defined `NaN`, unavailable `None` with failure
 references, and schema-defined non-applicable `None` without introducing a parallel per-value status enum. Define trace
@@ -360,9 +362,10 @@ report processing and provenance. Evaluation components remain separate from per
 existing file and does not reconstruct evaluation results. Keep persistence failures at their bounded-operation scope
 and the long-running worker alive.
 
-Before proceeding, normal, partial-report-failure, and baseline-failure outcomes must be publishable and distinguishable
-from incomplete writes. No report gets an independent delivery lifecycle. File construction must be stable before
-local acceptance, bounded resends, or networking; do not add streaming/backpressure machinery for these small files.
+Before proceeding, normal outcomes, failed reports with preserved results, and baseline-failure outcomes must be
+publishable and distinguishable from incomplete writes. No report gets an independent delivery lifecycle. File
+construction must be stable before local acceptance, bounded resends, or networking; do not add
+streaming/backpressure machinery for these small files.
 
 ### 13. Local coordinator, worker control, and result acceptance
 
