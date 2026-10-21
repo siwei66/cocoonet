@@ -720,9 +720,11 @@ Fold computations and sample-removal evaluations remain internal to an execution
 come from the shared parent schedule. Fold results retain their producing attempt context and their association with
 the corresponding parent-defined fold and training/test sample identities. A completed attempt produces one result
 file associated with its unit task and producing attempt; at most one result is accepted per unit task under Section 5.
-The existing one-model worker-task and logical-task lifecycle rules apply to unit tasks in this hierarchy. In
-particular, baseline-training failure ends that unit task's current evaluation, not automatically the entire parent
-model evaluation task or the worker process.
+The existing one-model worker-task and logical-task lifecycle rules apply to unit tasks in this hierarchy. Initial
+reconstruction failure ends that unit task's current attempt before primary validation. After successful
+reconstruction, failure of any primary-fold model initialization, fit, or prediction produces a
+`validation_failed` attempt while later independent folds continue where possible. Neither outcome automatically
+fails the parent task or worker process.
 
 ### 3.5 Dataset source files and fold references
 
@@ -797,7 +799,9 @@ selected for reception by the root. Optional sample influence analysis belongs t
 A fold, a held-out sample, or an individual influence refit is not a separate distributed task in the initial design.
 One completed attempt produces one evaluation-result file, including its failure information. Duplicate attempts belong
 to the same logical task, with at most one accepted result under Section 5.2. Delivery retries resend the existing file;
-they do not rerun the evaluation. Essential baseline-training failure produces a failure-only file without reports.
+they do not rerun the evaluation. Initial model reconstruction failure produces a `reconstruction_failed` failure-only
+file without predictions or reports. Primary-validation failure produces a complete `validation_failed` file containing
+preserved fold results, unavailable predictions, dependent failed or blocked reports, and failure provenance.
 
 ### 4.2 Worker inputs
 
@@ -838,11 +842,16 @@ or authorize implementing multiple production units.
   predictions for testing-excluded rows. Training memberships obey `train_mask`. Fitted training predictions cannot
   substitute for held-out validation predictions.
 
-- If required reconstruction or any baseline fit fails, stop the entire current model evaluation, including influence
-  analysis, and produce the failure-only outcome. Do not return evaluation reports or retry the failed training.
-- After required baseline training succeeds, isolate report/measure failures and continue computations with valid
-  prerequisites. Shared prediction failures affect only their dependent results. Ordinary reports do not retrain
-  models to recover from errors; influence removal refits are part of their specified computation.
+- Reconstruct the initial model and its reproducible construction state before primary validation. For each fold,
+  create a fresh untrained model, fit it on that fold's training population, predict its testing population, retain
+  the aligned results and provenance, and release the fitted fold model. Learned state must not pass between folds.
+- Initial reconstruction failure produces `reconstruction_failed` and prevents every scientific branch from
+  starting. After successful reconstruction, failure of fold-model initialization, fitting, or prediction in any
+  primary fold produces `validation_failed`. Preserve completed folds and continue later independent folds when the
+  model-construction mechanism remains usable; do not retry failed folds.
+- Primary validation must succeed without fold failures before ordinary reports and optional influence analysis begin.
+  Ordinary reports and influence may then run independently or concurrently. A failure in either branch does not stop
+  another branch whose prerequisites remain valid.
 - Preserve identifiers and successful values. Formula-defined undefined values remain `NaN`; computationally
   unavailable values are `None` with applicable failure references. No application-level evaluation failure
   terminates the worker process.
@@ -958,8 +967,8 @@ belongs to the Phase 9 report schema. Do not add a separate per-value evaluation
   Do not fabricate missing probabilities, introduce fallback fits, remove comparisons, or shrink the divisor to obtain
   a numeric result. Formula-defined undefined contributions propagate as `NaN`; computationally unavailable
   contributions propagate as `None` with their failure provenance. Isolate removal-evaluation errors at their
-  sample/class boundary and continue other independent computations. Essential baseline-fit failure instead stops the
-  entire model evaluation and produces no evaluation reports, as specified in Section 9.2.
+  sample/class boundary and continue other independent computations. Initial reconstruction or primary-validation
+  failure prevents influence analysis, as specified in Section 9.2.
 - Use the model's configured fitting and preprocessing procedure for baseline and removal fits. Accept any randomness
   influence from that procedure. Do not introduce extra seed coupling, repeated fits to select a preferred result,
   or post-computation adjustments to remove stochastic effects.
@@ -1046,10 +1055,14 @@ strategy, and these refits remain internal to the complete worker task for one m
 
 #### Computation steps
 
-This computation uses the validation baseline fits and predictions. If a required baseline fit fails, stop the whole
-model evaluation and return its failure-only outcome, including no influence report. A removal refit or calculation
-failure is local to the affected sample/class contribution and is caught and logged without stopping other independent
-work or the worker process. Shared prediction failures affect only their dependent results; see Section 9.2.
+This computation requires the complete stored predictions from successful primary validation. It uses those predictions
+and their fold-specific baseline MSE as the fixed comparison baseline. Influence analysis may run independently or
+concurrently with ordinary reports after primary validation, but it cannot begin when primary validation is
+`validation_failed`; a requested influence report is then `blocked`.
+
+For each eligible training sample, removal-model initialization, fitting, prediction, and influence calculation form
+the sample's influence evaluation. A failure is local to the affected sample, fold, and class contribution. Preserve
+successful contributions and continue independent removal evaluations without stopping the worker process.
 
 1. Reuse the exact model validation splits and their training and test sample identities.
 2. Use the baseline fit on each fold's full training partition and its held-out predictions from model validation.
@@ -1173,8 +1186,9 @@ change, even though the reported quantity remains a mean per prediction comparis
   references. Record a clear failure identifying the fold, training sample, and class where applicable. Preserve
   independently computable class values and continue with other samples. Removing the only training example of a
   class must not trigger invented probabilities, zero filling, fallback fits, or formula-defined `NaN` unless the
-  formula itself is mathematically undefined. Essential baseline-fit failure instead follows the task-wide failure
-  rule in Section 9.2; it produces no evaluation reports.
+  formula itself is mathematically undefined. A failed primary validation prevents influence analysis because the
+  complete stored comparison baseline is unavailable. A removal-evaluation failure after successful primary validation
+  remains local to the influence report and does not invalidate ordinary reports.
 - **Randomness:** Apply the configured training and preprocessing procedure directly, including its configured
   randomness settings. Accept randomness effects on predictions and influence values. Do not add corrective refits,
   select favorable runs, or adjust computed values to suppress those effects.
@@ -1228,7 +1242,8 @@ root selection and persistence boundary; neither topology receives a separate ac
   the resend process and are not delivery failures. Failure of the selected transfer/persistence operation does not
   promote a later duplicate result; apply the bounded retry rules in Section 6.3.
 - Duplicate execution reduces latency, not recovery from computation failure. Do not automatically retry/reallocate
-  a terminal baseline-training failure or start another duplicate while an existing completed result awaits delivery.
+  a terminal reconstruction or primary-validation failure or start another duplicate while an existing completed
+  result awaits delivery.
 
 Specify attempt identifiers, stop messages, and cancellation acknowledgements later without changing these scopes
 or moving duplicate cancellation ahead of successful result acceptance.
@@ -1393,8 +1408,11 @@ Independent computational failures preserve successful results alongside unavail
 formula-defined undefined results remain `NaN`. A report with any computational failure has report status `failed`,
 even when its payload preserves successful or identified unavailable results; there is no separate partial-report
 status. The file represents the complete attempt outcome, including failed reports that retain usable results;
-individual reports do not have separate network-transfer or persistence states. Essential baseline failure produces
-a failure-only file with status/error information and no evaluation reports.
+individual reports do not have separate network-transfer or persistence states. Initial reconstruction failure
+produces a `reconstruction_failed` failure-only file without predictions or reports. Primary-validation failure
+produces a `validation_failed` file containing preserved primary-fold results, failed or blocked dependent reports,
+and complete failure provenance. Report or influence failures after successful primary validation produce
+`completed_with_errors`.
 
 Result files are expected to be small. Use asynchronous I/O to write received serialized files promptly to local
 storage. Bounded-memory streaming and backpressure are not required by the initial design. Never deserialize a report
@@ -1596,7 +1614,8 @@ in the relevant design; distinguish operation, task, result, and worker-process 
 ### 9.2 Failure scope and worker lifetime
 
 Configuration/startup failures precede scientific evaluation. Missing execution targets or other start prerequisites
-must not be reported as baseline-training failure, report failure, influence failure, or worker-process failure.
+must not be reported as model-reconstruction or primary-validation failure, report failure, influence failure, or
+worker-process failure.
 The new computation lifecycle and local execution path do not alter the scientific failure-isolation rules below.
 
 The worker is a long-running execution service expected to operate continuously, potentially for months. Handle
@@ -1608,13 +1627,16 @@ normal application-level failures at the smallest applicable scope, respecting a
 - **Shared predictions/intermediates:** Represent only dependent unavailable results as `None` and identify the
   originating failure when dependent work is skipped. Independence does not authorize fabricated inputs or repetition
   of failed work.
-- **Required reconstruction or baseline fit:** Failure that prevents baseline training, including any required fold's
-  baseline-fit failure, stops the entire current model evaluation and influence analysis. Return a failure-only file
-  without evaluation reports. Do not automatically retry that training or perform downstream recovery fits.
-- **Influence removal evaluation:** A sample-removal refit/calculation failure is local to that sample's affected
-  contribution. Represent computationally unavailable values as `None` with failure provenance, preserve
-  formula-defined `NaN` and independently computable class values, and continue other samples. It is not failure of
-  the original baseline model or unrelated reports.
+- **Initial reconstruction:** Failure prevents primary validation and every report branch from starting. Return a
+  `reconstruction_failed` failure-only file without predictions or reports. Do not automatically retry reconstruction.
+- **Primary validation:** After successful reconstruction, failure to initialize, fit, or predict any primary fold
+  produces `validation_failed`. Preserve completed folds and unavailable predictions with failure provenance, continue
+  later independent folds where possible, and do not retry the failed fold. Dependent reports are failed or blocked.
+- **Influence analysis:** Influence requires complete successful primary-validation predictions but is independent
+  from ordinary report computation afterward. A removal-model initialization, fit, prediction, or calculation failure
+  is local to the affected sample, fold, and class contribution. Preserve independently computed influence values,
+  continue other removal evaluations, mark the influence report `failed`, and use `completed_with_errors` when primary
+  validation otherwise succeeded.
 - **Bounded operation:** Exhausting a transfer, persistence, connection, or other configured retry limit fails only
   that operation. Stop retries and log its identity, limit, attempts made, and final error. Follow its defined scope's
   normal failure policy without additional recovery, fallback, recomputation, or special action solely for exhaustion.

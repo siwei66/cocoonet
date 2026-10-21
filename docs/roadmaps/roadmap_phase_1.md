@@ -341,9 +341,11 @@ searches or caches. Runtime label comparisons follow Section 3.2. No identity ge
 
 `ReportName` is the shared enum `validation`, `performance`, `residual`, `visualization`, `influence`; place it in
 `identity.py` to avoid a failure/result import cycle. Stage names are descriptive nonempty strings rather than a
-premature exhaustive enum of future algorithms. Reconstruction, baseline fitting, and prediction use
-`fit_prediction` scope with distinct stages such as `reconstruction`, `baseline_fit`, and `prediction`. The stage and
-attempt outcome distinguish a required reconstruction or baseline-fit failure from an isolated prediction failure.
+premature exhaustive enum of future algorithms. Initial reconstruction and primary-fold model initialization, fitting,
+and prediction use `fit_prediction` scope with distinct stages such as `reconstruction`, `fold_initialization`, `fit`,
+and `prediction`. `reconstruction_failed` identifies failure before primary validation begins. After successful
+reconstruction, any primary-fold initialization, fit, or prediction failure produces `validation_failed`. Influence
+removal-model failures use `sample_influence` scope and do not produce another attempt-level outcome.
 Configuration and startup errors are reported directly through the root-side API and are not represented by
 `FailureScope` or `FailureRecord`.
 
@@ -471,7 +473,7 @@ Prediction invariants:
 | --- | --- |
 | `ReportStatus` | `complete`, `failed`, `blocked`, `not_requested` |
 | `ReportOutcome[T]` | `name: ReportName`, `status: ReportStatus`, `payload: T | None`, `failure_ids: tuple[FailureId, ...]` |
-| `EvaluationOutcome` | `completed`, `completed_with_errors`, `baseline_failed` |
+| `EvaluationOutcome` | `completed`, `completed_with_errors`, `validation_failed`, `reconstruction_failed` |
 | `AttemptResult[V, P, R, Z, I]` | `inputs: AttemptInputs`, `outcome: EvaluationOutcome`, `predictions: tuple[PredictionBatch, ...]`, `validation: ReportOutcome[V] | None`, `performance: ReportOutcome[P] | None`, `residual: ReportOutcome[R] | None`, `visualization: ReportOutcome[Z] | None`, `influence: ReportOutcome[I] | None`, `failures: tuple[FailureRecord, ...]` |
 
 Generic type parameters reserve concrete report-data contracts for their producing phases without `Any`, an open
@@ -501,18 +503,28 @@ Report outcome rules:
 
 Complete attempt rules:
 
-- `baseline_failed` covers essential reconstruction or any required baseline-fit failure. All report fields are
-  `None`, predictions are empty, and there is a `fit_prediction` failure with stage `reconstruction` or
-  `baseline_fit`. This is a complete failure-only outcome eligible for the same later reception/acceptance process
-  as success.
-- For either completed outcome, the four required report fields exist with matching names; influence exists and
-  matches `influence_requested` (`not_requested` when false, a requested status otherwise). A failed requested report
-  remains an outcome record. Predictions contain one batch for each schedule fold in schedule order, including
-  unavailable `None` entries with failure references when prediction generation failed.
-- `completed` has no failures and no failed/blocked report or unavailable prediction. Formula-defined `NaN`,
-  permitted infinities, and non-applicable `None` values alone do not turn it into `completed_with_errors`.
-- `completed_with_errors` has at least one applicable computational failure and at least one affected report or
-  prediction. Required baseline failure cannot be downgraded into this category.
+- `reconstruction_failed` means initial model reconstruction failed before primary validation began. Predictions are
+  empty, all report fields are `None`, and the envelope contains a `fit_prediction` failure with stage
+  `reconstruction`. This is the only failure-only scientific outcome.
+- `validation_failed` means reconstruction succeeded but at least one primary fold-model initialization, fit, or
+  prediction failed. Preserve one prediction batch per schedule fold in schedule order; unavailable predictions in a
+  failed fold are `None` with applicable failure references. Continue later independent folds where possible.
+- A `validation_failed` envelope contains a failed validation report preserving available fold content. Performance,
+  residual, and visualization reports are failed when they retain affected content or blocked when their prerequisites
+  are unavailable. Requested influence is blocked because complete primary baseline predictions are unavailable;
+  unrequested influence remains `not_requested`.
+- `completed` means primary validation and every requested report completed without computational failure. It has no
+  failed or blocked report and no unavailable prediction. Formula-defined `NaN`, permitted infinity, and
+  schema-defined non-applicable `None` do not change this outcome.
+- `completed_with_errors` requires completely successful primary validation and at least one failed or blocked ordinary
+  or requested influence report. Preserve successful reports and successful values within failed reports.
+- Optional influence uses stored successful primary-validation predictions as its fixed baseline. A removal-model
+  initialization, fit, prediction, or calculation failure marks the influence report failed, preserves independent
+  sample/class results, and contributes to `completed_with_errors`. No separate influence attempt outcome or
+  influence evaluation-status field exists.
+- Outcome precedence is `reconstruction_failed`, then `validation_failed`, then `completed_with_errors`, then
+  `completed`. This precedence summarizes the required-stage result without replacing individual report statuses or
+  failure records.
 - The supplied schedule's partition and dataset IDs must exactly match the parent's binding. Failure-only outcomes
   obey this association too. The prediction subtype must match the parent's task kind.
 - Failures and all fold/sample/class contexts resolve against the same parent, attempt, schedule, and class vocabulary.
@@ -521,8 +533,8 @@ Complete attempt rules:
   The envelope's failure list describes scientific computation, not later data preparation, data synchronization,
   worker management, result transfer, result persistence, configuration, startup, or worker-process incidents.
   Those failures remain at their owning boundaries.
-- Interruption/cancellation is not a fabricated baseline failure or complete result. A stopped attempt is represented
-  by Section 7's state; this phase does not define a new cancelled-result file.
+- Interruption/cancellation is not a fabricated reconstruction or primary-validation failure or complete result. A
+  stopped attempt is represented by Section 7's state; this phase does not define a new cancelled-result file.
 - One envelope describes one attempt; result files, dill bytes, completion publication, report loading, and user-facing
   rendering are later component responsibilities. At most one accepted result per unit is a separate root invariant.
 
@@ -533,7 +545,7 @@ Complete attempt rules:
 | `validate_regression_predictions(value: RegressionPredictions, *, fold: FoldRecord) -> None` | Validate sample alignment, vector lengths, finite present values, and value/failure-reference relationships. | Reordered/unknown/excluded IDs; length mismatch; finite value without failure; `None` with failure; reject `None` without failure, present value with failure, `NaN`, infinity, bool, and wrong numeric type; empty test set; no input changes. |
 | `validate_classification_predictions(value: ClassificationPredictions, *, fold: FoldRecord, class_labels: tuple[ScalarLabel, ...]) -> None` | Validate class/sample alignment, matrix shapes, label membership, finite probabilities, and value/failure-reference relationships. | Swapped classes; ragged matrices; missing/unknown labels; independently unavailable label/class cells; reject `None` without failure, present value with failure, `NaN`, infinity, bool, and out-of-range probability; no probability filling/reordering. |
 | `validate_report_outcome[T](value: ReportOutcome[T]) -> None` | Validate generic outcome name/status/payload/failure relationship only. | Every report status; complete immutable payload containing `NaN`, permitted infinity, or schema-defined `None`; failed with preserved or absent payload; blocked with preserved structure; empty failure references rejected where required. |
-| `validate_attempt_result[V, P, R, Z, I](value: AttemptResult[V, P, R, Z, I], *, parent: ParentEvaluation, schedule: PartitionSchedule) -> None` | Compose prior validators; require `parent.partition == schedule.reference`; validate all remaining contextual links and complete/failure-only result rules. | Regression/classification completion; mismatched parent/schedule partition or dataset identity; baseline failure without reports; reject leaked reports; optional influence; unavailable predictions and failed reports with preserved results; undefined-only completion; permitted-infinity/non-applicable completion; wrong attempt/fold/class; dangling errors; non-computational failure scopes excluded. |
+| `validate_attempt_result[V, P, R, Z, I](value: AttemptResult[V, P, R, Z, I], *, parent: ParentEvaluation, schedule: PartitionSchedule) -> None` | Compose prior validators; require `parent.partition == schedule.reference`; validate all remaining contextual links and complete result rules. | Completed regression/classification; reconstruction failure without predictions or reports; validation fit/prediction failure with preserved folds and failed/blocked dependent reports; remaining-fold continuation; influence blocked by validation failure; successful primary validation with failed influence or ordinary report; optional influence not requested; undefined-only completion; mismatched parent/schedule, attempt/fold/class, dangling failures, and excluded non-computational failure scopes. |
 
 The type-parameter notation above uses Python 3.12 generic syntax. Declaration and validator units remain separate;
 the notation does not authorize bundling helpers with their caller.
@@ -700,7 +712,7 @@ method signatures, IPC, or messages. Later component implementations call the ap
 | Worker control/readiness | Applicable local/online parent context, owned worker | `WorkerObservation`, `AttemptProgress`; no model execution in the coordinator or control path. | 5, 13–17 |
 | Model initialization/execution | Resolved fixed model input and framework-supplied sample data | Aligned standardized predictions or scoped failures; executable loading only inside enforced worker boundary. | 5–7, 10 |
 | Validation/report components | Saved schedule, sample metadata, aligned predictions and valid prerequisites | Typed report payloads and `ReportOutcome`; preserve labels/classes, finite values, permitted infinities, `NaN`, `None`, and failures without redundant value statuses or independent file persistence. | 7–10 |
-| Attempt workflow/packaging | Report outcomes and computational failure records for one attempt | `AttemptResult`; one complete file later, or failure-only baseline outcome. No report-specific delivery state. | 7–12 |
+| Attempt workflow/packaging | Report outcomes and computational failure records for one attempt | `AttemptResult`; one complete file later, with a failure-only reconstruction outcome or a validation-failure envelope that preserves completed fold results. No report-specific delivery state. | 7–12 |
 | Worker report persistence | Complete result envelope | Published worker artifact resolved by `ArtifactId`; preserve attempt identity. | 2, 12 |
 | Root reception/persistence | Selected existing artifact and its unit/attempt identity | Durable selection/result evidence and acceptance/acknowledgement after complete persistence. No active-loop report loading. | 2, 13–18 |
 | Delivery | Selected existing completed result, operation progress | Updated bounded-operation observations; resends never reconstruct/recompute results. | 14, 17 |

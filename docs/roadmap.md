@@ -223,24 +223,25 @@ No report generation, complete unit-task scheduling, or model-training recovery 
 
 ### 7. Baseline fold evaluation and validation results
 
-Use Phase 4's saved memberships and Phase 6's execution adapters to build the baseline stage of a complete
-one-model attempt. Establish framework-managed local dataset/model readiness and consume the fixed parent context;
-workers validate references but never split, shuffle, or alter memberships.
+Use Phase 4's saved memberships and Phase 6's execution adapters to implement initial model reconstruction followed by
+primary validation for one model attempt. Successful reconstruction establishes the pristine model-construction state.
+For every fold, create a fresh untrained fold model, fit it on that fold's training population, predict its held-out
+population, retain the aligned predictions and provenance, and release the fitted fold model. Learned state must not
+pass between folds.
 
-Run every required baseline fold fit and held-out prediction. Produce common fold/sample records, separate train/test
-source-file references rather than returned feature arrays, true/predicted targets or class labels, and class-aligned
-probabilities. Validation covers the specified testing populations, including mask exclusions. Retain baseline
-predictions and inputs required by reports
-and influence so neither requires recovery fits or redundant baseline training.
+Produce common fold/sample records, separate train/test source-file references rather than returned feature arrays,
+true and predicted targets or class labels, and class-aligned probabilities. Validation covers the configured testing
+populations, including mask exclusions. Retain the completed primary predictions required by ordinary reports and
+optional influence analysis.
 
-Required reconstruction or any baseline-fit failure stops the entire current unit evaluation and suppresses evaluation
-reports, producing the failure-only outcome for later packaging. Prediction/shared-intermediate failures represent only
-dependent values as `None` with applicable failure references. Preserve successful independent computations and trace
-the originating error.
+Initial reconstruction failure produces `reconstruction_failed` and prevents primary validation. After successful
+reconstruction, failure to initialize, fit, or predict any primary fold produces `validation_failed`. Preserve
+successful folds and continue later independent folds where possible; do not retry failed folds. The validation report
+is failed, and dependent reports are failed or blocked according to their available prerequisites.
 
-Before proceeding, validation outputs, baseline/shared-intermediate failure boundaries, and complete required-fit
-status must be stable. This is a workflow stage, not a separately distributed fold task. Ordinary metrics, influence,
-packaging/delivery, and coordinator execution remain later capabilities.
+Before proceeding, reconstruction output, fresh fold-model state, primary-validation alignment, failure provenance,
+and the `reconstruction_failed`/`validation_failed` boundaries must be stable. This remains one worker attempt rather
+than separately distributed fold tasks.
 
 ### 8. Ordinary reports and visualization data
 
@@ -274,10 +275,14 @@ must need no model-specific orchestration. Rendered plots, influence, and result
 
 ### 9. Optional sample influence
 
-Add influence as an internal stage of the same complete attempt, using the baseline data and report/failure contracts
-from Phases 7–8. Reuse the exact parent validation schedule. Omit each eligible training sample once per fold, refit,
-and compare predictions on that fold's unchanged test set. Held-out samples receive no removal evaluation or invented
-zero for that fold; no prediction of the omitted sample itself is required.
+Add influence as an optional branch of the same complete attempt after successful primary validation. Reuse the exact
+parent schedule and the stored primary-validation predictions as the fixed baseline. Influence may run independently
+or concurrently with ordinary report generation, but a failed primary validation blocks requested influence analysis.
+
+For each eligible training sample and each fold where it belongs to the training population, create a fresh removal
+model, fit without that sample, predict the unchanged held-out population, compare those predictions with the stored
+primary predictions, compute the defined influence contribution, and release the fitted removal model. Do not perform
+a removal evaluation in folds where the sample is held out.
 
 Implement architecture Section 4.7 exactly: baseline held-out MSE against truth, actual input predictor count `p`,
 class-specific probability influence or single-target regression influence, and aggregation divided by
@@ -286,8 +291,10 @@ applicable value-level failure references, and propagate formula-defined undefin
 aggregation. Do not add a separate influence evaluation-status field or replace the divisor with fold count or
 training size. Define the minimal concrete influence payload in Phase 9.
 
-Contain removal-refit/calculation failures at the sample/class boundary, preserve independently computable class
-values, and continue independent samples. Baseline-fit failure still suppresses the entire unit's evaluation reports.
+Contain removal-model initialization, fit, prediction, and calculation failures at the sample/fold/class boundary.
+Preserve independently computable values and continue other removal evaluations. Any such computational failure marks
+the influence report `failed`; when primary validation succeeded, it contributes to `completed_with_errors`. Do not
+add a separate influence evaluation-status field.
 Accept configured fitting randomness without extra coupling or corrective runs.
 
 Before proceeding, influence meaning, populations, alignment, failure scope, and integration with ordinary reports
@@ -355,16 +362,21 @@ Once evaluation producers and Phase 11 resource control are stable, complete wor
 packaging using Phase 2. Construct exactly one standardized dill result file per completed execution attempt,
 containing its reports, successful values, formula-defined `NaN`, permitted infinities, non-applicable or unavailable
 `None`, and traceable failures. Preserve value-level failure associations without storing redundant value-status
-vectors. Required baseline failure instead creates the complete failure-only file without evaluation reports.
+vectors.
+
+Initial reconstruction failure produces a complete `reconstruction_failed` failure-only file without predictions or
+reports. Primary-validation failure produces a complete `validation_failed` file containing preserved fold results,
+unavailable predictions, dependent failed or blocked reports, and failure provenance. Successful primary validation
+with one or more ordinary-report or influence failures produces `completed_with_errors`.
 
 Preserve parent/unit/attempt associations, model identity, fold/sample/class alignment, and the context needed for root
 report processing and provenance. Evaluation components remain separate from persistence; delivery receives a completed
 existing file and does not reconstruct evaluation results. Keep persistence failures at their bounded-operation scope
 and the long-running worker alive.
 
-Before proceeding, normal outcomes, failed reports with preserved results, and baseline-failure outcomes must be
-publishable and distinguishable from incomplete writes. No report gets an independent delivery lifecycle. File
-construction must be stable before local acceptance, bounded resends, or networking; do not add
+Before proceeding, `completed`, `completed_with_errors`, `validation_failed`, and `reconstruction_failed` outcomes
+must be publishable and distinguishable from incomplete writes. No report receives an independent delivery lifecycle.
+File construction must be stable before local acceptance, bounded resends, or networking; do not add
 streaming/backpressure machinery for these small files.
 
 ### 13. Local coordinator, worker control, and result acceptance
@@ -491,7 +503,8 @@ allocating while units and eligible workers remain. Do not give local/online res
 
 Introduce duplicate scheduling only when no unallocated units remain, every remaining unit is finished or assigned,
 and a worker would otherwise be idle. Choose an unfinished currently running unit, oldest by its first execution start.
-A completed outcome awaiting delivery is not a reason to launch a duplicate; terminal baseline failure is not retried.
+A completed outcome awaiting delivery is not a reason to launch a duplicate; terminal reconstruction or
+primary-validation failure is not retried.
 
 Exercise receiving-order selection, serialized reception per unit, and at-most-one durable acceptance across attempts.
 An earlier failure outcome can win over later success. Selection or transfer failure cannot promote another result.
