@@ -405,6 +405,31 @@ constraints:
   or introduce corrective procedures to suppress those effects.
 - Raise clear, descriptive errors for failed operations or invalid inputs. Preserve applicable failure provenance and
   affected `None` values; do not conceal failures through fallback calculations or replacement values.
+- Cocoonet-generated runtime type-validation `TypeError` diagnostics must identify the affected field path, expected
+  type, observed type, and observed value. Show a complete value for a short string or single scalar value; use a
+  bounded, type-aware preview for long strings, containers, arrays, matrices, tables, tensors, and other potentially
+  large values. Preview generation must not conceal or replace the established type mismatch.
+- When a contract `validate_*` function raises `ValueError` because a declared value, association, shape, or invariant
+  is violated, its diagnostic must identify the affected context, the expected value or condition, and the observed
+  value or condition. A concise sentence is appropriate for a simple violation:
+
+  ```text
+  Invalid fold_id: expected a nonempty string; got an empty string.
+  ```
+
+  Use a structured multiline message when several context fields are needed:
+
+  ```text
+  Invalid report outcome:
+    report: performance
+    status: complete
+    expected: failure_ids to be empty
+    got: 2 failure references
+  ```
+
+  Include only context needed to locate and understand the violation. Report bounded scalar values, identities, indices,
+  counts, shapes, ranges, or short summaries rather than complete large payloads, arrays, tables, tensors, or
+  collections. These requirements do not alter exceptions propagated from Python, user code, or third-party libraries.
 - Keep all module code simple, clear, direct, and efficient. Avoid speculative abstractions, unnecessary computation,
   and special-case machinery. Improve performance while preserving the defined computation and output semantics.
 

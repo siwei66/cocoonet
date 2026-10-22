@@ -145,8 +145,17 @@ later consumers. Future public computation/worker APIs are explicitly deferred.
 - Counts are nonnegative integers, excluding `bool`; eligibility flags are integers exactly `0` or `1`, excluding
   `bool` in the normalized record. Adapters may later accept other input forms but must output this representation.
 - `validate_*` functions return `None` and never mutate their arguments. They raise `TypeError` for incorrect runtime
-  types and `ValueError` for invalid values, associations, or shapes. Error text names the field and relevant identity.
-  Use these built-in exceptions rather than introducing a general exception hierarchy.
+  types and `ValueError` for invalid values, associations, or shapes. Use these built-in exceptions rather than
+  introducing a general exception hierarchy.
+- Cocoonet-generated runtime type-validation `TypeError` diagnostics identify the field path, expected type, observed
+  type, and observed value. They show short scalar values directly and use a bounded, type-aware preview for
+  potentially large values without allowing preview failure to replace the established mismatch.
+- Contract-validator `ValueError` diagnostics identify the affected context, expected value or condition, and observed
+  value or condition. Use a concise sentence for simple violations and a structured multiline form when several
+  context fields are needed. Keep observed information bounded; do not render complete large payloads or collections.
+  Tests compare the complete diagnostic for newly implemented validators. Existing Phase 1 contract validators must
+  satisfy this information requirement before Phase 1 completion, but messages that already communicate all three
+  parts clearly do not require format-only rewriting.
 - Construction gives a typed candidate record, not a certificate of semantic validity. The producing component calls
   its validator before publishing it; receiving components validate at their boundary. Tests exercise validators
   directly. No hidden validation in `__post_init__` is planned, and no invalid candidate may enter a consuming workflow.

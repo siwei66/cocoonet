@@ -1,6 +1,7 @@
 """Tests for standardized result-envelope contracts."""
 
 from dataclasses import FrozenInstanceError, dataclass
+from typing import cast
 
 import pytest
 
@@ -21,6 +22,7 @@ from cocoonet._contracts.result import (
     EvaluationOutcome,
     ReportOutcome,
     ReportStatus,
+    validate_report_outcome,
 )
 
 
@@ -28,7 +30,7 @@ from cocoonet._contracts.result import (
 class _ExampleReportContent:
     """Provide small immutable report content for declaration tests."""
 
-    value: float
+    value: float | None
 
 
 def _attempt_inputs() -> AttemptInputs:
@@ -238,3 +240,235 @@ def test_attempt_result_rejects_field_mutation() -> None:
 
     with pytest.raises(FrozenInstanceError):
         result.__setattr__("outcome", EvaluationOutcome.COMPLETED)
+
+
+@pytest.mark.parametrize(
+    ("status", "payload", "failure_ids"),
+    [
+        pytest.param(
+            ReportStatus.COMPLETE,
+            _ExampleReportContent(value=1.0),
+            (),
+            id="complete",
+        ),
+        pytest.param(
+            ReportStatus.FAILED,
+            _ExampleReportContent(value=1.0),
+            (FailureId("failure-a"),),
+            id="failed-with-content",
+        ),
+        pytest.param(
+            ReportStatus.FAILED,
+            None,
+            (FailureId("failure-a"),),
+            id="failed-without-content",
+        ),
+        pytest.param(
+            ReportStatus.BLOCKED,
+            _ExampleReportContent(value=None),
+            (FailureId("failure-a"),),
+            id="blocked-with-content",
+        ),
+        pytest.param(
+            ReportStatus.BLOCKED,
+            None,
+            (FailureId("failure-a"),),
+            id="blocked-without-content",
+        ),
+        pytest.param(
+            ReportStatus.NOT_REQUESTED,
+            None,
+            (),
+            id="not-requested",
+        ),
+    ],
+)
+def test_validate_report_outcome_accepts_valid_status_relationships(
+    status: ReportStatus,
+    payload: _ExampleReportContent | None,
+    failure_ids: tuple[FailureId, ...],
+) -> None:
+    """Accept every valid generic report status relationship."""
+    outcome = ReportOutcome[_ExampleReportContent](
+        name=ReportName.PERFORMANCE,
+        status=status,
+        payload=payload,
+        failure_ids=failure_ids,
+    )
+
+    validate_report_outcome(outcome)
+
+    assert outcome.payload is payload
+    assert outcome.failure_ids == failure_ids
+
+
+@pytest.mark.parametrize(
+    "scientific_value",
+    [
+        pytest.param(float("nan"), id="undefined"),
+        pytest.param(float("inf"), id="positive-infinity"),
+        pytest.param(float("-inf"), id="negative-infinity"),
+        pytest.param(None, id="schema-defined-none"),
+    ],
+)
+def test_validate_report_outcome_preserves_scientific_content(
+    scientific_value: float | None,
+) -> None:
+    """Leave scientific value interpretation to the concrete payload schema."""
+    payload = _ExampleReportContent(value=scientific_value)
+    outcome = ReportOutcome[_ExampleReportContent](
+        name=ReportName.PERFORMANCE,
+        status=ReportStatus.COMPLETE,
+        payload=payload,
+        failure_ids=(),
+    )
+
+    validate_report_outcome(outcome)
+
+    assert outcome.payload is payload
+
+
+@pytest.mark.parametrize(
+    ("status", "payload", "failure_ids", "message"),
+    [
+        pytest.param(
+            ReportStatus.COMPLETE,
+            None,
+            (),
+            (
+                "Invalid report outcome:\n"
+                "  report: performance\n"
+                "  status: complete\n"
+                "  expected: payload to be present\n"
+                "  got: payload is None"
+            ),
+            id="complete-without-content",
+        ),
+        pytest.param(
+            ReportStatus.COMPLETE,
+            _ExampleReportContent(value=1.0),
+            (FailureId("failure-a"),),
+            (
+                "Invalid report outcome:\n"
+                "  report: performance\n"
+                "  status: complete\n"
+                "  expected: failure_ids to be empty\n"
+                "  got: failure_ids count is 1"
+            ),
+            id="complete-with-failure",
+        ),
+        pytest.param(
+            ReportStatus.FAILED,
+            _ExampleReportContent(value=1.0),
+            (),
+            (
+                "Invalid report outcome:\n"
+                "  report: performance\n"
+                "  status: failed\n"
+                "  expected: failure_ids to contain at least one reference\n"
+                "  got: failure_ids is empty"
+            ),
+            id="failed-without-failure",
+        ),
+        pytest.param(
+            ReportStatus.BLOCKED,
+            None,
+            (),
+            (
+                "Invalid report outcome:\n"
+                "  report: performance\n"
+                "  status: blocked\n"
+                "  expected: failure_ids to contain at least one reference\n"
+                "  got: failure_ids is empty"
+            ),
+            id="blocked-without-failure",
+        ),
+        pytest.param(
+            ReportStatus.NOT_REQUESTED,
+            _ExampleReportContent(value=1.0),
+            (),
+            (
+                "Invalid report outcome:\n"
+                "  report: performance\n"
+                "  status: not_requested\n"
+                "  expected: payload to be None\n"
+                "  got: payload is present"
+            ),
+            id="unrequested-with-content",
+        ),
+        pytest.param(
+            ReportStatus.NOT_REQUESTED,
+            None,
+            (FailureId("failure-a"),),
+            (
+                "Invalid report outcome:\n"
+                "  report: performance\n"
+                "  status: not_requested\n"
+                "  expected: failure_ids to be empty\n"
+                "  got: failure_ids count is 1"
+            ),
+            id="unrequested-with-failure",
+        ),
+    ],
+)
+def test_validate_report_outcome_rejects_invalid_status_relationships(
+    status: ReportStatus,
+    payload: _ExampleReportContent | None,
+    failure_ids: tuple[FailureId, ...],
+    message: str,
+) -> None:
+    """Reject content and failure combinations inconsistent with the status."""
+    outcome = ReportOutcome[_ExampleReportContent](
+        name=ReportName.PERFORMANCE,
+        status=status,
+        payload=payload,
+        failure_ids=failure_ids,
+    )
+
+    with pytest.raises(ValueError) as error:
+        validate_report_outcome(outcome)
+
+    assert str(error.value) == message
+
+
+def test_validate_report_outcome_rejects_empty_failure_identity() -> None:
+    """Identify an empty report-level failure reference precisely."""
+    outcome = ReportOutcome[_ExampleReportContent](
+        name=ReportName.PERFORMANCE,
+        status=ReportStatus.FAILED,
+        payload=None,
+        failure_ids=(FailureId(""),),
+    )
+
+    with pytest.raises(ValueError) as error:
+        validate_report_outcome(outcome)
+
+    assert str(error.value) == (
+        "Invalid report outcome:\n"
+        "  report: performance\n"
+        "  status: failed\n"
+        "  field: failure_ids[0]\n"
+        "  expected: a nonempty failure identity\n"
+        "  got: an empty string"
+    )
+
+
+def test_validate_report_outcome_rejects_wrong_status_type() -> None:
+    """Preserve the unified type diagnostic for an invalid status type."""
+    outcome = ReportOutcome[_ExampleReportContent](
+        name=ReportName.PERFORMANCE,
+        status=cast(ReportStatus, "complete"),
+        payload=_ExampleReportContent(value=1.0),
+        failure_ids=(),
+    )
+
+    with pytest.raises(TypeError) as error:
+        validate_report_outcome(outcome)
+
+    assert str(error.value) == (
+        "Type validation failed\n"
+        "  path: value.status\n"
+        "  expected: cocoonet._contracts.result.ReportStatus\n"
+        "  got type: builtins.str\n"
+        "  got value: 'complete'"
+    )

@@ -7,6 +7,7 @@ from cocoonet._contracts.execution import AttemptInputs
 from cocoonet._contracts.failure import FailureRecord
 from cocoonet._contracts.identity import FailureId, ReportName
 from cocoonet._contracts.prediction import PredictionBatch
+from cocoonet._type_validation import validate_declared_types
 
 
 class ReportStatus(StrEnum):
@@ -205,3 +206,88 @@ class AttemptResult[V, P, R, Z, I]:
     visualization: ReportOutcome[Z] | None
     influence: ReportOutcome[I] | None
     failures: tuple[FailureRecord, ...]
+
+
+def validate_report_outcome[T](value: ReportOutcome[T]) -> None:
+    """Validate one generic report outcome and its failure relationship.
+
+    Parameters
+    ----------
+    value : ReportOutcome[T]
+        Report identity, status, content, and failure references to validate.
+
+    Raises
+    ------
+    TypeError
+        If the report outcome or one of its declared fields has an incorrect
+        runtime type.
+    ValueError
+        If a failure identity is empty or the status conflicts with the
+        presence of report content or failure references.
+
+    Notes
+    -----
+    A complete report requires content and no failures. Failed and blocked
+    reports require at least one failure reference and may retain content.
+    A not-requested report has neither content nor failure references.
+
+    This generic validator does not inspect the report payload, resolve failure
+    references, reject duplicate references, or decide whether
+    ``not_requested`` is permitted for a particular report slot. Concrete
+    payload validators and ``validate_attempt_result`` own those checks.
+
+    Validation preserves the report content, including permitted infinity,
+    formula-defined ``NaN``, and schema-defined ``None`` values inside it.
+    Error diagnostics never render the payload.
+
+    Node usage scope: Shared - Used by both root and worker nodes.
+    """
+    # Validate the complete declared envelope before applying status rules.
+    validate_declared_types(
+        value,
+        expected_type=ReportOutcome,
+    )
+
+    error_context = "Invalid report outcome:\n" f"  report: {value.name.value}\n" f"  status: {value.status.value}"
+
+    # Validate every supplied failure identity without exposing unrelated
+    # report content in the diagnostic.
+    for index, failure_id in enumerate(value.failure_ids):
+        if not failure_id:
+            raise ValueError(
+                f"{error_context}\n"
+                f"  field: failure_ids[{index}]\n"
+                "  expected: a nonempty failure identity\n"
+                "  got: an empty string"
+            )
+
+    # Require content and prohibit operational failures for complete reports.
+    if value.status is ReportStatus.COMPLETE:
+        if value.payload is None:
+            raise ValueError(f"{error_context}\n" "  expected: payload to be present\n" "  got: payload is None")
+        if value.failure_ids:
+            raise ValueError(
+                f"{error_context}\n"
+                "  expected: failure_ids to be empty\n"
+                f"  got: failure_ids count is {len(value.failure_ids)}"
+            )
+
+    # Require failure provenance while permitting retained or absent content.
+    elif value.status in (ReportStatus.FAILED, ReportStatus.BLOCKED):
+        if not value.failure_ids:
+            raise ValueError(
+                f"{error_context}\n"
+                "  expected: failure_ids to contain at least one reference\n"
+                "  got: failure_ids is empty"
+            )
+
+    # Represent an unrequested optional report without content or failures.
+    else:
+        if value.payload is not None:
+            raise ValueError(f"{error_context}\n" "  expected: payload to be None\n" "  got: payload is present")
+        if value.failure_ids:
+            raise ValueError(
+                f"{error_context}\n"
+                "  expected: failure_ids to be empty\n"
+                f"  got: failure_ids count is {len(value.failure_ids)}"
+            )

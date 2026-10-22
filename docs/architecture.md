@@ -1611,6 +1611,34 @@ environment information. Preserve actual results, including defined `NaN` and fa
 for assignment, lifecycle transitions, acceptance, and failures. Concrete provenance fields and event schemas belong
 in the relevant design; distinguish operation, task, result, and worker-process scope in every record.
 
+Cocoonet-generated runtime type-validation errors identify the affected field path, expected type, observed type, and
+observed value. Short strings and scalar values may be shown directly. Potentially large values use bounded,
+type-aware previews that preserve useful information such as type, shape, size, dtype, and representative values
+without rendering the complete object. Diagnostic generation must not conceal an already established type mismatch.
+
+Contract validators reject semantically invalid candidate records with built-in `ValueError`. Their diagnostics
+identify the affected field, record, relationship, or relevant identity; the expected value or condition; and the
+observed value or condition. Simple violations may use a concise sentence:
+
+```text
+Invalid fold_id: expected a nonempty string; got an empty string.
+```
+
+Validators use a structured multiline form when several context fields are needed:
+
+```text
+Invalid report outcome:
+  report: performance
+  status: complete
+  expected: failure_ids to be empty
+  got: 2 failure references
+```
+
+Diagnostics include only the context needed to locate and understand the violation. Large payloads and data structures
+are represented by bounded identities, indices, counts, shapes, ranges, or short summaries rather than complete
+values. These rules do not replace persisted failure provenance, operational failure reporting, or exceptions
+propagated from Python, user code, or third-party libraries.
+
 ### 9.2 Failure scope and worker lifetime
 
 Configuration/startup failures precede scientific evaluation. Missing execution targets or other start prerequisites
