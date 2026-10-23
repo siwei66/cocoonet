@@ -9,12 +9,15 @@ Read `AGENTS.md` and `roadmap_phase_1.md`, and the corresponding part of `archit
 ## Phase continuing prompt schema:
 
 ```text
-Approved. Implement these proposed changes directly. Do not make other change.
-After finishing, propose a standard one-line git commit message with scope.
+Approved. Implement these proposed changes directly. Do not introduce other change beyond the proposal.
 
 ---
 
-Then continue with the next unit. Proposal only. The requirements are same.
+After finishing, propose a standard one-line git commit message for the changes with scope. If the changes have multiple associated scopes, propose one git commit message for each associated scope.
+
+---
+
+Then continue with the next unit. Propose only. The requirements are same.
 ```
 
 Ignoring ruff error C901 break:
