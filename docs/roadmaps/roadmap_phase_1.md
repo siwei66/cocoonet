@@ -571,7 +571,7 @@ probes, result arbitration, retry loops, or recovery. Later components replace s
 | --- | --- |
 | `ExecutionStatus` | `not_started`, `running`, `interrupted`, `settled` |
 | `ParentProgress` | `parent_id: ParentId`, `execution_status: ExecutionStatus` |
-| `AttemptStatus` | `allocated`, `running`, `outcome_ready`, `stopped` |
+| `AttemptStatus` | `allocated`, `running`, `result_ready`, `stopped` |
 | `StopStatus` | `none`, `requested`, `observed` |
 | `StopReason` | `parent_interrupted`, `parent_cancelled`, `parent_superseded`, `duplicate_accepted` |
 | `StopDisposition` | `status: StopStatus`, `reason: StopReason | None` |
@@ -593,6 +593,17 @@ probes, result arbitration, retry loops, or recovery. Later components replace s
 it is not used as a timer here. The coordinator later derives a unit's first execution start from its attempts for
 oldest-running duplicate selection. Clock acquisition, ordering ties, and scheduling remain later algorithms.
 
+Parent dataset/configuration/partition readiness and reusable root-side model-artifact preparation precede attempt
+allocation and are outside the attempt lifecycle. `allocated` fixes the attempt identity, unit, and worker but has
+no start timestamp because attempt-specific model synchronization or processing has not begun. `running` begins
+when the worker starts attempt-specific model synchronization or local handoff; `first_started_at` records that
+boundary. Synchronization may transfer the prepared model input, reuse an already available valid representation,
+or establish applicable local access without retransmitting the parent dataset. Running continues through model
+loading/reconstruction, evaluation, report and optional influence computation, and publication of the complete
+worker-side result artifact. Publication changes the status to `result_ready`. Reception selection, delivery,
+persistence acknowledgement, and bounded resend remain part of the attempt lifecycle but are represented by the
+separate reception, persistence, and bounded-operation records rather than another attempt status.
+
 The operation vocabulary includes only the architecturally required bounded operations. Add another kind only when
 its owning phase needs it and approves that contract amendment; do not make scientific fitting retryable by treating
 it as an operation of these kinds.
@@ -602,11 +613,11 @@ it as an operation of these kinds.
 - Root control owns consolidation and parent execution observations. `settled` describes execution handling, not an
   alternate acceptance bit; an exhausted delivery may leave an unaccepted unit. Worker inactivity is a separate fact.
 - Worker control owns attempt execution/stop observations. Running requires a start timestamp; allocated has none.
-  Outcome-ready requires a start timestamp and a completed result artifact reference. Stopped attempts may have
+  Result-ready requires a start timestamp and a completed result artifact reference. Stopped attempts may have
   started or may have been stopped before execution; stopping does not imply a result file or stopped worker process.
-  Result artifacts are allowed only for outcome-ready or stopped attempts with an already completed outcome and
+  Result artifacts are allowed only for result-ready or stopped attempts with an already completed result and
   a start timestamp.
-- Stop `none` has no reason; requested/observed requires a reason. `stopped` requires observed stop. Outcome-ready may
+- Stop `none` has no reason; requested/observed requires a reason. `stopped` requires observed stop. Result-ready may
   coexist with requested/observed stop because a terminal attempt needs no new evaluation loop to end unnecessary
   handling. Allocated/running attempts may have no stop or a requested stop, but not an observed stop. Active work can
   be marked requested while still running; edits elsewhere do not alter its inputs.
@@ -666,7 +677,7 @@ Root coordination owns one `ReceptionRecord` per `UnitKey`, covering local and o
 | --- | --- | --- |
 | `validate_parent_progress(value: ParentProgress) -> None` | Validate parent identity and execution tag, independently of consolidation. | All tags; invalid tag; no inferred acceptance/consolidation transition. |
 | `validate_stop_disposition(value: StopDisposition) -> None` | Check stop status/reason pairing. | None without reason; requested/observed with each reason; invalid pairs. |
-| `validate_attempt_progress(value: AttemptProgress, *, parent: ParentEvaluation) -> None` | Check attempt context, status/start/artifact/stop consistency. | Allocated/running/outcome-ready; stop while running; stopped before start; terminal handling stop; invalid timestamp; no result created. |
+| `validate_attempt_progress(value: AttemptProgress, *, parent: ParentEvaluation) -> None` | Check attempt context, status/start/artifact/stop consistency. | Allocated/running/result-ready; stop while running; stopped before start; terminal handling stop; invalid timestamp; no result created. |
 | `validate_worker_observation(value: WorkerObservation) -> None` | Check ownership/compatibility/availability combinations and unique parent readiness. | Disconnected active attempt retained; unknown vs failed process; available but unready parent; working without attempt; reused data without partition readiness; no configuration mutation. |
 | `validate_bounded_operation(value: BoundedOperation) -> None` | Check count bounds, status, last-error context, and operation kind. | Zero/past-limit counts; bool rejected; success after retries; failed/exhausted; cancelled; distinct connection round identity; no budget reset or reevaluation. |
 | `validate_reception_record(value: ReceptionRecord, *, attempts: tuple[AttemptInputs, ...]) -> None` | Validate selected attempt membership and receipt/persistence/acceptance prerequisites. | Unselected state; wrong unit/attempt; partial file; complete persistence before acceptance; accepted failure outcome uses same facts; absent evidence; no file I/O. |

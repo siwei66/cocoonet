@@ -90,10 +90,14 @@ already-terminal or unnecessary pending handling ends immediately. Late results 
   exactly one dataset, one fixed task-wide evaluation configuration, and one or more models. Each model produces one
   unit task distinguished within its parent by its unique user-provided `model_label`. The parent dataset and
   configuration and each unit task's model input remain fixed.
-- An execution attempt is one worker execution of a unit task, including all required folds, reports, and result
-  delivery. Duplicate allocation creates another attempt of the same unit task. Folds and individual samples are not
-  separate distributed tasks.
-- Each attempt first reconstructs the initial model and its reproducible construction state on the worker. For every
+- An execution attempt is one worker execution of a unit task. Parent dataset/configuration/partition readiness and
+  reusable root-side model-artifact preparation precede attempt allocation and remain outside the attempt. After
+  allocation, the attempt includes attempt-specific model synchronization or local handoff, initial-model
+  reconstruction/loading, all required folds and reports, worker-side result publication, and result delivery.
+  Duplicate allocation creates another attempt of the same unit task. Folds and individual samples are not separate
+  distributed tasks.
+- Each attempt first synchronizes the model data required for reconstruction, or establishes applicable local access,
+  then reconstructs the initial model and its reproducible construction state on the worker. For every
   primary-validation fold, create a fresh untrained fold model from that state, fit it on the fold's training
   population, predict its testing population, retain the aligned predictions and provenance, and release the fitted
   fold model. Learned state must not pass between folds. The exact framework-specific mechanism may reconstruct,

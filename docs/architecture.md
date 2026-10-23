@@ -716,6 +716,12 @@ It creates neither a new unit task nor a new model evaluation task. Internal lif
 scheduling, attempt tracking, failures, recovery, and result acceptance; they do not require dataset identity to be
 repeated in individual unit tasks.
 
+Parent dataset/configuration/partition readiness and reusable root-side model-artifact preparation precede attempt
+allocation and are outside the attempt lifecycle. After allocation, attempt processing begins when the worker starts
+attempt-specific model synchronization or local handoff. The attempt then includes initial-model loading or
+reconstruction with its reproducible construction state, evaluation and report generation, publication of the
+complete worker-side result artifact, and delivery under the reception and persistence workflow in Section 5.
+
 Fold computations and sample-removal evaluations remain internal to an execution attempt. Their partition definitions
 come from the shared parent schedule. Fold results retain their producing attempt context and their association with
 the corresponding parent-defined fold and training/test sample identities. A completed attempt produces one result

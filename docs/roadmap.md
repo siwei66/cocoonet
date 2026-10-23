@@ -390,7 +390,9 @@ Apply Phase 1's exact-version compatibility rule through local control without a
 prerequisite checks and execution-configuration persistence. Require one active dataset, at least one
 model, and a usable configured target; never execute in the coordinator or silently create a worker. Bind the parent's
 validated saved partitions and confirm durable partition persistence before allocation. Establish local artifacts and
-parent context, then dispatch only model-specific input and necessary lifecycle references in that context.
+parent context, then dispatch only model-specific input and necessary lifecycle references in that context. The local
+attempt begins with that model handoff and continues through model loading/reconstruction, evaluation, result
+publication, and delivery.
 
 Implement root selection and acceptance using the stable attempt records even though this milestone needs only the
 local normal path. Persist pending selection evidence, receive/handoff the selected complete file, durably persist it,
@@ -483,7 +485,9 @@ Synchronize dataset plus applicable saved partition/parent context before unit e
 retention policy, subject to mandatory public-release cleanup in Phase 20. Reuse a retained ready
 dataset_id without retransmission, but always establish the applicable parent configuration and partition context.
 A changed representation or cleared copy requires preparation again. Unit-task messages carry the model and required
-model-specific/lifecycle information, not another dataset or an independent dataset identity.
+model-specific/lifecycle information, not another dataset or an independent dataset identity. After allocation, the
+online attempt begins with this attempt-specific model synchronization and continues through model reconstruction,
+evaluation, result publication, and delivery.
 
 Dispatch through the established connection and run the same evaluation components. Return only the selected complete
 file over that connection; persist promptly with asynchronous I/O, acknowledge, and apply the existing bounded delivery

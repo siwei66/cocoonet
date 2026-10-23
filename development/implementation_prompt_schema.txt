@@ -9,7 +9,7 @@ Read `AGENTS.md` and `roadmap_phase_1.md`, and the corresponding part of `archit
 ## Phase continuing prompt schema:
 
 ```text
-Approved. Implement these proposed changes directly. Do not introduce other change beyond the proposal.
+Approved. Implement the proposed changes directly. Do not introduce other change beyond the proposal.
 
 ---
 
