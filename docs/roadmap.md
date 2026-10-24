@@ -422,6 +422,10 @@ automatic deletion. Preserve pending delivery except for the mandatory public-re
 Apply configured bounded-operation handling to persistence and subsequent transfer consumers without allowing retries
 where scientific failure policy prohibits them.
 
+Add deletion on transition to a different parent task as another result-retention mode. Keep it configurable for
+private and root-local workers; Phase 20 makes it mandatory for public workers. A transition must not prematurely
+delete an artifact still required by selected-delivery handling.
+
 Before proceeding, delivery status, scientific outcome, acceptance, and worker availability must be independently
 observable. Counts/timing and operation interfaces are settled here. Reconnection and periodic connection rounds do not
 exist yet and must not be simulated by resetting delivery budgets.
@@ -566,6 +570,12 @@ another user can be admitted; old work must not recreate state. Confirm cleanup 
 to another user and report failure through the service interface. Mandatory release cleanup overrides local
 retention, including
 pending result delivery, without marking an undelivered logical result accepted.
+
+Force-enable parent-transition result cleanup for public workers. Before a public worker begins an attempt for a
+different parent, delete worker-side result artifacts belonging to earlier parents, regardless of a longer configured
+retention choice. First complete any selected delivery still required by the lifecycle or allow it to reach its
+established terminal operation state. This parent-transition cleanup remains separate from the stronger public-release
+cleanup, which may override pending delivery before reassignment to another user.
 
 Before proceeding, exclusive access, cleanup failure, release, and disconnection behavior must match the supplied
 service contract. Worker removal still does not imply release. Do not invent service endpoints, reservation timers,

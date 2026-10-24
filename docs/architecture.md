@@ -1459,6 +1459,13 @@ local retention, including pending delivery: no previous user's file may survive
 cleanup, do not prematurely delete a pending-delivery file. Cleanup of an undelivered file does not finish its logical
 task. Retention conditions, operation failure, result acceptance, and worker-process lifetime are distinct scopes.
 
+Deletion on transition to a different parent task is an additional worker-side retention mode. It is configurable for
+private and root-local workers and mandatory for public workers, overriding a longer or no-automatic-deletion setting.
+Before a public worker begins an attempt for a different parent, remove worker-side result artifacts belonging to
+earlier parents. Any selected delivery still required by the lifecycle must first complete or reach its established
+terminal operation state. This cleanup does not affect root-persisted results or mark an undelivered logical task
+finished or accepted.
+
 ## 7. Transport, Serialization, and Trust
 
 ### 7.1 Runtime and connections

@@ -5,7 +5,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from cocoonet._contracts.identity import ParentId
-from cocoonet._contracts.state import AttemptStatus, ExecutionStatus, ParentProgress
+from cocoonet._contracts.state import AttemptStatus, ExecutionStatus, ParentProgress, StopStatus
 
 
 def test_execution_status_has_exact_string_vocabulary() -> None:
@@ -69,3 +69,15 @@ def test_attempt_status_has_exact_string_vocabulary() -> None:
     assert AttemptStatus.RUNNING == "running"
     assert AttemptStatus.RESULT_READY == "result_ready"
     assert AttemptStatus.STOPPED == "stopped"
+
+
+def test_stop_status_has_exact_string_vocabulary() -> None:
+    """Expose only the planned cooperative-stop handling states."""
+    assert tuple(StopStatus) == (
+        StopStatus.NONE,
+        StopStatus.REQUESTED,
+        StopStatus.OBSERVED,
+    )
+    assert StopStatus.NONE == "none"
+    assert StopStatus.REQUESTED == "requested"
+    assert StopStatus.OBSERVED == "observed"

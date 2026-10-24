@@ -815,6 +815,12 @@ Before planning or implementing a phase, process project guidance in this order:
   automatic deletion. Mandatory public-worker release cleanup overrides local retention, including pending delivery:
   no prior user's file may survive reassignment. Outside that release cleanup, do not delete a pending-delivery file
   prematurely. Cleanup of an undelivered file does not mark its logical task finished.
+- Support deletion of retained result artifacts when a worker transitions to a different parent task as an additional
+  retention mode. This mode is configurable for private and root-local workers and mandatory for public workers,
+  overriding a longer or no-automatic-deletion setting. Before a public worker begins an attempt for a different
+  parent, remove worker-side result artifacts belonging to earlier parents. Any selected delivery still required by
+  the lifecycle must first complete or reach its established terminal operation state. This cleanup does not delete
+  root-persisted results or mark an undelivered logical task finished or accepted.
 - Associate each result file with its parent context, unit task, and producing execution attempt. Preserve sufficient
   internal identity for recovery and at-most-one acceptance per unit task. Dataset identity is resolved through the
   parent context rather than forming an independent part of unit-task identity. Recovery must distinguish a complete

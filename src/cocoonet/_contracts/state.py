@@ -109,3 +109,42 @@ class AttemptStatus(StrEnum):
     RUNNING = "running"
     RESULT_READY = "result_ready"
     STOPPED = "stopped"
+
+
+class StopStatus(StrEnum):
+    """Identify the cooperative-stop handling state of an execution attempt.
+
+    Attributes
+    ----------
+    NONE : str
+        No cooperative stop has been requested or observed for the attempt.
+    REQUESTED : str
+        The root has requested that the worker stop the attempt, but the
+        worker has not yet applied the request at a cooperative boundary.
+    OBSERVED : str
+        The worker has applied the cooperative-stop request at the applicable
+        boundary, ending active attempt processing or unnecessary pending
+        handling.
+
+    Notes
+    -----
+    Stop handling is separate from attempt processing status. A transport or
+    IPC receipt alone does not make a stop observed. For an active attempt,
+    observation means processing has ended at a cooperative boundary. For an
+    already-terminal attempt, it means unnecessary pending handling has ended.
+
+    An observed stop does not imply that the reusable worker process has shut
+    down or that unrelated cleanup, dataset release, or public-worker release
+    handling has completed.
+
+    This enum does not identify why the stop was requested, validate its
+    relationship with an attempt status, or perform state transitions. Those
+    responsibilities belong to ``StopReason``, ``StopDisposition``, and their
+    validators.
+
+    Node usage scope: Shared - Used by both root and worker nodes.
+    """
+
+    NONE = "none"
+    REQUESTED = "requested"
+    OBSERVED = "observed"
