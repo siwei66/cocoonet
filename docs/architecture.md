@@ -15,6 +15,19 @@ definitions, including the approved influence measure in Section 4.7.
 Root [`AGENTS.md`](../AGENTS.md) governs the development workflow. [`roadmap.md`](roadmap.md) is the location for
 sequencing implementation work; this architecture document does not assign milestones or authorize implementation.
 
+**Implementation Style**
+
+Follow the development philosophy in `AGENTS.md`. Scientific functions receive the data and settings needed for their
+calculation and return results with provenance. Coordination, communication, persistence, and resource management own
+their operational state.
+
+Model mutation here means changes made by fitting a scikit-learn-like model or training a PyTorch model, such as
+updating learned parameters and training state. These changes belong to the execution-owned model and must preserve the
+required fresh-model boundaries between folds and removal evaluations. They do not authorize changes to fixed
+configuration, dataset, partition, or pristine reconstruction state.
+
+The component map describes responsibilities and dependencies, not a required class hierarchy.
+
 ## 2. System Context and Responsibilities
 
 | Component | Initial responsibility |
@@ -518,7 +531,8 @@ The standardized field contracts are:
   floats and booleans.
 - Regression targets and inline X values are finite floating-point numeric data. Reject nonnumeric values,
   booleans, NaN, and infinities. The dataset API selects the floating-point representation.
-- Masks are bool. Each missing mask independently defaults to True; preserve False.
+- Standardized masks are integers exactly `0` or `1`, excluding `bool`. Each missing mask independently defaults to `1`;
+  `1` permits the corresponding training or testing use and `0` prohibits it.
 - Tensor shapes are ordered positive integer dimensions. Accept tuple, list, array, and textual forms and
   normalize them to the same shape semantics. Reject booleans, malformed text, noninteger dimensions,
   nonpositive dimensions, and unsupported structures.
@@ -1423,6 +1437,15 @@ and complete failure provenance. Report or influence failures after successful p
 Result files are expected to be small. Use asynchronous I/O to write received serialized files promptly to local
 storage. Bounded-memory streaming and backpressure are not required by the initial design. Never deserialize a report
 file in the active network event loop; root-side loading and content processing occur separately from that path.
+
+The complete attempt result must preserve its parent, unit/model, attempt, and worker associations, scientific outputs,
+and failure provenance. This does not require embedding the execution hierarchy.
+
+Prefer directly inspectable payloads with explicit associations. Avoid duplicate report identities and independently
+maintained summaries; derive summaries from authoritative facts, or validate their consistency when stored.
+
+Flattening must preserve report outcomes, value availability, delivery and acceptance distinctions, required fold-report
+information, and the numerical and failure semantics in Section 9.
 
 ### 6.3 Persistence, acknowledgement, and bounded resends
 

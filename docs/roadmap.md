@@ -19,16 +19,17 @@ shared contracts -> durable storage -> configuration -> dataset and saved partit
     -> complete compatibility and lifecycle verification
 ```
 
-The shared contracts are logical records and component interfaces required by the architecture, not a speculative
-framework. Their concrete representation is settled before the first dependent component. Component ownership follows
-architecture Section 2.1: root control and coordination, connection and communication, synchronization, model
-initialization and execution, evaluation components, report persistence, packaging, and delivery retain distinct jobs.
-A component map does not require one file or class per component.
+Shared contracts establish required information, identity scopes, ownership, alignment, and scientific and lifecycle
+semantics. Choose concrete representations before their first dependent implementation, using producer and consumer
+examples and the development philosophy in `AGENTS.md`. Do not predefine unnecessary object hierarchies for later
+phases.
+
+Component ownership follows architecture Section 2.1; responsibilities do not require one file or class per component.
 
 Each approved implementation step should complete one coherent unit and its applicable tests before moving on.
 Necessary helpers are approved and implemented separately unless the user explicitly approves a bounded set.
 Document architectural impact and follow the documentation-first gate before affected implementation. Preserve
-finished contracts; later phases add consumers and adapters rather than replacing earlier semantics.
+established semantics; representation changes remain possible through the same documented approval process.
 
 Throughout every phase:
 
@@ -78,9 +79,13 @@ outcome, before their producers and consumers. Distinguish formula-defined `NaN`
 references, and schema-defined non-applicable `None` without introducing a parallel per-value status enum. Define trace
 context for stage, model, fold, sample/class, exception, message, and traceback.
 
-Before proceeding, identity scopes, ownership, required associations, state distinctions, and component input/output
-contracts must be stable. Exact containers and field names are chosen here where needed; wire encodings, lifecycle
-algorithms, metric calculations, and model execution remain for later phases.
+Before dependent implementation expands, review the existing contracts for unnecessary nesting, duplicate facts, derived
+statuses, container restrictions, and validation machinery. Demonstrate production, inspection, and consumption of the
+selected representations, including partial failures.
+
+Record required documentation amendments and preserve identity, ownership, alignment, provenance, and lifecycle
+invariants. This review does not itself authorize code changes. Wire encodings, lifecycle algorithms, metric
+calculations, and model execution remain for their respective phases.
 
 ### 2. Filesystem ownership and durable persistence foundations
 
@@ -165,9 +170,9 @@ Accept multiple inline inputs only as sample-wise divisions. Reject column-wise 
 rows by globally unique sample labels; reject partial missing labels and generate reserved labels only when
 the column is entirely absent. Generate sample IDs after initial identification.
 
-Implement text identifier and classification-target conversion, configurable finite floating-point
-regression/X values, boolean masks, and positive-integer tensor-shape parsing. Reject booleans outside boolean
-fields, nonfinite numeric content, conversion collisions, and malformed shapes without cleansing input.
+Implement text identifier and classification-target conversion, configurable finite floating-point regression/X values,
+integer `0`/`1` masks excluding booleans, and positive-integer tensor-shape parsing. Reject inadmissible types,
+nonfinite numeric content, conversion collisions, and malformed shapes without cleansing input.
 
 Generate one managed `<root_dir>/data_reference.csv`. For file-backed samples, sources are actual X-bearing
 files; for inline samples, sources are input tables. Managed metadata files are not sample sources.

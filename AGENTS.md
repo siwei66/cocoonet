@@ -434,8 +434,26 @@ constraints:
   Include only context needed to locate and understand the violation. Report bounded scalar values, identities, indices,
   counts, shapes, ranges, or short summaries rather than complete large payloads, arrays, tables, tensors, or
   collections. These requirements do not alter exceptions propagated from Python, user code, or third-party libraries.
-- Keep all module code simple, clear, direct, and efficient. Avoid speculative abstractions, unnecessary computation,
-  and special-case machinery. Improve performance while preserving the defined computation and output semantics.
+
+**Development Philosophy and Programming Preferences**
+
+Cocoonet is a lightweight scientific Python module. Favor direct, simple, auditable, and interpretable computation, with
+minimal indirection and independently maintained state.
+
+- Prefer ordinary functions with explicit inputs, outputs, and side effects. Keep scientific procedures recognizable;
+  straightforward loops and local mutation are acceptable.
+- Use classes when they provide a clear benefit, such as a meaningful data record, configuration interface, or owned
+  runtime resource. Architectural responsibilities do not each require a class.
+- Prefer shallow records and direct scientific payloads. Introduce nesting or wrappers only when they express a useful
+  relationship, invariant, or independently consumed boundary.
+- Maintain each authoritative fact once within its ownership scope and derive summaries where practical. Repeated
+  metadata is justified when independently consumed records need it for identification or validation.
+- Give necessary mutable state an explicit owner. Keep scheduling, connections, persistence, and lifecycle transitions
+  outside scientific calculations; preserve their required independent distinctions.
+- Select containers for their scientific use and ownership requirements. Fixed inputs must remain protected from later
+  mutation, including through shared references.
+- Judge simplicity through concrete production, inspection, and consumption examples, including partial failures. Avoid
+  speculative frameworks and abstractions without a demonstrated need.
 
 **Failure Isolation and Reporting:**
 
@@ -497,6 +515,10 @@ Before planning or implementing a phase, process project guidance in this order:
 4. Read the corresponding `docs/roadmaps/roadmap_phase_<n>.md`, or create it under the phase-planning gate below.
 5. Before each implementation unit, inspect the relevant code and tests.
 
+- Before drafting a new implementation unit, review its corresponding phase-roadmap step against the module’s
+  development philosophy and requirements. Assess whether the step introduces unnecessary scope, abstractions, nesting,
+  dependencies, or independently maintained state. If a concrete over-engineering concern remains unjustified, explain
+  it and propose an amendment to the responsible roadmap step instead of proceeding with the unit proposal.
 - Before implementing a phase, its exact `docs/roadmaps/roadmap_phase_<n>.md` must exist, with `<n>` matching the
   project-wide phase number. Convert that phase into an implementation-level plan defining, where applicable:
   scope and completion criteria; data models, structures, types, and invariants; public APIs and signatures;
@@ -538,6 +560,13 @@ Before planning or implementing a phase, process project guidance in this order:
 
 **Single-Unit Production Changes:**
 
+- After drafting a unit and before presenting it for approval, review its necessity and over-engineering risk. If a
+  concern originates in the phase-roadmap step, explain it, propose the required roadmap amendment, and stop the
+  affected unit proposal. If it originates in the implementation approach, revise the draft and review it again,
+  allowing at most two revision-and-review cycles after the initial review. Present the revised unit only when the
+  concern is resolved or the complexity is justified by concrete requirements. Otherwise, stop and report the remaining
+  concern, its likely root cause, and any needed reconsideration of the phase roadmap, project-wide roadmap, or
+  architecture. Do not expand the unit or claim resolution merely to exhaust the review cycle.
 - Never implement a change unit, revision, helper, or validation-driven fix before presenting the exact proposed
   change and receiving the user's explicit approval. If implementation or validation reveals that the approved
   proposal must change, stop before making that additional change, report the issue and proposed revision, and wait
@@ -578,6 +607,9 @@ Before planning or implementing a phase, process project guidance in this order:
 - Keep tests focused on the approved production work; do not generate unrelated or project-wide test suites.
 - If a production unit does not yet provide independently verifiable functionality, tests may be deferred. Explain
   what cannot yet be verified and why, then wait for user approval of that working unit before continuing.
+- Preserve tests of scientific and lifecycle invariants when representations change. Update tests tied to superseded
+  internal nesting or containers; retain representation checks where the representation is itself contractual.
+- Test required diagnostic information. Require exact wording only when explicitly part of the interface.
 
 **No Unsolicited Scope Expansion:**
 
@@ -1045,6 +1077,17 @@ Before planning or implementing a phase, process project guidance in this order:
 - Keep source and test lines within 120 characters. Keep source files focused with clear domain boundaries, typically
   under 300-500 lines; file size is guidance, not permission for unrelated restructuring.
 
+
+**Runtime Validation**
+
+- Validate external inputs and independently produced or loaded records at their consuming boundaries. Internal helpers
+  may rely on documented preconditions when ownership prevents intervening invalidation.
+- Prefer checks specific to the accepted schema, sharing small validation and diagnostic helpers where useful. A general
+  annotation interpreter requires a demonstrated need.
+- Validate scientific containers directly for applicable dtype, shape, values, and alignment. Keep framework-specific
+  dependencies at the boundaries that require them.
+
+Existing runtime diagnostic and static typing requirements remain applicable.
 
 **Static Typing, Linting, and Narrow Suppressions:**
 
