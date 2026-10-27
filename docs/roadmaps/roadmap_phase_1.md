@@ -21,7 +21,8 @@ filesystem, model-adapter, lifecycle, and protocol designs stay with their assig
 Approval of this document and authorization to implement a particular unit are separate gates. For each later
 implementation response:
 
-1. Inspect the applicable code and tests, and identify the next approved declaration, function, or method.
+1. Inspect the applicable code and tests, apply both development reviews required by `AGENTS.md`, and resolve applicable
+   Section 9 representation decisions before presenting the next unit for approval.
 2. Implement only that unit and its directly corresponding tests and minimal supporting edits.
 3. Run applicable checks, explain the result, suggest a manual commit message, and stop for approval of the next unit.
 
@@ -146,6 +147,12 @@ later consumers. Future public computation/worker APIs are explicitly deferred.
 - Standardized classification targets are text; regression targets use the selected finite floating-point
   representation. Do not use a broader shared alias that admits invalid standardized values.
 - Input standardization performs permitted conversions. Contract validators check standardized values without coercion.
+
+Any retained `ScalarLabel` alias denotes standardized text only. A separately permitted model-label domain requires an
+explicit definition. Target validators must obtain task kind from explicit evaluation context; standalone metadata
+checks enforce only task-independent conditions. The dataset API retains ownership of the floating-point representation
+choice.
+
 - Counts are nonnegative integers, excluding `bool`; eligibility flags are integers exactly `0` or `1`, excluding
   `bool` in the normalized record. Adapters may later accept other input forms but must output this representation.
 - `validate_*` functions return `None` and never mutate their arguments. They raise `TypeError` for incorrect runtime
@@ -159,9 +166,9 @@ later consumers. Future public computation/worker APIs are explicitly deferred.
   context fields are needed. Keep observed information bounded; do not render complete large payloads or collections.
   Tests verify the required diagnostic information under the testing policy in `AGENTS.md`. Existing diagnostics that
   satisfy that requirement need no format-only rewriting.
-- Construction gives a typed candidate record, not a certificate of semantic validity. The producing component calls
-  its validator before publishing it; receiving components validate at their boundary. Tests exercise validators
-  directly. No hidden validation in `__post_init__` is planned, and no invalid candidate may enter a consuming workflow.
+- Construction does not establish semantic validity. Validate before publication and at independent consuming boundaries
+  under `AGENTS.md`. Internal helpers may rely on documented preconditions when ownership prevents intervening
+  invalidation. Keep validation explicit and directly testable.
 - Validators perform only the checks defined here. They do not execute or inspect user model behavior, determine
   scientific equivalence, inspect source contents, or claim to establish durable persistence or isolation.
 
@@ -211,7 +218,7 @@ All fields in the following tables are required unless an explicit default is sh
 | `SampleRecord` | `sample_id: SampleId`, `sample_label: str`, `group: str`, `train_mask: int`, `test_mask: int`, `target: TargetValue` (classification: text; regression: selected finite floating-point representation, validated according to task under Section 3.2), `sources: tuple[SourceReference, ...]` |
 | `PartitionReference` | `partition_id: PartitionId`, `dataset_id: DatasetId` |
 | `FoldRecord` | `fold_id: FoldId`, `training_sample_ids: tuple[SampleId, ...]`, `testing_sample_ids: tuple[SampleId, ...]` |
-| `PartitionSchedule` | `reference: PartitionReference`, `samples: tuple[SampleRecord, ...]`, `folds: tuple[FoldRecord, ...]`, `group_separated: bool` |
+| `PartitionSchedule` | `reference: PartitionReference`, `samples: tuple[SampleRecord, ...]`, `folds: tuple[FoldRecord, ...]` |
 
 `PartitionReference` is the single identity handle for a prepared dataset/partition association.
 Its `dataset_id` identifies the exact dataset representation, and its `partition_id` identifies
@@ -240,7 +247,7 @@ Schedule invariants:
   Groups may repeat. IDs and labels stay paired; reordering a sample tuple does not change their association.
 - Each fold references known sample IDs without repetition within either population; train/test IDs are disjoint.
 - Training members have `train_mask == 1`; testing members have `test_mask == 1`.
-- If `group_separated` is true, no group appears in both populations of one fold.
+- No group appears in both training and testing populations of one fold.
 - Source-file overlap is allowed even when samples/groups must be disjoint. Source references within one sample are
   unique; this does not forbid reuse across samples or folds.
 - Empty fold populations are structurally representable. Phase 1 does not invent an empty-population split policy or
@@ -248,7 +255,6 @@ Schedule invariants:
   later execution/report components apply their actual input requirements and defined failure/NaN rules.
 - The structural validator does not infer a splitting method, regenerate a split, require all samples to be tested
   for every strategy, or reject repeat appearances across folds. Strategy-specific coverage belongs to Phase 4.
-- `group_separated` records a schedule obligation; it is not a request to reassign group memberships.
 - This is the complete logical schedule. Parent records hold a reference to it, not an embedded second authoritative
   storage copy. In-memory/worker inputs may contain it; durable single-file storage belongs to Phase 2/4.
 
@@ -257,9 +263,8 @@ splitting method. Every sample has a group value; Phase 4 normalization assigns 
 when groups are absent and preserves supplied groups. Phase 1 validates existing values and memberships;
 it does not generate groups or alter partitions.
 
-This clarification supersedes the `group_separated` field and its conditional rules above. `PartitionSchedule`
-has exactly three fields: `reference: PartitionReference`, `samples: tuple[SampleRecord, ...]`, and
-`folds: tuple[FoldRecord, ...]`. No flag enables or disables group separation.
+`PartitionSchedule` contains its partition reference, sample metadata, and ordered folds. No flag enables or disables
+group separation.
 
 `validate_partition_schedule(value: PartitionSchedule) -> None` checks group separation unconditionally.
 Its tests must reject a shared group across distinct training/testing samples and accept both separated
@@ -442,10 +447,13 @@ output must use numeric values and the exact tokens `Inf`, `-Inf`, `NaN`, and `N
 
 ### 6.1 Predictions
 
-Predictions are normalized component outputs, not raw model return values. Fields are immutable Python tuples;
-adapters that use NumPy or PyTorch convert into this logical boundary in their own phases. Phase 1 adds neither
-library nor adapter. One prediction record belongs to one fold and has the same row order as that fold's saved
-testing IDs. Class columns use the parent evaluation's explicit order.
+Predictions are standardized component outputs with explicit fold, sample, and class alignment. Review the current tuple
+layouts against direct scientific containers across prediction production, report calculation, influence reuse, and
+inspection. Do not require conversion solely to make validation uniform.
+
+Select the value and failure-association representations together, including ownership and unavailable-value handling.
+Preserve `None` versus `NaN` and exact provenance without duplicate value-status arrays. Concrete model adapters remain
+in their assigned phases.
 
 | Record | Fields |
 | --- | --- |
@@ -458,8 +466,9 @@ introducing parallel status vectors.
 
 Prediction invariants:
 
-- For a fold with `n` saved testing IDs and `k` parent classes, regression value/failure vectors have length `n`;
-  classification label/failure vectors have length `n`, and probability/failure matrices have shape `(n, k)`.
+- For `n` testing samples and `k` classes, regression and predicted-label values have length `n`, and probabilities have
+  shape `(n, k)`. Failure associations identify the corresponding value positions exactly; their container need not
+  mirror the value container.
 - IDs exactly match the saved testing sequence, not merely its length or set. Adapters explicitly align their outputs;
   the validator rejects misalignment rather than silently reordering. Class labels exactly match parent class order.
 - True targets, labels, groups, masks, and source references resolve through `SampleRecord`; do not duplicate a
@@ -470,9 +479,9 @@ Prediction invariants:
 - Present regression predictions are finite floats. Present probabilities are finite floats in `[0, 1]`. `NaN` and
   infinity are invalid standardized model outputs rather than formula-defined prediction values. An unavailable
   regression prediction or probability is `None` with at least one applicable failure ID.
-- A present prediction has no value-level failure reference. A `None` prediction has a nonempty failure-reference
-  tuple. Formula-defined `NaN` and mathematically permitted infinity belong to later report measures, not standardized
-  model prediction records.
+- Present predictions have no unavailability failure association. Every `None` prediction has applicable failure
+  references. Formula-defined `NaN` and mathematically permitted infinity belong to later report measures, not
+  standardized predictions.
 - Probability normalization and raw-model numerical admissibility belong to model adapters. This structural layer
   does not introduce a probability-sum tolerance, renormalization, clipping, or reconstructed missing probabilities.
 - Empty testing sequences yield empty aligned rows. There is no fabricated prediction for an excluded sample.
@@ -480,6 +489,19 @@ Prediction invariants:
   validation records.
 
 ### 6.2 Report and result envelopes
+
+Review the following layouts under Section 9:
+
+- Prefer directly accessible attempt-routing metadata unless an embedded reference has a demonstrated consumer benefit.
+- Give each report one authoritative identity; fixed slots need no repeated report name unless independently consumed
+  reports require it.
+- Derive the attempt outcome using the specified precedence. If stored for independent consumption, validate it as a
+  summary rather than maintaining it independently.
+- Preserve report statuses and failure associations: payload presence alone cannot distinguish complete, failed,
+  blocked, and unrequested reports.
+
+Generic typing may preserve payload types but does not justify additional runtime wrappers. Reconcile selected layouts
+and validator signatures together. Concrete metric payloads remain in their producing phases.
 
 | Record / enum | Fields / values |
 | --- | --- |
@@ -567,6 +589,14 @@ the notation does not authorize bundling helpers with their caller.
 These are immutable observations owned by the indicated component. Phase 1 validators check internally consistent
 snapshots; they do not implement events, permitted-transition tables, allocation policy, stop delivery, readiness
 probes, result arbitration, retry loops, or recovery. Later components replace snapshots under their own authority.
+
+Identify each observation’s owner and whether it is an independent fact or a derived summary, especially for parent
+progress and worker availability. Derive convenience summaries where practical and validate intentionally stored
+summaries against their source facts.
+
+Preserve independent stop, process, readiness, selection, receipt, persistence, and acceptance observations. These
+shared contracts remain in Phase 1; durable mechanisms belong to Phase 2, and runtime transitions and scheduling belong
+to their later phases.
 
 ### 7.1 Vocabulary and fields
 
@@ -748,16 +778,16 @@ No missing future component is filled with a fake implementation to complete Pha
 
 **Representation review**
 
-Before extending affected contracts, resolve:
+Before extending or migrating an affected contract, identify its producer, consumer, owner, and required invariants.
+Compare the current representation with a simpler alternative, concentrating on source wrappers, repeated parent/model
+keys, prediction failure associations, report wrappers, and runtime summaries.
 
-- Whether attempt inputs and report payloads can be represented more directly, with fewer nested records.
-- Which keys, report names, outcomes, and runtime summaries are authoritative, derived, or necessarily repeated.
-- Whether one-field source records and dense nested failure references provide enough benefit over simpler alternatives.
-- Which container and validation choices best serve actual producers and consumers.
+Use successful and applicable failure examples to justify nesting, repeated metadata, container choices, and validation
+boundaries. Existing implementation is evidence to review, not a requirement to preserve unchanged.
 
-Demonstrate successful results, reconstruction failure, partial validation failure, downstream report failure, and
-influence failure. Preserve exact associations and provenance, including for detached records. Update the implementation
-inventory after selecting the schemas.
+Record the selected schema and reconcile its declarations, validators, tests, component references, and implementation
+inventory before requesting implementation approval. Until then, affected concrete layouts remain under review. Preserve
+the root roadmap’s phase boundaries and required persistence evidence.
 
 Follow this order. Each named declaration is its own potential approval unit; each named validator is one production
 function unit. A table row is an ordered inventory, **not** authorization to bundle its declarations or functions.
@@ -777,7 +807,7 @@ approved unit. Generated dataclass methods do not imply planned custom methods.
 | 9 | Operation enums; `BoundedOperation` | `validate_bounded_operation` | `tests/contracts/test_state.py` |
 | 10 | Receipt/persistence enums; `ReceptionRecord` | `validate_reception_record`; `validate_reception_set` | `tests/contracts/test_state.py` |
 | 11 | `CompatibilityMetadata`; declared supported-series constant | `validate_compatibility_metadata`; `require_compatible` | `tests/contracts/test_compatibility.py` |
-| 12 | No new production declaration/function | Review completed contract coverage and run applicable phase checks; report approval status and deferred boundaries. | Existing targeted modules only. |
+| 12 | No new production declaration/function | Confirm that representation decisions are resolved and reflected consistently in schemas, validators, tests, and component boundaries. Review contract coverage, run applicable phase checks, and report approval status and deferred boundaries. | Existing targeted modules only. |
 
 Place `ConsolidationState` in `execution.py` and `ReportName` in `identity.py`. No `ValueStatus` declaration is created.
 `failure.py` has no import from prediction/result/state; `state.py` may consume execution/failure records. This prevents
@@ -787,10 +817,9 @@ Do not add an unplanned reusable helper silently. If a validator needs a substan
 signature/data model must change, identify it and obtain the required approval before implementing the caller.
 Small direct validation logic stays in its coherent validator; no generic validation framework is planned.
 
-Declaration-only tests verify field defaults, keyword-only construction, frozen/tuple structure, equality, and type
-vocabulary as applicable. They do not pretend an unimplemented validator already rejects semantic errors. If a
-declaration has no independently meaningful runtime behavior (for example a `NewType` alias), explain the test
-deferral until its validator/consumer rather than adding a test that merely repeats the declaration.
+Declaration tests verify meaningful guarantees of the selected representation. Require keyword-only construction, frozen
+fields, or tuple structure only where contractual. Preserve semantic validation and ownership tests; do not add tests
+that merely repeat declarations.
 
 ## 10. Numerical behavior and validation requirements
 
@@ -799,7 +828,8 @@ aggregation. Architecture Sections 4.5–4.7 and 9.3 remain authoritative for la
 the approved influence denominator, classwise/micro/macro accuracy distinctions, within-sample classification
 residual axis, and formula-defined NaN behavior are not reopened here.
 
-Numerical checks in this phase are structural: integer count bounds, finite label/timestamp metadata, aligned vector
+Numerical checks in this phase are structural: integer count bounds, standardized text labels and finite timestamp
+metadata, aligned vector
 dimensions, probability bounds, and value/failure-reference consistency. Standardized prediction values must be finite
 when present; compare `NaN` through `math.isnan` and infinity through `math.isinf` when rejecting nonfinite prediction
 outputs or testing preserved later report payloads. Preserve all supplied valid values; do not convert scientific
@@ -810,8 +840,8 @@ For each approved implementation unit:
 
 - Run its directly corresponding pytest cases, including negative cases that could otherwise corrupt identity,
   hide a failure, or accept an incomplete outcome. Do not create unrelated test suites.
-- Use typed tests and immutable fixtures. Make sample labels deliberately different from internal sample IDs and
-  class labels, and use nontrivial row/class order so accidental position-only alignment is detectable.
+- Use typed fixtures matching the selected representations and test applicable ownership and aliasing guarantees. Keep
+  sample IDs, sample labels, and class labels distinct, with nontrivial row/class ordering to expose alignment errors.
 - Test validators' lack of mutation and absence of operational side effects. Source-reference tests do not need real
   datasets; compatibility tests never deserialize a payload; state tests do not launch workers or run retry loops.
 - Run mypy, Black `--check`, and Ruff on the applicable source/tests under `pyproject.toml`. Preserve its selected
@@ -838,17 +868,16 @@ No production tests are added or run merely to validate a documentation-only pla
 | Must Phase 1 build the public computation or lifecycle engine? | No. Phase 1 establishes records; Phase 3/13–18 own configuration and execution algorithms. |
 | How can inputs be fixed before detailed settings/model schemas exist? | Immutable typed references to snapshots owned by the later configuration producer; no mutable/executable objects embedded or independently overrideable attempt fields. |
 | How much dataset/report schema belongs here? | Sample/source/membership and prediction alignment plus generic report/envelope structure. Feature adapters and concrete metric payloads remain Phase 4/8–10. |
-| Which fields/types are selected now? | The explicit internal aliases, dataclasses, enums, tuple ordering, scalar label domain, logical source syntax, and validators above, subject to plan approval. |
+| Which fields/types are selected now? | Required semantics remain fixed. Concrete representations under Section 9 review are settled for extension only after their schemas and corresponding validation/test requirements are reconciled and approved. |
 | Does undefined science mean an operation failed? | No. Formula-defined `NaN` has no failure solely for being undefined; computationally unavailable `None` has applicable failure references; schema-defined non-applicable `None` has none. No per-value status enum is needed. |
 | Does a failure-only result finish delivery or terminate a worker? | No. It is a complete scientific outcome, independently selected/persisted/accepted later. |
 | What does a retry count mean? | Total begun attempts including the first, bounded by a supplied total limit; no policy defaults or timers chosen. |
 | Are frozen records proof of durable acceptance or isolation? | No. They describe evidence/references; storage, ownership, concurrency, and enforced execution boundaries remain later obligations. |
 | Does Python mismatch imply framework incompatibility? | Not within the declared supported stable series; complete Cocoonet strings must match exactly. |
 
-No required Phase 1 semantic ambiguity remains after these proposed representation choices. The governing documents
-explicitly assign concrete containers/field names to Phase 1 and reserve the later mechanisms below. The plan does
-not treat those reserved mechanisms as blockers or as implemented behavior. If the user rejects a proposed internal
-representation, amend this plan before its affected declaration is implemented.
+Scientific and lifecycle requirements remain established. Resolve Section 9 representation decisions before affected
+implementation, preserving the root roadmap’s distinction between shared contracts and later payload schemas, storage
+mechanisms, and runtime algorithms.
 
 ### 11.2 Inconsistencies found
 
@@ -898,8 +927,8 @@ Implementation order: identity primitives → sample/source/schedule records →
 → failures → predictions → report/result envelopes → execution/worker/operation/reception observations → compatibility
 guard → contract coverage and quality checks.
 
-Remaining Phase 1 blocking ambiguity: **none identified**. All concrete choices in this proposal require plan approval;
-that approval does not itself authorize implementing any production unit.
+Outstanding Phase 1 work includes representation review and reconciliation of affected schemas, validators, and tests.
+Unresolved decisions block affected units. Plan approval does not authorize production changes.
 
 Stop here and wait for explicit user approval. No Phase 1 source code or tests have been implemented by this planning
 task, and no automatic commit is authorized.

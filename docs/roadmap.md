@@ -79,13 +79,16 @@ outcome, before their producers and consumers. Distinguish formula-defined `NaN`
 references, and schema-defined non-applicable `None` without introducing a parallel per-value status enum. Define trace
 context for stage, model, fold, sample/class, exception, message, and traceback.
 
-Before dependent implementation expands, review the existing contracts for unnecessary nesting, duplicate facts, derived
-statuses, container restrictions, and validation machinery. Demonstrate production, inspection, and consumption of the
-selected representations, including partial failures.
+Before dependent implementation expands, review the shared contracts for unnecessary nesting, duplicate facts, derived
+summaries, container restrictions, and validation machinery. Select minimal representations using concrete production,
+inspection, and consumption examples, including partial failures.
 
-Record required documentation amendments and preserve identity, ownership, alignment, provenance, and lifecycle
-invariants. This review does not itself authorize code changes. Wire encodings, lifecycle algorithms, metric
-calculations, and model execution remain for their respective phases.
+Phase 1 settles the shared identities, associations, prediction/result structure, and operational evidence needed by
+dependent phases. Concrete metric payloads, model adapters, storage/wire encodings, and lifecycle algorithms remain in
+their assigned phases.
+
+Reconcile affected schemas, validators, tests, and component boundaries before implementing their consumers. Preserve
+scientific and lifecycle semantics; this review does not itself authorize code changes.
 
 ### 2. Filesystem ownership and durable persistence foundations
 
@@ -105,6 +108,10 @@ root/worker
 running and error logs, failure/provenance context, and explicit persistence errors. Result persistence must support
 asynchronous I/O and
 content processing outside the active receive path.
+
+Use the reviewed Phase 1 contracts for identity, association, and required durable evidence. Storage foundations must
+not require concrete future metric payloads or implement scheduling, acceptance policy, or recovery transitions.
+Integrate later payload schemas when their producing phases define them.
 
 The exit condition is a reliable storage interface and stable recovery evidence, not an implemented recovery engine.
 Do not duplicate the authoritative partition storage. Split generation, execution-state transitions, resend loops,
@@ -614,9 +621,10 @@ categories, distributed folds, rendered worker plots, and a public-service imple
 No unresolved architectural contradiction currently prevents this ordering. The difficult boundaries are handled
 before their consumers, rather than postponed until they force changes across working subsystems:
 
-- **State before behavior:** Phase 1 defines parent/unit/attempt, selection, acceptance, operation, and stop records;
-  Phase 2 makes required evidence durable. Local scheduling, delivery, recovery, and distributed arbitration then
-  implement those records in that order. Do not equate a failed operation with a stopped worker or a completed unit.
+- **Shared evidence before behavior:** Phase 1 defines minimal parent/unit/attempt associations and independent stop,
+  selection, acceptance, and operation observations. Phase 2 establishes their required durable evidence. Later phases
+  implement transitions, scheduling, delivery, and recovery. Derive convenience summaries where practical; do not
+  collapse independently meaningful observations or require a nested runtime object hierarchy.
 - **Data and results before orchestration:** Dataset/sample/source and prediction/report contracts precede model
   workflows and packaging. Model-family adapters consume one report interface. Local control and online transport
   differ at their boundaries while preserving task, scientific, persistence, and acceptance semantics.
