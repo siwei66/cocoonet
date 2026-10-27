@@ -102,8 +102,8 @@ corresponding tests pass, and:
 Completion does not establish a usable evaluation workflow or permit beginning Phase 2 without its own planning and
 implementation approvals.
 
-Apply these completion criteria to the schemas selected through the Section 9 review. Update superseded declarations and
-representation-specific tests while retaining the required scientific and lifecycle invariants.
+Phase 1 completion requires declarations, validators, component boundaries, and tests to agree
+with the schemas and scientific and lifecycle invariants specified in this roadmap.
 
 ## 3. Representation and validation conventions
 
@@ -148,10 +148,15 @@ later consumers. Future public computation/worker APIs are explicitly deferred.
   representation. Do not use a broader shared alias that admits invalid standardized values.
 - Input standardization performs permitted conversions. Contract validators check standardized values without coercion.
 
-Any retained `ScalarLabel` alias denotes standardized text only. A separately permitted model-label domain requires an
-explicit definition. Target validators must obtain task kind from explicit evaluation context; standalone metadata
-checks enforce only task-independent conditions. The dataset API retains ownership of the floating-point representation
-choice.
+ScalarLabel accepts standardized Python and NumPy string scalars. TargetValue accepts those strings,
+Python floating-point scalars, and NumPy floating-point scalars without restricting precision.
+Validation preserves scalar types and values; it does not convert them to Python built-ins.
+Integer and boolean values are not standardized labels or targets. A separately permitted model-label
+domain requires an explicit definition.
+
+Standalone sample validation rejects nonfinite floating-point targets without narrowing their precision.
+Task-specific validation uses explicit evaluation context, not inference from target values. The dataset
+API owns input standardization and floating-point representation selection.
 
 - Counts are nonnegative integers, excluding `bool`; eligibility flags are integers exactly `0` or `1`, excluding
   `bool` in the normalized record. Adapters may later accept other input forms but must output this representation.
@@ -164,8 +169,8 @@ choice.
 - Contract-validator `ValueError` diagnostics identify the affected context, expected value or condition, and observed
   value or condition. Use a concise sentence for simple violations and a structured multiline form when several
   context fields are needed. Keep observed information bounded; do not render complete large payloads or collections.
-  Tests verify the required diagnostic information under the testing policy in `AGENTS.md`. Existing diagnostics that
-  satisfy that requirement need no format-only rewriting.
+  Tests verify the required diagnostic information under AGENTS.md.
+  Exact message wording is required only where explicitly contractual.
 - Construction does not establish semantic validity. Validate before publication and at independent consuming boundaries
   under `AGENTS.md`. Internal helpers may rely on documented preconditions when ownership prevents intervening
   invalidation. Keep validation explicit and directly testable.
@@ -214,7 +219,7 @@ All fields in the following tables are required unless an explicit default is sh
 
 | Record | Fields |
 | --- | --- |
-| `SourceReference` | `relative_path: str` |
+| `SourceReference` | String type alias: `type SourceReference = str`; no wrapper record or `relative_path` attribute. |
 | `SampleRecord` | `sample_id: SampleId`, `sample_label: str`, `group: str`, `train_mask: int`, `test_mask: int`, `target: TargetValue` (classification: text; regression: selected finite floating-point representation, validated according to task under Section 3.2), `sources: tuple[SourceReference, ...]` |
 | `PartitionReference` | `partition_id: PartitionId`, `dataset_id: DatasetId` |
 | `FoldRecord` | `fold_id: FoldId`, `training_sample_ids: tuple[SampleId, ...]`, `testing_sample_ids: tuple[SampleId, ...]` |
@@ -240,6 +245,10 @@ or `..` segment, leading slash, backslash, or drive prefix. This is an internal 
 Phase 4 maps actual source paths to it. Reject invalid syntax rather than repairing it. This lexical check does not
 resolve symlinks, establish containment, access a file, or replace Phase 2 ownership validation. Preserve spelling and
 case; physical encoding and local storage layouts remain deferred.
+
+SampleRecord.sources contains logical path strings directly. Validate their syntax and uniqueness
+without normalization or filesystem access. Inline samples reference their input table; file-backed
+samples reference their X-bearing files. Managed reference/metadata tables are not sample sources.
 
 Schedule invariants:
 
@@ -280,8 +289,7 @@ compatibility remains Phase 4 work and must preserve the universal separation ru
 | `ModelReference` | `model_id: ModelId`, `model_label: ScalarLabel`, `family: ModelFamily`, `task_kind: TaskKind` |
 | `EvaluationReference` | `configuration_id: EvaluationConfigId`, `task_kind: TaskKind`, `class_labels: tuple[ScalarLabel, ...]`, `influence_requested: bool` |
 | `ComputationSnapshot` | `root_dir: str`, `consolidation: ConsolidationState`, `partition: PartitionReference | None`, `evaluation: EvaluationReference | None`, `models: tuple[ModelReference, ...]`, `worker_ids: tuple[WorkerId, ...]`, `parent_id: ParentId | None` |
-| `UnitTask` | `key: UnitKey`, `model: ModelReference` |
-| `ParentEvaluation` | `parent_id: ParentId`, `partition: PartitionReference`, `evaluation: EvaluationReference`, `units: tuple[UnitTask, ...]` |
+| `ParentEvaluation` | `parent_id: ParentId`, `partition: PartitionReference`, `evaluation: EvaluationReference`, `models: tuple[ModelReference, ...]` |
 | `AttemptInputs` | `attempt_id: AttemptId`, `unit: UnitKey`, `worker_id: WorkerId` |
 
 `ConsolidationState` has exactly `initialized`, `consolidated`, and `unconsolidated`.
@@ -312,16 +320,18 @@ missing probabilities. All models in a parent match its task kind; their familie
 
 Parent and attempt invariants:
 
-- A parent has one partition reference, one evaluation reference, and at least one unit. The partition
-  reference fixes both the exact dataset identity and realized partition identity. Unit keys name that
-  parent and match their model reference; model IDs and labels are unique there.
-- The referenced evaluation configuration, dataset, partition, and model inputs remain fixed throughout
-  every attempt's lifetime.
-  A worker-only configuration edit does not redefine them or create a parent.
-- `AttemptInputs` resolves its model and all scientific inputs through its unit's parent. It has no independent
-  dataset, settings, split, or model override. Duplicate attempts differ in attempt identity and potentially worker,
-  while resolving the same scientific inputs.
-- `ParentEvaluation` contains the known unit set. Attempts are separate records; a parent does not own worker lifetime.
+- A parent has one partition reference, one evaluation reference, and at least one model reference.
+  Model IDs and model labels are unique within the parent; every model agrees with its task-wide task kind.
+- Each model defines one logical unit identified by UnitKey(parent_id, model_id). ParentEvaluation
+  stores model references directly, without embedded UnitTask records or a second unit collection.
+- Evaluation configuration, dataset, partition, and model inputs remain fixed throughout each attempt's
+  lifetime. Supplied model/framework parallelism settings remain part of those fixed inputs.
+- AttemptInputs carries UnitKey as an independently consumed allocation reference. Resolve its model
+  through the fixed parent's models; reject unknown models and mismatched parents. Duplicate attempts
+  differ in attempt identity and potentially worker, not scientific inputs.
+- Worker n_attempt and effective attempt capacity belong to worker configuration and execution control,
+  not the parent's scientific inputs. Worker-only configuration edits do not create another parent.
+- Attempts remain separate from the parent; a parent does not own worker lifetime.
 - Copying a configuration does not create identities, runtime resources, or artifacts. Resumption and prospective
   edits follow architecture Section 2.3; transition/copy algorithms are Phase 3/15, not methods on these records.
 
@@ -330,12 +340,12 @@ Parent and attempt invariants:
 | Signature | Responsibility | Direct tests |
 | --- | --- | --- |
 | `validate_source_reference(value: SourceReference) -> None` | Validate logical relative syntax only. | Valid nested reference; empty/absolute/drive/backslash/dot/traversal forms rejected; no filesystem access. |
-| `validate_sample_record(value: SampleRecord) -> None` | Validate identity/label/group, scalar target type, normalized masks, nonempty unique sources. | Both mask values, bad masks/types, several files, shared files across samples, missing source, no target repair. |
+| `validate_sample_record(value: SampleRecord) -> None` | Validate identity/label/group, standardized target type and floating-point finiteness, normalized masks, and nonempty unique sources; do not infer task kind. | Python/NumPy scalar acceptance without conversion; reject integer/boolean targets and nonfinite floating targets; preserve extended precision; valid/invalid masks and sources. |
 | `validate_partition_schedule(value: PartitionSchedule) -> None` | Validate complete logical associations and per-fold eligibility/disjointness/group rules. | Duplicate ID/label/fold; unknown ID; forbidden membership; group leakage; legal file overlap; reordered metadata; empty populations; repeated cross-fold use. |
 | `validate_model_reference(value: ModelReference) -> None` | Check identity/label and declared family/task-kind tags. | Valid families/kinds; invalid tags; no model object/API inspection or derived descriptions. |
 | `validate_evaluation_reference(value: EvaluationReference) -> None` | Check settings handle, task kind, class order, influence flag. | Regression/classification class rules; equality collisions; one class allowed; no sorting/coercion. |
 | `validate_computation_snapshot(value: ComputationSnapshot) -> None` | Check structural consolidation/parent relationships, the optional partition and evaluation references, and model/worker uniqueness while allowing incomplete configuration. | All three states; zero models/workers/partition; present partition with valid or invalid partition/dataset identity; missing required parent; unchanged parent after worker-list edit; snapshot unchanged by validation. |
-| `validate_parent_evaluation(value: ParentEvaluation) -> None` | Check the required partition-reference identities, fixed parent structure, known unit set, labels, and model/task-kind agreement. | Empty or invalid partition/dataset identity; empty units; mixed task kinds; duplicate IDs/labels; wrong unit parent/model; same label in different parents allowed. |
+| `validate_parent_evaluation(value: ParentEvaluation) -> None` | Check partition-reference identities, fixed parent structure, nonempty models, unique model IDs/labels, and agreement with the task-wide task kind. | Invalid partition/dataset identity; empty models; mixed task kinds; duplicate IDs/labels; same label in different parents allowed. |
 | `validate_attempt_inputs(value: AttemptInputs, *, parent: ParentEvaluation) -> None` | Resolve the exact unit/model context and validate attempt/worker identities. | Unknown/cross-parent unit; duplicates with different attempts/workers; no independent scientific override. |
 
 When an execution record contains a `PartitionReference`, its validator validates both
@@ -447,12 +457,16 @@ output must use numeric values and the exact tokens `Inf`, `-Inf`, `NaN`, and `N
 
 ### 6.1 Predictions
 
-Predictions are standardized component outputs with explicit fold, sample, and class alignment. Review the current tuple
-layouts against direct scientific containers across prediction production, report calculation, influence reuse, and
-inspection. Do not require conversion solely to make validation uniform.
+Prediction values and their position-aligned failure references use immutable tuples. A successful
+value has an empty failure tuple; an unavailable value has the applicable failure IDs. This represents
+independently unavailable labels and probability cells without coordinate lookup, mutable mappings,
+or parallel status arrays.
 
-Select the value and failure-association representations together, including ownership and unavailable-value handling.
-Preserve `None` versus `NaN` and exact provenance without duplicate value-status arrays. Concrete model adapters remain
+The representation includes empty failure tuples for successful positions. This cost is accepted
+for direct positional inspection and immutable ownership. Phase 1 defines no sparse association
+type or alternative-representation adapter.
+
+Preserve exact sample/class alignment and None-versus-NaN semantics. Concrete model adapters remain
 in their assigned phases.
 
 | Record | Fields |
@@ -490,25 +504,24 @@ Prediction invariants:
 
 ### 6.2 Report and result envelopes
 
-Review the following layouts under Section 9:
+A complete attempt result carries parent, model, attempt, and worker identities directly.
+AttemptInputs and UnitKey serve allocation and operational boundaries; they are not embedded
+in the completed result.
 
-- Prefer directly accessible attempt-routing metadata unless an embedded reference has a demonstrated consumer benefit.
-- Give each report one authoritative identity; fixed slots need no repeated report name unless independently consumed
-  reports require it.
-- Derive the attempt outcome using the specified precedence. If stored for independent consumption, validate it as a
-  summary rather than maintaining it independently.
-- Preserve report statuses and failure associations: payload presence alone cannot distinguish complete, failed,
-  blocked, and unrequested reports.
+A report's fixed result slot supplies its category. ReportOutcome contains status, payload,
+and failure references. An independently consumed report receives its category explicitly from
+its caller. Failure context includes ReportName when needed to identify the failed operation.
 
-Generic typing may preserve payload types but does not justify additional runtime wrappers. Reconcile selected layouts
-and validator signatures together. Concrete metric payloads remain in their producing phases.
+EvaluationOutcome is derived from a validated complete result. It is not a constructor field,
+cached property, or independently maintained state. Report statuses remain authoritative because
+payload presence alone cannot distinguish complete, failed, blocked, and unrequested reports.
 
 | Record / enum | Fields / values |
 | --- | --- |
 | `ReportStatus` | `complete`, `failed`, `blocked`, `not_requested` |
-| `ReportOutcome[T]` | `name: ReportName`, `status: ReportStatus`, `payload: T | None`, `failure_ids: tuple[FailureId, ...]` |
+| `ReportOutcome[T]` | `status: ReportStatus`, `payload: T | None`, `failure_ids: tuple[FailureId, ...]` |
 | `EvaluationOutcome` | `completed`, `completed_with_errors`, `validation_failed`, `reconstruction_failed` |
-| `AttemptResult[V, P, R, Z, I]` | `inputs: AttemptInputs`, `outcome: EvaluationOutcome`, `predictions: tuple[PredictionBatch, ...]`, `validation: ReportOutcome[V] | None`, `performance: ReportOutcome[P] | None`, `residual: ReportOutcome[R] | None`, `visualization: ReportOutcome[Z] | None`, `influence: ReportOutcome[I] | None`, `failures: tuple[FailureRecord, ...]` |
+| `AttemptResult[V, P, R, Z, I]` | `parent_id: ParentId`, `model_id: ModelId`, `attempt_id: AttemptId`, `worker_id: WorkerId`, `predictions: tuple[PredictionBatch, ...]`, `validation: ReportOutcome[V] | None`, `performance: ReportOutcome[P] | None`, `residual: ReportOutcome[R] | None`, `visualization: ReportOutcome[Z] | None`, `influence: ReportOutcome[I] | None`, `failures: tuple[FailureRecord, ...]` |
 
 Generic type parameters reserve concrete report-data contracts for their producing phases without `Any`, an open
 dictionary schema, placeholder report implementations, or a premature list of metric fields. A later concrete payload
@@ -559,8 +572,25 @@ Complete attempt rules:
 - Outcome precedence is `reconstruction_failed`, then `validation_failed`, then `completed_with_errors`, then
   `completed`. This precedence summarizes the required-stage result without replacing individual report statuses or
   failure records.
-- The supplied schedule's partition and dataset IDs must exactly match the parent's binding. Failure-only outcomes
-  obey this association too. The prediction subtype must match the parent's task kind.
+
+derive_evaluation_outcome() is a pure function consuming an already validated complete AttemptResult.
+It applies the precedence above using reconstruction, primary-validation, and report failure facts.
+It performs no mutation, caching, persistence, or recursive revalidation.
+
+validate_attempt_result() checks completeness, stage consistency, and provenance directly. It does not
+depend on a separately supplied outcome or use derivation as a substitute for those checks. Invalid or
+incomplete records must not receive an outcome merely by applying precedence.
+
+A Phase 12 outcome summary, if needed for independent consumption, is derived from the validated result
+and checked against that result when loaded. It is not another authoritative state.
+
+- The schedule's partition and dataset IDs must match the parent's binding. The result's parent_id
+  must match that parent, and model_id must resolve to its models. Validate attempt/worker identities
+  and matching failure context directly, without constructing allocation records solely for validation.
+- Before any reconstruction-failure early return, validate every schedule target against parent.evaluation:
+  regression requires finite floating-point scalars; classification requires strings belonging to the
+  authoritative class vocabulary. These checks include masked samples. The prediction subtype must
+  also match the parent's task kind.
 - Failures and all fold/sample/class contexts resolve against the same parent, attempt, schedule, and class vocabulary.
   A sample-specific influence error names a training member of its stated fold; prediction errors naming a sample
   refer to that fold's testing population. A shared fold-level error need not invent a sample/class identity.
@@ -578,8 +608,9 @@ Complete attempt rules:
 | --- | --- | --- |
 | `validate_regression_predictions(value: RegressionPredictions, *, fold: FoldRecord) -> None` | Validate sample alignment, vector lengths, finite present values, and value/failure-reference relationships. | Reordered/unknown/excluded IDs; length mismatch; finite value without failure; `None` with failure; reject `None` without failure, present value with failure, `NaN`, infinity, bool, and wrong numeric type; empty test set; no input changes. |
 | `validate_classification_predictions(value: ClassificationPredictions, *, fold: FoldRecord, class_labels: tuple[ScalarLabel, ...]) -> None` | Validate class/sample alignment, matrix shapes, label membership, finite probabilities, and value/failure-reference relationships. | Swapped classes; ragged matrices; missing/unknown labels; independently unavailable label/class cells; reject `None` without failure, present value with failure, `NaN`, infinity, bool, and out-of-range probability; no probability filling/reordering. |
-| `validate_report_outcome[T](value: ReportOutcome[T]) -> None` | Validate generic outcome name/status/payload/failure relationship only. | Every report status; complete immutable payload containing `NaN`, permitted infinity, or schema-defined `None`; failed with preserved or absent payload; blocked with preserved structure; empty failure references rejected where required. |
-| `validate_attempt_result[V, P, R, Z, I](value: AttemptResult[V, P, R, Z, I], *, parent: ParentEvaluation, schedule: PartitionSchedule) -> None` | Compose prior validators; require `parent.partition == schedule.reference`; validate all remaining contextual links and complete result rules. | Completed regression/classification; reconstruction failure without predictions or reports; validation fit/prediction failure with preserved folds and failed/blocked dependent reports; remaining-fold continuation; influence blocked by validation failure; successful primary validation with failed influence or ordinary report; optional influence not requested; undefined-only completion; mismatched parent/schedule, attempt/fold/class, dangling failures, and excluded non-computational failure scopes. |
+| `validate_report_outcome[T](value: ReportOutcome[T]) -> None` | Validate status/payload/failure relationships; report category comes from the owning slot or caller. | Every report status; complete immutable payload containing permitted NaN/infinity/None; failed with preserved or absent payload; blocked with preserved structure; required failure references; no stored report name. |
+| `validate_attempt_result[V, P, R, Z, I](value: AttemptResult[V, P, R, Z, I], *, parent: ParentEvaluation, schedule: PartitionSchedule) -> None` | Validate direct routing, parent/schedule association, task-compatible targets, predictions, reports, provenance, and complete-stage rules. | Completed regression/classification; reconstruction failure without predictions/reports; primary-fold failure with preserved results and failed/blocked dependent reports; remaining-fold continuation; blocked influence; ordinary/influence failures after successful validation; unrequested influence; undefined-only completion; failure-only target checks; mismatched routing, task, vocabulary, schedule, dangling provenance, and excluded non-computational failure scopes. |
+| `derive_evaluation_outcome[V, P, R, Z, I](value: AttemptResult[V, P, R, Z, I]) -> EvaluationOutcome` | Derive the summary of a validated complete result without mutation or revalidation. | All four outcomes and precedence; ordinary/influence failures after successful validation; formula-defined NaN does not create a failure; no caching. |
 
 The type-parameter notation above uses Python 3.12 generic syntax. Declaration and validator units remain separate;
 the notation does not authorize bundling helpers with their caller.
@@ -659,9 +690,12 @@ it as an operation of these kinds.
   process status after lost contact is not proof of process failure.
 - Available requires ownership by this root, compatible framework metadata, an observed running
   process, and known attempt capacity. It does not imply that any slot is free.
-- attempt_capacity is a positive integer excluding bool, or None when unknown. Its producer
-  supplies the CPU concurrency limit or GPU capacity of one under architecture Section 8;
-  Phase 1 does not detect CPUs or calculate runtime capacity.
+- attempt_capacity is a positive integer excluding bool, or None when unknown. For CPU workers,
+  it is the effective_n_attempt supplied by worker control under architecture Section 8; for GPU
+  workers, it is one. It is neither requested n_attempt nor a CPU count.
+  Requested/effective limit reporting, CPU-demand accounting, the one-step adjustment or rejection,
+  and capacity revalidation belong to worker control in the applicable later phases.
+  Phase 1 does not detect CPUs, calculate capacity, or inspect model/framework parallelism settings.
 - active_attempt_ids contains unique, valid IDs for allocated attempts whose slot reservations
   have not been released, including applicable pending-delivery handling. Attempt state and
   provenance remain in their own records.
@@ -674,6 +708,15 @@ it as an operation of these kinds.
   Runtime allocation and reservation synchronization belong to later phases.
 - Local and online workers use the same logical observation; there is no fake connection record for a local worker.
   Authentication and public allocation details are not encoded by `owned_by_root`.
+
+Each reservation identifies one complete model-evaluation attempt. Cocoonet CPU multiprocessing is
+across attempts, not folds or sample-removal evaluations. GPU execution has one Cocoonet attempt
+slot and no Cocoonet-level multiprocessing. Model/framework loading and training parallelism
+remains independently configured and passes unchanged to its owner.
+
+Phase 1 records describe reservations and observations only. Admission synchronization, subprocess
+supervision, isolation, and cooperative stopping belong to their runtime owners. A scientific result
+or derived outcome does not itself release a slot or establish delivery or acceptance.
 
 ### 7.3 Bounded-operation semantics
 
@@ -769,7 +812,7 @@ method signatures, IPC, or messages. Later component implementations call the ap
 | --- | --- | --- | --- |
 | Root configuration | User inputs; later validated source ownership | `ComputationSnapshot`, fixed model/evaluation references; keep authoritative inputs behind immutable handles. | 3–4 |
 | Dataset preparation | User source representation and split configuration or saved artifact | Validated `PartitionSchedule`, whose `PartitionReference` is the sole dataset/partition identity handle; exact identity/content verification and one authoritative durable schedule. | 2–4 |
-| Root parent commitment | Complete validated configuration and durable partition reference | `ParentEvaluation` and known unit set; never alter old snapshots for prospective edits. | 3, 13 |
+| Root parent commitment | Complete validated configuration and durable partition reference | `ParentEvaluation` with fixed model references; each model defines one logical unit through the parent/model identity pair. Old snapshots remain fixed during prospective edits. | 3, 13 |
 | Root coordination | Fixed parent, readiness, unit/attempt/reception observations | `AttemptInputs`, progress/selection/acceptance observations; allocation and duplicate policy remain separate from records. | 13–18 |
 | Worker control/readiness | Applicable local/online parent context, owned worker | `WorkerObservation`, `AttemptProgress`; no model execution in the coordinator or control path. | 5, 13–17 |
 | Model initialization/execution | Resolved fixed model input and framework-supplied sample data | Aligned standardized predictions or scoped failures; executable loading only inside enforced worker boundary. | 5–7, 10 |
@@ -785,18 +828,22 @@ No missing future component is filled with a fake implementation to complete Pha
 
 ## 9. Dependency-safe implementation units
 
-**Representation review**
+**Contract design**
 
-Before extending or migrating an affected contract, identify its producer, consumer, owner, and required invariants.
-Compare the current representation with a simpler alternative, concentrating on source wrappers, repeated parent/model
-keys, prediction failure associations, report wrappers, and runtime summaries.
+The shared contracts use direct source strings, parent-owned model references, direct attempt-result
+routing fields, report identity supplied by its slot/caller, and a derived evaluation outcome.
 
-Use successful and applicable failure examples to justify nesting, repeated metadata, container choices, and validation
-boundaries. Existing implementation is evidence to review, not a requirement to preserve unchanged.
+UnitKey identifies independently consumed parent/model associations. PartitionReference binds a
+dataset to its realized partition. Report status/payload/failure records distinguish report outcomes.
+Trace context identifies failure provenance. Prediction failure associations use the position-aligned
+representation specified in Section 6.1.
 
-Record the selected schema and reconcile its declarations, validators, tests, component references, and implementation
-inventory before requesting implementation approval. Until then, affected concrete layouts remain under review. Preserve
-the root roadmap’s phase boundaries and required persistence evidence.
+Before proposing each implementation unit, verify its producer, consumer, ownership, and required
+invariants against this specification and perform the development reviews required by AGENTS.md.
+Declarations, validators, consumers, tests, and component boundaries must agree on these contracts.
+
+Implementation requires explicit unit approval. Preserve the root roadmap's phase boundaries,
+independent operational states, and required persistence evidence.
 
 Follow this order. Each named declaration is its own potential approval unit; each named validator is one production
 function unit. A table row is an ordered inventory, **not** authorization to bundle its declarations or functions.
@@ -806,17 +853,17 @@ approved unit. Generated dataclass methods do not imply planned custom methods.
 | Order | Declarations, in dependency order | Then implement these function units, in order | Direct test module |
 | --- | --- | --- | --- |
 | 1 | Scalar/target aliases; each ID alias; `ReportName`; `UnitKey` | `validate_identifier`; `validate_label`; `validate_unit_key` | `tests/contracts/test_identity.py` |
-| 2 | `SourceReference`; `SampleRecord`; `PartitionReference`; `FoldRecord`; `PartitionSchedule` | `validate_source_reference`; `validate_sample_record`; `validate_partition_schedule` | `tests/contracts/test_data.py` |
-| 3 | `TaskKind`; `ModelFamily`; `ConsolidationState`; `ModelReference`; `EvaluationReference`; `ComputationSnapshot`; `UnitTask`; `ParentEvaluation`; `AttemptInputs` | `validate_model_reference`; `validate_evaluation_reference`; `validate_computation_snapshot`; `validate_parent_evaluation`; `validate_attempt_inputs` | `tests/contracts/test_execution.py` |
+| 2 | `SourceReference` string alias; `SampleRecord`; `PartitionReference`; `FoldRecord`; `PartitionSchedule` | `validate_source_reference`; `validate_sample_record`; `validate_partition_schedule` | `tests/contracts/test_data.py` |
+| 3 | `TaskKind`; `ModelFamily`; `ConsolidationState`; `ModelReference`; `EvaluationReference`; `ComputationSnapshot`; `ParentEvaluation`; `AttemptInputs` | `validate_model_reference`; `validate_evaluation_reference`; `validate_computation_snapshot`; `validate_parent_evaluation`; `validate_attempt_inputs` | `tests/contracts/test_execution.py` |
 | 4 | `FailureScope`; `TraceContext`; `FailureRecord` | `validate_trace_context`; `validate_failure_record`; `validate_failure_links` | `tests/contracts/test_failure.py` |
 | 5 | `RegressionPredictions`; `ClassificationPredictions`; `PredictionBatch` | `validate_regression_predictions`; `validate_classification_predictions` | `tests/contracts/test_prediction.py` |
-| 6 | `ReportStatus`; `ReportOutcome`; `EvaluationOutcome`; `AttemptResult` | `validate_report_outcome`; `validate_attempt_result` | `tests/contracts/test_result.py` |
+| 6 | `ReportStatus`; `ReportOutcome`; `EvaluationOutcome`; `AttemptResult` | `validate_report_outcome`; `validate_attempt_result`; `derive_evaluation_outcome` | `tests/contracts/test_result.py` |
 | 7 | Execution/attempt/stop enums; `ParentProgress`; `StopDisposition`; `AttemptProgress` | `validate_parent_progress`; `validate_stop_disposition`; `validate_attempt_progress` | `tests/contracts/test_state.py` |
 | 8 | Worker/ownership/compatibility enums; `ParentReadiness`; `WorkerObservation` | `validate_worker_observation` | `tests/contracts/test_state.py` |
 | 9 | Operation enums; `BoundedOperation` | `validate_bounded_operation` | `tests/contracts/test_state.py` |
 | 10 | Receipt/persistence enums; `ReceptionRecord` | `validate_reception_record`; `validate_reception_set` | `tests/contracts/test_state.py` |
 | 11 | `CompatibilityMetadata`; declared supported-series constant | `validate_compatibility_metadata`; `require_compatible` | `tests/contracts/test_compatibility.py` |
-| 12 | No new production declaration/function | Confirm that representation decisions are resolved and reflected consistently in schemas, validators, tests, and component boundaries. Review contract coverage, run applicable phase checks, and report approval status and deferred boundaries. | Existing targeted modules only. |
+| 12 | No new production declaration/function | Verify agreement among schemas, validators, consumers, tests, and component boundaries; target-validation ownership; scalar preservation; bounded diagnostics; helper documentation; nonredundant composed validation; and complete-attempt reservation semantics. The universal validator and its tests are outside the development scope. Run applicable phase checks. | Targeted contract test modules. |
 
 Place `ConsolidationState` in `execution.py` and `ReportName` in `identity.py`. No `ValueStatus` declaration is created.
 `failure.py` has no import from prediction/result/state; `state.py` may consume execution/failure records. This prevents
@@ -837,13 +884,14 @@ aggregation. Architecture Sections 4.5–4.7 and 9.3 remain authoritative for la
 the approved influence denominator, classwise/micro/macro accuracy distinctions, within-sample classification
 residual axis, and formula-defined NaN behavior are not reopened here.
 
-Numerical checks in this phase are structural: integer count bounds, standardized text labels and finite timestamp
-metadata, aligned vector
-dimensions, probability bounds, and value/failure-reference consistency. Standardized prediction values must be finite
-when present; compare `NaN` through `math.isnan` and infinity through `math.isinf` when rejecting nonfinite prediction
-outputs or testing preserved later report payloads. Preserve all supplied valid values; do not convert scientific
-outcomes to a preferred finite result. The operation count inequality is
-`0 <= attempts_made <= attempt_limit`, with `attempt_limit >= 1`; it is not a retry scheduling algorithm.
+Numerical checks cover integer count bounds, standardized scalar admissibility, finite dataset
+targets and timestamps, aligned dimensions, probability bounds, and value/failure consistency.
+Present standardized predictions are finite. Use checks appropriate to the supplied scalar type;
+do not narrow precision merely to test finiteness or identify NaN/infinity.
+
+Formula-defined NaN and permitted infinity in report payloads retain their documented meanings.
+The operation-count constraint is 0 <= attempts_made <= attempt_limit, with attempt_limit >= 1;
+it is not a retry scheduling algorithm.
 
 For each approved implementation unit:
 
@@ -851,12 +899,27 @@ For each approved implementation unit:
   hide a failure, or accept an incomplete outcome. Do not create unrelated test suites.
 - Use typed fixtures matching the selected representations and test applicable ownership and aliasing guarantees. Keep
   sample IDs, sample labels, and class labels distinct, with nontrivial row/class ordering to expose alignment errors.
+- Classification success fixtures use string targets from the evaluation's class vocabulary.
+  Regression success fixtures use finite floating-point targets. Negative cases cover wrong
+  task-target combinations, unknown class targets, nonfinite targets, and failure-only results
+  with invalid target context.
+- Contract tests cover supported Python/NumPy scalar families without conversion, including
+  precision preservation and applicable string subclasses. Numeric and boolean standardized
+  labels are rejected.
+- Contract diagnostic assertions check the required field/context, expected condition, observed
+  type/value, and bounded output. Exact complete wording is required only where contractual.
+- Sample/class alignment diagnostics report lengths and a mismatch position or bounded preview,
+  rather than complete sequences. Tests include long sequences and ordering mismatches.
 - Test validators' lack of mutation and absence of operational side effects. Source-reference tests do not need real
   datasets; compatibility tests never deserialize a payload; state tests do not launch workers or run retry loops.
 - Run mypy, Black `--check`, and Ruff on the applicable source/tests under `pyproject.toml`. Preserve its selected
   families, targets, exclusions, and narrow external-typing suppression policy. Do not silently add blanket ignores.
-- Add NumPy-style source docstrings to every class/function/method, including private validators. Use `Parameters`,
-  applicable `Returns`/`Raises`, and useful examples. Explain non-obvious invariants and scaffolding logic in comments.
+- Every class/function/method, including private helpers, has a NumPy-style source docstring.
+  Document responsibility, applicable parameters and returns, validated-input preconditions,
+  intentionally exposed exceptions, and any mutation of caller-owned accumulators. Distinguish
+  local validation bookkeeping from mutation of scientific inputs or authoritative records.
+  Explain non-obvious invariants and functional blocks in comments. Do not create helpers merely
+  to satisfy documentation requirements or test exact docstring wording.
 - At phase close, run the completed Phase 1 tests and configured project checks. Validate supported Python series
   against declared metadata; report which runtimes were actually exercised. Do not claim the future cross-version
   dill/model/result integration matrix was tested by plain record tests.
@@ -877,16 +940,16 @@ No production tests are added or run merely to validate a documentation-only pla
 | Must Phase 1 build the public computation or lifecycle engine? | No. Phase 1 establishes records; Phase 3/13–18 own configuration and execution algorithms. |
 | How can inputs be fixed before detailed settings/model schemas exist? | Immutable typed references to snapshots owned by the later configuration producer; no mutable/executable objects embedded or independently overrideable attempt fields. |
 | How much dataset/report schema belongs here? | Sample/source/membership and prediction alignment plus generic report/envelope structure. Feature adapters and concrete metric payloads remain Phase 4/8–10. |
-| Which fields/types are selected now? | Required semantics remain fixed. Concrete representations under Section 9 review are settled for extension only after their schemas and corresponding validation/test requirements are reconciled and approved. |
+| Which fields/types are specified? | Sections 3–6 define scalar families, direct source strings, parent model references, direct result routing, report-slot identity, derived outcomes, and position-aligned prediction failure associations. Section 9 defines implementation units; Section 13 defines validation responsibilities. |
 | Does undefined science mean an operation failed? | No. Formula-defined `NaN` has no failure solely for being undefined; computationally unavailable `None` has applicable failure references; schema-defined non-applicable `None` has none. No per-value status enum is needed. |
 | Does a failure-only result finish delivery or terminate a worker? | No. It is a complete scientific outcome, independently selected/persisted/accepted later. |
 | What does a retry count mean? | Total begun attempts including the first, bounded by a supplied total limit; no policy defaults or timers chosen. |
 | Are frozen records proof of durable acceptance or isolation? | No. They describe evidence/references; storage, ownership, concurrency, and enforced execution boundaries remain later obligations. |
 | Does Python mismatch imply framework incompatibility? | Not within the declared supported stable series; complete Cocoonet strings must match exactly. |
 
-Scientific and lifecycle requirements remain established. Resolve Section 9 representation decisions before affected
-implementation, preserving the root roadmap’s distinction between shared contracts and later payload schemas, storage
-mechanisms, and runtime algorithms.
+These contracts preserve the established scientific and lifecycle requirements. Concrete report
+payloads, storage mechanisms, model adapters, and runtime algorithms belong to their assigned phases.
+Plan approval and implementation-unit approval are separate requirements.
 
 ### 11.2 Inconsistencies found
 
@@ -910,7 +973,7 @@ specifies observations and associations; later phases implement their owners and
 | --- | --- |
 | Filesystem equality/containment, symlinks, overwrite safety, artifact layout, dill loading/publication, durable selection evidence and logs | Phase 2, before any file-changing consumer. |
 | Public computation API, configuration containers/edits, settings payload schema, fixed-input ownership implementation, copy/exclusion mechanics, bulk commit behavior | Phase 3; recovery-specific mechanics Phase 15. |
-| Dataset identity generation/content validation, sample-ID restoration, dataframe/target admissibility, mixed inline/file support, tensor shape encoding, splitter APIs and strategy coverage/empty-population decisions | Phase 4, before dataset consumers. |
+| Dataset identity generation/content validation, sample-ID restoration, raw-input parsing and standardization, floating-point representation selection, mixed inline/file support, tensor shape encoding, splitter APIs and strategy coverage/empty-population decisions | Phase 4, before dataset consumers. Standardized scalar admissibility and contextual target compatibility are Phase 1 responsibilities. |
 | Isolation enforcement and model/control execution boundary | Phase 5, before executable loading or user code. |
 | Concrete model input and prediction adapters, class conversion, raw-output validation and numerical checks, fit-state reset | Phases 6 and 10. |
 | Concrete fold/validation report payloads and baseline workflow | Phase 7. |
@@ -936,25 +999,41 @@ Implementation order: identity primitives → sample/source/schedule records →
 → failures → predictions → report/result envelopes → execution/worker/operation/reception observations → compatibility
 guard → contract coverage and quality checks.
 
-Outstanding Phase 1 work includes representation review and reconciliation of affected schemas, validators, and tests.
-Unresolved decisions block affected units. Plan approval does not authorize production changes.
+Phase 1 completion requires conformance to the specified schemas, validation responsibilities,
+component boundaries, documentation requirements, and tests. Unresolved requirements block their
+dependent implementation units.
 
-Stop here and wait for explicit user approval. No Phase 1 source code or tests have been implemented by this planning
-task, and no automatic commit is authorized.
+Plan approval does not authorize source implementation. Each unit requires explicit approval;
+commits remain manual.
 
 ## 13. Runtime validation and diagnostics
 
-Apply the runtime-validation policy in `AGENTS.md`. Phase 1 requires validation of its accepted schemas and
-associations, with the established `TypeError`, `ValueError`, and bounded-diagnostic behavior. It does not require a
-general interpreter for Python typing annotations.
+The universal type validator in src/cocoonet/_type_validation.py and its tests in
+tests/test_type_validation.py are established infrastructure outside Phase 1 contract-development
+scope. Their implementation, interfaces, supported annotations, diagnostics, and dependencies
+are not development tasks in this phase.
 
-Share helpers for demonstrated common needs. Keep scientific dtype, shape, and content checks with the components
-accepting those structures.
+Its NumPy, pandas, and PyTorch imports support scientific-type validation. Python's module cache
+serves normal repeated imports within a process; separate processes may initialize their own
+dependencies. This overhead is acceptable under AGENTS.md and is not evidence of over-engineering.
+Import-load reduction is not a Phase 1 completion requirement.
 
-The universal type validator and its tests are established infrastructure outside Phase 1
-contract-development scope. Its NumPy, pandas, and PyTorch dependencies support scientific-type
-validation; their per-process initialization is acceptable under AGENTS.md. Import-load reduction
-is not a Phase 1 completion requirement.
+Contract validators own schema-specific value and association checks. They may use the universal
+validator for applicable declared-type checks. Scientific scalar-family acceptance and numerical
+conditions are checked explicitly where exact built-in type checks would be too restrictive.
+Validation preserves scalar representations and boolean-versus-integer distinctions where required.
 
-Contract validators own appropriate validation boundaries and avoid redundant checks within a
-composed call. These responsibilities do not require changes to the universal validator or its tests.
+Each independent consuming boundary validates its complete inputs. Within one composed validation
+path, assign each structural check to one owner: containing validators check their own fields and
+cross-record relationships, while child validators check their records. Avoid whole-tree type
+validation followed by another traversal performing the same structural checks.
+
+Shared parent/schedule context is validated once within a composed boundary call. Internal helpers
+may rely on documented validated inputs where ownership prevents intervening invalidation.
+Do not introduce validation caches, persistent validity flags, skip-validation switches, or another
+general annotation-validation framework.
+
+Contract diagnostics follow Section 3.2, including bounded observed values and preservation of the
+established mismatch when preview generation fails. Scientific dtype, shape, content, and alignment
+checks belong to the components accepting those structures. Any new shared helper requires its
+own explicit design and approval.
