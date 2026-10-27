@@ -94,9 +94,10 @@ Worker communication component
     network heartbeat/reconnection applies only to online workers.
     Remains responsive independently of model-evaluation execution.
 Worker control component
-    Owns the lifecycle of the currently assigned model-evaluation attempt.
-    Coordinates synchronization, evaluation workflow, cancellation, result
-    availability, and delivery.
+    Owns admission and lifecycle tracking for assigned model-evaluation attempts.
+    Owns Cocoonet attempt-slot reservations and evaluation subprocess supervision.
+    Coordinates each attempt's synchronization, evaluation, cancellation,
+    result availability, and delivery independently.
     Owns worker-side running logs and error logs.
     Evaluation/operation failures must not terminate the worker control
     process.
@@ -132,9 +133,8 @@ Model execution component
     Owns fitting an initialized model on an assigned training set and
     producing standardized predictions for an assigned evaluation set.
     Does not own evaluation metrics or report construction.
-    sklearn and sklearn-like models must not create their own
-    multiprocessing execution pools. Multiprocessing for these workflows
-    is owned and controlled by Cocoonet.
+    Preserves user-configured model-internal parallelism, including supported
+    n_jobs settings, under the execution and resource policy in Section 8.
 
 ## Evaluation Components
 Validation result component
@@ -172,9 +172,9 @@ sklearn-like evaluation workflow component
 PyTorch evaluation workflow component
     Orchestrates the complete evaluation of one PyTorch model using the
     corresponding components.
-    PyTorch-specific training/device behavior remains under the PyTorch
-    execution contract rather than being assumed identical to sklearn
-    multiprocessing.
+    CPU attempts may run concurrently through Cocoonet; GPU attempts do not
+    use Cocoonet-level multiprocessing. PyTorch-managed loading/training
+    parallelism remains independently configurable under Section 8.
 
 ## Delivery
 Delivery component
@@ -1230,12 +1230,14 @@ bidirectional connection; local operations use the local control boundary. A wor
 distinct from public-pool availability,
 which belongs to the external service.
 
-When tasks are ready, check configured idle online worker candidates asynchronously. Skip unavailable candidates.
-Among responsive eligible idle online workers, allocate first to the fastest connection response observed for that
-opportunity, then continue assigning tasks to the remaining eligible idle workers until tasks or targets are exhausted.
-Response speed is an allocation-time observation, not a permanent priority. This chooses online execution targets;
-Section 5.2 still determines which logical task is eligible for duplicate execution. Local workers require no
-artificial network probe, and result acceptance remains topology-neutral.
+When tasks are ready, check configured online workers with free eligible attempt slots asynchronously.
+A worker may already have active attempts. Among responsive eligible workers, allocate first to the
+fastest connection response observed for that opportunity, then continue while tasks and eligible slots
+remain. Root and worker admission must account for reserved slots so concurrent assignments cannot
+overbook capacity. No full batch is required before execution starts.
+
+Response speed is an allocation-time observation, not permanent priority. Section 5.2 determines
+duplicate eligibility. Local workers require no network probe; acceptance remains topology-neutral.
 
 Distinguish the logical task from its execution attempts. Each accepted evaluation-result file has a stable identity
 associated with the logical task and identifies its producing attempt. Identifier encoding belongs in the protocol
@@ -1246,9 +1248,10 @@ design. Simultaneous arrivals and reconnects must not create more than one accep
 These rules apply across local and online attempts of the same unit. Local handoff and online transfer feed the same
 root selection and persistence boundary; neither topology receives a separate acceptance rule or priority.
 
-- Allocate a duplicate only when no unallocated tasks remain, every remaining task is finished or already assigned,
-  and a worker would otherwise be idle. Choose an unfinished, currently running task, starting with the oldest by
-  its first execution start time. The duplicate is another attempt at that logical task, not a new logical result.
+- Allocate a duplicate only when no unallocated tasks remain, every remaining task is finished or
+  already assigned, and an eligible attempt slot would otherwise be unused. Choose an unfinished,
+  currently running task, starting with its oldest first execution time. The duplicate is another
+  attempt of that logical task, not a new logical result.
 - Serialize result reception for each logical task. When duplicate attempts are ready, select one according to
   receiving order and receive only that file at a time. Reception for different logical tasks remains independent.
 - Selection does not depend on whether evaluation succeeded or failed. An earlier received failure outcome takes
@@ -1500,10 +1503,12 @@ private-worker
 information or public connection information supplied by the external service. Workers expose only the designated
 Cocoonet endpoint reachable from the root. They never initiate connections to the root or to other workers.
 
-Keep the bidirectional connection open for assignments, status, dataset/model/configuration transfers, selected
-results, and subsequent tasks. Reconnection is also root-initiated. Do not replace this model with worker polling or
-separate task-submission endpoints. Sending a result alone does not make a worker available for another task; apply
-the acknowledgement, pending-delivery, retry-limit, and restart rules above.
+Keep the bidirectional connection open for assignments, status, dataset/model/configuration transfers,
+selected results, and subsequent tasks. Identify each attempt's traffic independently. Reconnection
+is root-initiated; workers do not poll for work or use separate submission endpoints.
+
+Sending a result alone does not release its attempt slot. Apply that attempt's acknowledgement,
+pending-delivery, retry-limit, stop, and recovery rules. Other eligible free slots remain available.
 
 ### 7.2 Serialization ownership and compatibility
 
@@ -1595,36 +1600,105 @@ Resource management must preserve this control-path responsiveness while allowin
 A root-local worker runs in a separate locally managed process under the direct local control boundary in Section 2.4;
 online workers use the connection boundary in Section 7. The same worker evaluation contracts apply to both.
 The worker communication and control path remains responsive independently of model-evaluation execution. Computationally intensive evaluation work executes through the model-evaluation workflow rather than directly in the communication/control execution path.
-The worker control component owns the lifecycle of the current model-evaluation attempt. Model-evaluation workflow components own their evaluation execution and any Cocoonet-managed evaluation subprocesses. Application-level evaluation or subprocess failure follows the scoped failure rules in Section 9 and must not terminate the long-running worker process.
+Worker control owns admission, slot reservations, and supervision of Cocoonet model-evaluation
+processes. Each model-evaluation workflow owns one attempt's scientific execution. User-configured
+model/framework parallelism operates inside that attempt under the same isolation requirements.
+Failure of an attempt or its subprocesses must not terminate the long-running worker or unrelated
+attempts.
 Stop and cancellation instructions received through the communication/control path are applied at the cooperative boundaries defined by the task lifecycle. This execution separation does not require immediate interruption of arbitrary user model code.
 
-### 8.2 Parallel execution policy
+### 8.2 Concurrent CPU model attempts
 
-Each local or online worker has a user-configurable CPU budget `n_cpu`, defaulting to that machine's available CPU
-count `N`. Its resulting evaluation CPU capacity is:
+For CPU execution, each worker has a requested positive integer concurrency setting
+`n_attempt`, defaulting to `1`. It is the maximum number of complete model-evaluation
+attempts requested concurrently on that worker. `n_attempt` is worker configuration,
+not part of a parent's fixed scientific model input.
+
+Let `N` be the CPU count currently available to the worker and let:
 
 ```text
-nCPU = max(1, min(n_cpu, N) - 1)
-
-n_cpu = user-configured CPU budget (default: N)
-N     = available CPU count
-nCPU  = resulting evaluation CPU capacity
+C = N - 1
 ```
 
-`nCPU = 1` means serial evaluation; parallel evaluation occurs only when `nCPU > 1`. Both `n_cpu = 1` and `n_cpu = 2`
-intentionally produce serial evaluation. Apply the same conservative rule to online workers. The effective CPU
-capacity must not exceed the formula's result. The minimum capacity of one takes precedence: this formula does not
-guarantee that one physical CPU remains unused. Coordinator and worker-control responsiveness are independent
-requirements, including during serial evaluation.
+`C` is the worker's accounted CPU capacity for model evaluation. One available CPU is
+reserved for worker communication and control. A worker with `N < 2` cannot accept CPU
+evaluation work under this policy.
 
-Cocoonet owns multiprocessing for scikit-learn and scikit-learn-like evaluation workflows. Individual scikit-learn models and custom scikit-learn-like models executed through these workflows must not independently create or manage multiprocessing pools. This prevents nested or model-dependent multiprocessing behavior from bypassing Cocoonet's worker-level resource allocation.
-The corresponding model-evaluation workflow component owns creation, supervision, and termination of Cocoonet-managed evaluation subprocesses. Parallel work remains internal to the complete worker task for one model; it does not turn folds, influence refits, or other internal computations into separate distributed root-worker tasks.
+Each CPU model input has a positive accounted per-attempt CPU demand `j`. For models
+with an applicable `n_jobs` setting, `j` is its worker-local resolved positive value.
+A model without applicable internal CPU parallelism has `j = 1`. Symbolic or negative
+framework values must be resolved according to their owning API before capacity
+validation. The corresponding PyTorch demand is derived from its supplied CPU
+loading/training configuration under Section 3.3.
 
-### 8.3 Model-specific execution
-Scikit-learn and scikit-learn-like workflows follow the Cocoonet-managed multiprocessing policy in Section 8.2. Their parallel execution is controlled at the evaluation-workflow level rather than independently by individual models.
-PyTorch execution follows its separate reconstruction and training contract in Section 3.3. Device selection remains worker configuration. Do not assume that PyTorch CPU/GPU execution follows the scikit-learn multiprocessing model solely because both execute within the same worker architecture.
-The multiprocessing restriction in Section 8.2 concerns process-level parallelism. Thread-level parallelism used internally by numerical libraries, model implementations, or framework runtimes is a distinct resource-management concern. No additional thread-level restriction is established here unless explicitly defined in subsequent design work.
-Concrete subprocess implementation, process-pool structure, scheduling mechanics, CPU detection, configuration fields, and termination mechanisms are implementation details. They must preserve the execution boundaries, user-selected resource limit, Cocoonet-owned multiprocessing, and worker responsiveness established by this section.
+When multiple models eligible for the worker have different demands, use:
+
+```text
+J = max(j for every eligible CPU model)
+```
+
+The maximum is required because duplicate attempts may concurrently execute the same
+highest-demand model.
+
+For requested `A = n_attempt`, derive the effective attempt limit as follows:
+
+```text
+if A * J <= C:
+    effective_n_attempt = A
+elif A > 1 and (A - 1) * J <= C:
+    effective_n_attempt = A - 1
+else:
+    reject the configuration
+```
+
+Adaptation reduces the requested value by exactly one. Do not repeatedly decrement it
+and do not produce a zero attempt limit. Rejection leaves the existing configuration
+unchanged.
+
+Incomplete computation configuration remains valid. Perform this compatibility check
+when both applicable model and worker configurations are available, and repeat it at
+start or worker readiness before allocation. A changed available CPU count requires
+revalidation. Preserve the requested value and report the effective value, `N`, and
+`J` for inspection and auditability.
+
+Each effective slot belongs to one complete model-evaluation attempt, including its
+allocation, execution, and outstanding terminal handling. Reservation begins at
+allocation and is released only under the applicable completion, acknowledgement,
+failure, or cooperative-stop rule. Lower prospective capacity does not cancel existing
+attempts; it prevents additional allocation until occupancy is within the effective
+limit.
+
+### 8.3 Model and framework parallelism
+
+Model-level settings, including supported `n_jobs` parameters, belong to the fixed
+model input. PyTorch loading/training multiprocessing settings, including data-loader
+workers, belong to the fixed loading/training configuration. Pass these settings
+unchanged to their owning model, framework API, or training procedure.
+
+Capacity enforcement changes only Cocoonet's effective outer attempt limit or rejects
+the incompatible configuration. It must not silently cap, divide, or override supplied
+model/framework settings.
+
+For example, with `N = 16`, `n_attempt = 4`, and `J = 4`, the requested accounted
+demand is 16 against `C = 15`. Reducing the attempt limit once gives an effective limit
+of three and an accounted demand of 12.
+
+With `N = 12` and the same configuration, the reduced demand would be 12 against
+`C = 11`. The configuration is therefore rejected; it is not reduced further.
+
+The calculated demand is a resource-accounting value, not a guarantee that every
+claimed physical CPU is continuously occupied. Exact utilization may depend on the
+model, backend, numerical libraries, and workload. Any framework parallelism not
+represented by `n_jobs` or an equivalent setting must be included in the model
+adapter's accounted demand.
+
+GPU execution has one Cocoonet model-attempt slot and no Cocoonet-level
+multiprocessing. Independently configured framework-managed loading or training
+parallelism remains permitted and is passed unchanged.
+
+Choose an execution mechanism that supports the permitted nested model/framework
+subprocesses. All child execution remains subject to the applicable isolation,
+failure, cancellation, and cleanup requirements.
 
 
 ## 9. Reproducibility, Auditability, and Failure Reporting

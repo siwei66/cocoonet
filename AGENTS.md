@@ -641,16 +641,26 @@ Before planning or implementing a phase, process project guidance in this order:
   local-worker survival after root restart remain deferred. Configuration copying does not clone runtime resources.
   External public allocation and mandatory release cleanup still apply.
 
-**Worker CPU Budget and Execution Ownership:**
+**Worker Concurrency and Execution Ownership:**
 
-- Each local or online worker has a user-configurable CPU budget `n_cpu`, defaulting to the machine's available CPU
-  count `N`. Evaluation CPU capacity is `nCPU = max(1, min(n_cpu, N) - 1)`. `nCPU = 1` means serial evaluation;
-  parallel evaluation occurs only when `nCPU > 1`. Budgets of one or two therefore intentionally produce serial
-  evaluation. The minimum capacity of one takes precedence; do not claim that one physical CPU is always unused.
-- Coordinator and worker-control responsiveness remain independent requirements. Cocoonet owns multiprocessing for
-  scikit-learn and scikit-learn-like workflows; those models must not create their own multiprocessing pools.
-  PyTorch retains its separate device/training contract. Process-pool mechanisms and thread-level behavior must not
-  be conflated with the CPU-capacity formula; see architecture Section 8.
+- For CPU execution, each local or online worker has a positive integer model-attempt
+  concurrency setting `n_attempt`, defaulting to `1`. It is the requested maximum
+  number of complete model-evaluation attempts that Cocoonet may run concurrently.
+  The former name `n_cpu` is not used.
+- Reserve one available CPU for worker communication and control. Account for nested
+  model/framework CPU parallelism when deriving the effective attempt limit. If the
+  requested limit exceeds the resulting capacity, reduce it by exactly one when that
+  is sufficient; otherwise reject the configuration without changing supplied
+  model/framework settings. Architecture Section 8 defines the calculation,
+  validation, and reporting requirements.
+- Cocoonet multiprocessing operates across complete model attempts, including CPU
+  PyTorch attempts. Do not add another Cocoonet multiprocessing layer across folds
+  or removal evaluations within an attempt. GPU execution has one Cocoonet attempt
+  slot and no Cocoonet-level multiprocessing.
+- Worker control owns capacity validation, attempt-slot admission, and Cocoonet
+  subprocess supervision. Model/framework components own their internal parallelism.
+  Preserve control responsiveness, execution isolation, scoped failures, and
+  cooperative stopping at both levels.
 
 **Independent and Decoupled Execution:**
 
@@ -791,9 +801,9 @@ Before planning or implementing a phase, process project guidance in this order:
   Topology does not change result priority or permit a second accepted result. Local handoff/confirmation implements
   the applicable delivery semantics without introducing remote-only networking.
 
-- Duplicate allocation is allowed only when no unallocated tasks remain, every remaining task is finished or already
-  assigned, and a worker would otherwise be idle. Select an unfinished, currently running logical task, starting with
-  the oldest by its first execution start time.
+- Duplicate allocation is allowed only when no unallocated tasks remain, every remaining task is
+  finished or already assigned, and an eligible worker has an otherwise-unused attempt slot.
+  Select an unfinished, currently running logical task, starting with its oldest first execution time.
 - A duplicate execution is another attempt at the same logical task, not a new task or logical result entry.
   For each logical task, the root serializes result reception: when duplicate attempts are ready to return results,
   select one according to receiving order and receive only that result file at a time. This restriction applies per
@@ -920,18 +930,17 @@ Before planning or implementing a phase, process project guidance in this order:
   443
   and keeps it open for evaluation communication. Workers expose the designated Cocoonet endpoint reachable from the
   root using configured private-worker information or connection information supplied by the external public service.
-- Online connection establishment, scheduling, and unit-task assignment are root-controlled. Online workers accept the
-  root's
-  connection; they do not initiate connections to the root or to other workers. The root tracks its connected workers
-  as available or working. Assign a unit-task attempt through the existing connection only after compatibility checks
-  and readiness of the parent dataset, evaluation configuration, and realized partition schedule. Reuse the established
-  parent context without repeating dataset identity in individual unit-task transfers. External public-pool allocation
-  remains the service's responsibility.
-- An online worker marks itself working and evaluates independently. When selected for result reception by the root, it
-  sends its evaluation-result file through the same connection. Sending alone does not make it available for another
-  task: apply the persistence acknowledgement, pending-delivery, retry-limit, and restart-reconciliation rules in
-  Architecture Principles. Availability to its owning root does not release a public allocation or make the worker
-  publicly discoverable.
+- Online connection establishment, scheduling, and assignment are root-controlled. Workers accept
+  the root's connection; they do not initiate connections to the root or other workers.
+- Track worker usability, parent readiness, attempt capacity, and occupied attempt slots separately.
+  A worker may accept another attempt while others are active when it has a free eligible slot.
+  Each allocation requires compatibility and readiness of the fixed parent dataset, evaluation
+  configuration, and realized partition. Reuse the established parent context.
+- Assignments, status, and selected results share the established connection and identify their
+  individual attempts. Sending one result does not release that attempt's slot: apply its persistence
+  acknowledgement, pending-delivery, retry-limit, stop, and recovery rules. Other free slots remain usable.
+- Availability to the owning root neither releases the external public allocation nor makes the
+  worker publicly discoverable. Public-pool ownership and allocation remain the service's responsibility.
 - Reuse the bidirectional connection for assignments, status, results, and subsequent tasks. Do not replace this model
   with worker polling or separate task-submission endpoints. On reconnection, the root again initiates the connection.
 - Message schemas, authentication, acknowledgements, heartbeat/disconnect detection, reconnection, and message
@@ -946,12 +955,14 @@ Before planning or implementing a phase, process project guidance in this order:
 - A later scheduled connection round is a distinct policy operation, not a reset of an exhausted result-delivery
   budget. Connection failures do not fail unrelated tasks, block coordinator control, or authorize model reevaluation.
   Runtime availability changes do not edit configured worker membership or make the instance unconsolidated.
-  Disconnect makes an assigned worker unavailable for new allocations; its existing attempt follows the established
-  attempt, delivery, duplicate, and recovery rules. A usable reconnection restores eligibility after normal readiness.
-- At allocation opportunities, asynchronously check configured idle online candidates. Skip unavailable workers;
-  allocate first to the responsive eligible worker with the fastest response for that opportunity, then to remaining
-  eligible idle workers while tasks remain. This observation is not permanent priority and does not change logical
-  duplicate-task selection or result acceptance. Local execution does not require artificial network probes.
+  Disconnect makes the worker ineligible for new allocations; all assigned attempts retain their
+  individual execution, delivery, duplicate, and recovery rules. Reconnection restores eligibility
+  only after readiness and occupied slots are reconciled.
+- At allocation opportunities, asynchronously check configured online workers with free eligible
+  attempt slots. Allocate first to the responsive eligible worker with the fastest response for that
+  opportunity, then continue while tasks and eligible slots remain. Reserve each slot when assigning
+  its attempt. Response speed is not permanent priority and does not alter duplicate or acceptance rules.
+  Local execution requires no artificial network probe.
 - Exact APIs, probe/response measurement, timer mechanics, and state representation remain implementation details.
   Existing authentication, exclusive ownership, and compatibility rejection requirements continue to apply.
 
@@ -1086,6 +1097,10 @@ Before planning or implementing a phase, process project guidance in this order:
   annotation interpreter requires a demonstrated need.
 - Validate scientific containers directly for applicable dtype, shape, values, and alignment. Keep framework-specific
   dependencies at the boundaries that require them.
+- The universal type validator may import NumPy, pandas, and PyTorch for their supported data types.
+  Normal imports reuse Python's module cache within each process; separate processes may incur their
+  own initialization. This per-process overhead is acceptable. Library presence or initialization
+  alone is not evidence of over-engineering. Repeated validation work is a separate concern.
 
 Existing runtime diagnostic and static typing requirements remain applicable.
 

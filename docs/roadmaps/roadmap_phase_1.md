@@ -609,12 +609,12 @@ to their later phases.
 | `StopReason` | `parent_interrupted`, `parent_cancelled`, `parent_superseded`, `duplicate_accepted` |
 | `StopDisposition` | `status: StopStatus`, `reason: StopReason | None` |
 | `AttemptProgress` | `inputs: AttemptInputs`, `status: AttemptStatus`, `stop: StopDisposition`, `first_started_at: float | None`, `result_artifact_id: ArtifactId | None` |
-| `WorkerAvailability` | `unavailable`, `available`, `working` |
+| `WorkerAvailability` | `unavailable`, `available`; usability is separate from occupied capacity. |
 | `WorkerProcessStatus` | `unknown`, `running`, `unavailable` |
 | `OwnershipStatus` | `unknown`, `owned_by_root`, `not_owned_by_root` |
 | `CompatibilityStatus` | `unchecked`, `compatible`, `incompatible` |
 | `ParentReadiness` | `parent_id: ParentId`, `dataset_ready: bool`, `evaluation_ready: bool`, `partition_ready: bool` |
-| `WorkerObservation` | `worker_id: WorkerId`, `availability: WorkerAvailability`, `process_status: WorkerProcessStatus`, `ownership: OwnershipStatus`, `compatibility: CompatibilityStatus`, `parent_readiness: tuple[ParentReadiness, ...]`, `active_attempt_id: AttemptId | None` |
+| `WorkerObservation` | `worker_id: WorkerId`, `availability: WorkerAvailability`, `process_status: WorkerProcessStatus`, `ownership: OwnershipStatus`, `compatibility: CompatibilityStatus`, `parent_readiness: tuple[ParentReadiness, ...]`, `attempt_capacity: int | None`, `active_attempt_ids: tuple[AttemptId, ...]` |
 | `OperationKind` | `connection_round`, `transfer`, `persistence` |
 | `OperationStatus` | `pending`, `running`, `succeeded`, `failed`, `cancelled` |
 | `BoundedOperation` | `operation_id: OperationId`, `kind: OperationKind`, `context: TraceContext`, `attempt_limit: int`, `attempts_made: int`, `status: OperationStatus`, `last_failure: FailureRecord | None` |
@@ -654,15 +654,24 @@ it as an operation of these kinds.
   coexist with requested/observed stop because a terminal attempt needs no new evaluation loop to end unnecessary
   handling. Allocated/running attempts may have no stop or a requested stop, but not an observed stop. Active work can
   be marked requested while still running; edits elsewhere do not alter its inputs.
-- A worker's configured membership is recorded in configuration, not inferred from availability. A disconnected
-  worker can be unavailable with a retained active attempt. Process status can remain unknown after lost contact;
-  unavailable connection/eligibility is not proof of process failure.
-- Available/working requires ownership by this root, compatible framework metadata, and observed running process
-  status. Working requires an active attempt. Available has no active attempt blocking new work. Unavailable may
-  retain an attempt; task outcome or delivery failure alone does not terminate the process.
-- Parent readiness is per parent and has three separate facts. Reusing a ready dataset does not establish the next
-  parent's evaluation/partition context. Availability alone does not prove readiness for any particular parent.
-  Entries have unique parent IDs. Checking whether a worker can run a particular allocation is deferred.
+- Configured worker membership is separate from availability. Disconnection makes the worker
+  unavailable for new allocations but preserves its assigned attempt identities. Unknown
+  process status after lost contact is not proof of process failure.
+- Available requires ownership by this root, compatible framework metadata, an observed running
+  process, and known attempt capacity. It does not imply that any slot is free.
+- attempt_capacity is a positive integer excluding bool, or None when unknown. Its producer
+  supplies the CPU concurrency limit or GPU capacity of one under architecture Section 8;
+  Phase 1 does not detect CPUs or calculate runtime capacity.
+- active_attempt_ids contains unique, valid IDs for allocated attempts whose slot reservations
+  have not been released, including applicable pending-delivery handling. Attempt state and
+  provenance remain in their own records.
+- Admission requires known capacity and fewer occupied reservations than that capacity.
+  Free slots are derived as max(0, attempt_capacity - len(active_attempt_ids)). A prospective
+  lower limit may temporarily be below the number of earlier reservations; it permits no
+  additional allocation and does not itself cancel those attempts.
+- Parent readiness has separate dataset, evaluation, and partition facts, with unique parent IDs.
+  Worker usability and free capacity do not establish readiness for a particular parent.
+  Runtime allocation and reservation synchronization belong to later phases.
 - Local and online workers use the same logical observation; there is no fake connection record for a local worker.
   Authentication and public allocation details are not encoded by `owned_by_root`.
 
@@ -711,7 +720,7 @@ Root coordination owns one `ReceptionRecord` per `UnitKey`, covering local and o
 | `validate_parent_progress(value: ParentProgress) -> None` | Validate parent identity and execution tag, independently of consolidation. | All tags; invalid tag; no inferred acceptance/consolidation transition. |
 | `validate_stop_disposition(value: StopDisposition) -> None` | Check stop status/reason pairing. | None without reason; requested/observed with each reason; invalid pairs. |
 | `validate_attempt_progress(value: AttemptProgress, *, parent: ParentEvaluation) -> None` | Check attempt context, status/start/artifact/stop consistency. | Allocated/running/result-ready; stop while running; stopped before start; terminal handling stop; invalid timestamp; no result created. |
-| `validate_worker_observation(value: WorkerObservation) -> None` | Check ownership/compatibility/availability combinations and unique parent readiness. | Disconnected active attempt retained; unknown vs failed process; available but unready parent; working without attempt; reused data without partition readiness; no configuration mutation. |
+| `validate_worker_observation(value: WorkerObservation) -> None` | Check usability prerequisites, known/unknown positive capacity, unique valid reserved-attempt IDs, and unique parent readiness. | Available worker with zero, some, or all slots occupied; unavailable worker retaining multiple attempts; unknown capacity; invalid/bool capacity; duplicate attempt IDs; reservations exceeding a prospectively lowered limit; no scheduling or mutation. |
 | `validate_bounded_operation(value: BoundedOperation) -> None` | Check count bounds, status, last-error context, and operation kind. | Zero/past-limit counts; bool rejected; success after retries; failed/exhausted; cancelled; distinct connection round identity; no budget reset or reevaluation. |
 | `validate_reception_record(value: ReceptionRecord, *, attempts: tuple[AttemptInputs, ...]) -> None` | Validate selected attempt membership and receipt/persistence/acceptance prerequisites. | Unselected state; wrong unit/attempt; partial file; complete persistence before acceptance; accepted failure outcome uses same facts; absent evidence; no file I/O. |
 | `validate_reception_set(values: tuple[ReceptionRecord, ...], *, attempts: tuple[AttemptInputs, ...]) -> None` | Check unique unit entries and unique attempt IDs, then validate each record. | Reject two records/accepted outcomes for one unit; independent units allowed; same attempt ID reused for different units rejected. |
@@ -942,8 +951,10 @@ general interpreter for Python typing annotations.
 Share helpers for demonstrated common needs. Keep scientific dtype, shape, and content checks with the components
 accepting those structures.
 
-Before narrowing existing validation utilities, identify production consumers and required behavior, document the
-migration, and preserve corresponding semantic and diagnostic tests. Existing utilities do not require every future
-validator to use or extend them.
+The universal type validator and its tests are established infrastructure outside Phase 1
+contract-development scope. Its NumPy, pandas, and PyTorch dependencies support scientific-type
+validation; their per-process initialization is acceptable under AGENTS.md. Import-load reduction
+is not a Phase 1 completion requirement.
 
-This amendment changes the planned requirement; implementation changes remain subject to the existing approval process.
+Contract validators own appropriate validation boundaries and avoid redundant checks within a
+composed call. These responsibilities do not require changes to the universal validator or its tests.

@@ -124,7 +124,12 @@ Support incomplete configuration, one active dataset slot, model and worker regi
 add/list/inspect/summary/remove capabilities with singular and bulk operations. Define bulk commit/failure behavior
 before implementing bulk conveniences; do not leave undocumented partial configuration.
 
-Retain worker CPU/device and applicable retention/operation policy configuration without starting runtime services.
+Retain worker device configuration and the requested positive integer `n_attempt`,
+defaulting to `1`, without starting runtime services. The worker-configuration API
+docstring must distinguish requested from effective attempt capacity, explain that
+one CPU is reserved, identify the possible single-step reduction, and document
+configuration rejection. Runtime CPU detection and model/worker capacity validation
+remain Phase 11 responsibilities.
 Represent initialized, consolidated, and unconsolidated states and their permitted transitions. Ordinary configuration
 edits are in-memory operations; Phase 4 supplies the explicit dataset/partition preparation exception. Preserve
 ordinary active-execution locks and prospective edits after root interruption. Model evaluation configuration changes
@@ -203,10 +208,10 @@ network permission. Framework components resolve source references and supply in
 own persistence. Establish the separation between responsive worker control and model evaluation, and the local
 execution/control interface needed by later orchestration; do not introduce WSS loopback.
 
-Begin with serial execution and explicit ownership of evaluation subprocesses. Preserve the worker budget
-nCPU = max(1, min(n_cpu, N) - 1), with n_cpu defaulting to available N; capacity 1 is serial, and parallel evaluation is
-allowed only above 1. Cocoonet owns scikit-learn/scikit-learn-like multiprocessing; models may not create their own
-pools. Thread-level behavior and PyTorch device execution retain their distinct scopes.
+Begin with one complete model attempt and explicit worker-control ownership of its execution boundary.
+The boundary must support user-configured model/framework child processes while preserving isolation
+and scoped failures. Architecture Section 8 defines CPU attempt concurrency, GPU restrictions, and
+independent model/framework parallelism. Phase 11 supplies concurrent model-attempt execution.
 
 Before proceeding, model isolation, control responsiveness, framework data access, and operation/failure return
 contracts must be verified. The chosen boundary must accommodate all supported model families without a later
@@ -339,9 +344,14 @@ Define the declarative supported-component representation needed for public-work
 Custom Python classes, arbitrary import paths, callables, and serialized model objects remain outside the
 public-worker contract. Private/local reconstruction retains its existing trusted-input scope.
 
-Device selection belongs to worker configuration. Keep device/training behavior separate from scikit-learn's
-multiprocessing policy. Resolve concrete device failure handling before implementing those operations within the
-existing failure boundaries; no environment repair or fallback model is introduced.
+Device selection belongs to worker configuration. Pass supplied PyTorch loading and
+training multiprocessing settings, including data-loader workers, unchanged to their
+owning APIs or training procedure. Define how these settings produce the positive
+per-attempt CPU demand consumed by Architecture Section 8. CPU PyTorch attempts use
+the effective outer concurrency implemented in Phase 11; GPU attempts have one
+Cocoonet slot and no Cocoonet-level multiprocessing. Preserve isolation and report
+device failures through the established boundaries without environment repair or
+fallback models.
 
 The exit condition is all supported model families producing the same validation/report/result contracts, including
 influence when requested, under the enforced boundary. Network integration, device-specific optimization, and
@@ -349,24 +359,42 @@ unestablished multi-target/multilabel extensions remain deferred or outside scop
 
 ### 11. Bounded parallel evaluation and worker resource control
 
-Complete execution resource management after the serial workflows and supported adapters in Phases 5–10 are stable.
-Implement Cocoonet-owned creation, supervision, and termination of evaluation subprocesses for scikit-learn and
-scikit-learn-like workflows. Parallel work stays inside one complete model attempt; folds and removal refits do not
-become distributed tasks.
+Complete worker execution resource management after the individual model workflows
+and adapters in Phases 5–10 are stable. Worker control owns CPU detection, capacity
+validation, attempt-slot reservation, process creation, supervision, and termination.
 
-Apply the configured CPU-capacity formula across the worker's evaluation work. Capacity 1 remains serial, including
-budgets of one or two; above that, supported internal parallel work must stay within the effective capacity.
-Keep worker communication/control responsive and prevent nested model-owned multiprocessing pools. Do not infer
-thread restrictions or PyTorch device behavior from this process-level contract.
+Implement Architecture Section 8 using `n_attempt`; do not introduce `n_cpu`. Resolve
+each eligible CPU model's positive accounted demand, use the maximum demand for
+worker-level validation, reserve one available CPU, and derive
+`effective_n_attempt`. Apply at most the specified one-step reduction. Reject a
+configuration when the requested limit and its one-step reduction both exceed
+capacity.
 
-Preserve independent learned state, fixed partitions, sample/class alignment, failure isolation, and direct scientific
-calculations when scheduling internal work. Subprocess or evaluation failure must be contained at its applicable
-scope without terminating or restarting the long-running worker service. Preserve cooperative stop boundaries so
-Phase 15 can integrate cancellation without changing execution ownership.
+Preserve user-supplied model `n_jobs` and PyTorch loading/training multiprocessing
+settings. Capacity enforcement changes only Cocoonet's effective attempt limit or
+rejects the configuration. Keep Cocoonet parallelism across complete attempts rather
+than adding a pool across folds or removal evaluations.
 
-Before proceeding, resource limits, serial/parallel output contracts, supervision, and control responsiveness must
-be stable under the existing nondeterminism policy. Choose concrete process/pool mechanics within this phase.
-Root task scheduling, result delivery, and optimization beyond the defined resource policy remain later work.
+Expose requested and effective attempt limits and the capacity inputs through worker
+inspection and diagnostic output. Complete the public worker-configuration docstrings
+with the formula, adaptation behavior, rejection conditions, and examples.
+
+Verify at least:
+
+- unchanged acceptance when `n_attempt * J <= N - 1`;
+- the `N=16`, `n_attempt=4`, `J=4` reduction to three attempts;
+- rejection for `N=12`, `n_attempt=4`, `J=4`;
+- rejection when `n_attempt=1` already exceeds capacity;
+- `N < 2`;
+- heterogeneous model demands and duplicate high-demand attempts;
+- revalidation after a changed worker CPU count;
+- preservation of supplied model/framework settings;
+- GPU capacity of one; and
+- independent stop, failure, reservation, and release behavior.
+
+Keep communication/control responsive and contain failures without stopping unrelated
+attempts or the long-running worker. Root allocation and result acceptance are
+integrated in the following phases.
 
 ### 12. Complete attempt packaging and worker persistence
 
@@ -393,10 +421,12 @@ streaming/backpressure machinery for these small files.
 
 ### 13. Local coordinator, worker control, and result acceptance
 
-Integrate Phases 1–12 into the first complete normal execution path, with an explicitly configured separate root-local
-worker process. Root control owns the reusable computation; the coordinator owns unit-task assignment and progress;
-worker control owns an attempt and remains responsive while its evaluation workflow runs. Evaluation state stays
-local to the executing worker, without inter-worker communication or shared mutable execution state.
+Integrate Phases 1–12 into the first complete normal execution path with an explicitly configured,
+separate root-local worker process. Root control owns the reusable computation; the coordinator owns
+unit-task allocation and progress; worker control owns its reserved attempt slots and assigned attempts
+and remains responsive while their evaluation workflows run. Dispatch attempts while eligible capacity
+remains, without waiting for a full batch. Each attempt's execution state remains independent and local
+to its executing worker, without inter-worker communication or shared mutable execution state.
 
 Apply Phase 1's exact-version compatibility rule through local control without a network handshake. Complete start
 prerequisite checks and execution-configuration persistence. Require one active dataset, at least one
@@ -517,14 +547,19 @@ remains outside this phase.
 
 ### 18. Mixed scheduling and duplicate-attempt arbitration
 
-Extend the now-stable coordinator across explicitly configured local and online targets. At each allocation opportunity,
-skip unavailable online workers and use current response speed among eligible idle online candidates, then continue
-allocating while units and eligible workers remain. Do not give local/online results different acceptance priority.
+Extend the coordinator across explicitly configured local and online targets. Allocate against
+free eligible attempt slots, including slots on workers already handling other attempts.
+For online candidates, use current response speed while preserving parent readiness, capacity
+reservations, and topology-neutral result acceptance.
 
-Introduce duplicate scheduling only when no unallocated units remain, every remaining unit is finished or assigned,
-and a worker would otherwise be idle. Choose an unfinished currently running unit, oldest by its first execution start.
-A completed outcome awaiting delivery is not a reason to launch a duplicate; terminal reconstruction or
-primary-validation failure is not retried.
+Allocate only against the worker's validated `effective_n_attempt` and current
+reservations. A worker whose CPU availability changed must complete Phase 11
+revalidation before receiving another attempt.
+
+Duplicates are eligible only when no unallocated units remain, every remaining unit is finished
+or assigned, and an eligible slot would otherwise be unused. Choose an unfinished running unit,
+oldest by its first execution start. A completed result awaiting delivery is not a reason to
+launch a duplicate; terminal reconstruction or primary-validation failures are not retried.
 
 Exercise receiving-order selection, serialized reception per unit, and at-most-one durable acceptance across attempts.
 An earlier failure outcome can win over later success. Selection or transfer failure cannot promote another result.
