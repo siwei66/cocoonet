@@ -1,0 +1,158 @@
+# Revision prompts of developing rules for simplicity:
+
+
+
+## ================================================ 1 ================================================
+
+````text
+I have found a potential material gap in the current contracts.
+
+I think the module is a light weight python computation module, which should favor functional programming with minimal states. But currently I found some contracts with nested classes / types / objects, which is not expected and inconsistent with the module developing philosophy of direct, simple, auditable and interpretable. Because nested objects with multiple statuses are not easily interpretable, not simple enough.
+
+\---
+
+I do not want you to view my worry as ground truth, because I think some design may be necessity for the intention, or best choice for the intention. But I still think some could be unnecessary, app-style coding instead of the functional scientific python module styled coding. For example, the attempt result has multi-layer nesting of module-defined types with multiple status, they could be flattened and the payload could be represented in a more direct way with the same meta data association.
+
+\---
+
+I want you to check the above-mentioned issue module-wide, including the policies and rules stated in the developing docs i.e. `AGENTS.md`, `architecture.md`, `roadmap.md` and `roadmap_phase_1.md`, as well as the established source codes and tests.
+
+\---
+
+Please deliver the following in sections:
+
+- Analysis over this issue, including but not limited to programming paradigms, styles for light-weight python scientific module, compliance to my stated developing philosophy etc.
+- Necessities for some of the design if exists;
+- Possibilities of refactoring to achieve better compliance, such as reducing nesting, or functional simplification
+
+\---
+
+Inspect and analyze only. Do not modify any file.
+````
+
+---
+
+
+
+## ================================================ 2 ================================================
+
+````text
+Then first of all, propose improvements of the developing docs based on this analysis:
+
+1. Adding my developing philosophy and programming preference explicitly to the current `AGENTS.md`
+2. Make corresponding rule / policy / roadmap updates for better compliance to the philosophy and programming preferences
+
+For your proposal in your answer, please add the lines of the mentioned location for me to locate your locations. Do not modify any content, add lines of the locations only and deliver the complete answer with the additional line numbers in the locations parts.
+
+List the revisions of a revision section as repeated location + proposed revision blocks.
+
+Before finishing, check redundancy of your proposed addition, remove the redundant rules, and make them concise.
+
+Do not modify any file. Propose the revisions file-by-file in your answer. Clarify the revision intention and rational before each proposed revision.
+```
+
+---
+
+```text
+I have the following advices, do not treat my advices as concrete facts but judge whether they are useful for this module and for the proposal first, and accept them if they are useful.
+
+\---
+
+For 2.1 Scientific and operational boundaries:
+```text
+Model fitting may mutate a model, but the execution workflow must preserve the required fresh-model boundaries between folds and removal evaluations. The component map describes responsibilities and dependencies, not a required class hierarchy.
+```
+
+I think here can explain explicitly the mutation means model fitting for sklearn-like models or model training for torch models, instead of arbitrary mutation.
+
+\---
+
+And for `AGENTS.md` I want to add two new rules for the development, please revise my expression clearly and add the rules to the proposal:
+
+```text
+- Before propose a new unit, review the steps of the phase roadmap associated with the unit first, analyze whether the unit has risk of over-engineering based on the module developing requirements. If there is over-engineering risk, report the risk clearly, propose improvements to the responsible step of the phase roadmap, instead of continuing to propose the unit.
+
+- After propose a new unit, review the proposed unit, analyze the necessity and over-engineering risk of the unit itself. If over-engineering risk is found, analyze whether the risk stems from the roadmap step, or from the proposed implementation of step itself: If the risk is from the roadmap step, report the risk clearly, propose improvements to the responsible step of the phase roadmap and stop. If the risk is from the proposed unit implementation, revise the proposal and then check the risk again, finally deliver the revised unit. The iterative unit revision is limited to 2 times, after 2 times, if the risk still exists, analyze the root cause and report, instead of forcibly solving the risk in this unit or making yourself believe it is solved, because the risk could still stem from the phase roadmap or even the requirements of the root roadmap or architecture itself.
+```
+you should also locate the corresponding position for inserting the two developing rules, add the rules with inserting lines like other proposed revisions.
+
+\---
+
+Do not modify any file.
+````
+
+---
+
+
+
+## ================================================ 3 ================================================
+
+````text
+Then based on your initial analysis of the answers of the two prompts:
+
+Prompt 1:
+```
+I have found a potential material gap in the current contracts.
+
+I think the module is a light weight python computation module, which should favor functional programming with minimal states. But currently I found some contracts with nested classes / types / objects, which is not expected and inconsistent with the module developing philosophy of direct, simple, auditable and interpretable. Because nested objects with multiple statuses are not easily interpretable, not simple enough.
+
+\---
+
+I do not want you to view my worry as ground truth, because I think some design may be necessity for the intention, or best choice for the intention. But I still think some could be unnecessary, app-style coding instead of the functional scientific python module styled coding. For example, the attempt result has multi-layer nesting of module-defined types with multiple status, they could be flattened and the payload could be represented in a more direct way with the same meta data association.
+
+\---
+
+I want you to check the above-mentioned issue module-wide, including the policies and rules stated in the developing docs i.e. `AGENTS.md`, `architecture.md`, `roadmap.md` and `roadmap_phase_1.md`, as well as the established source codes and tests.
+
+\---
+
+Please deliver the following in sections:
+
+- Analysis over this issue, including but not limited to programming paradigms, styles for light-weight python scientific module, compliance to my stated developing philosophy etc.
+- Necessities for some of the design if exists;
+- Possibilities of refactoring to achieve better compliance, such as reducing nesting, or functional simplification
+
+\---
+
+Inspect and analyze only. Do not modify any file.
+```
+
+and prompt 2:
+```
+Continue with your last analyze work.
+```
+
+and the added new rules, verify whether each step of the `roadmap_phase_1.md` are compliant with the added new requirements, and propose revisions to the `roadmap_phase_1.md` if needed.
+
+\---
+
+Requirements:
+
+1. When you propose a revision, you should also make sure the revision is consistent with the root roadmap of the module and optimized in the context of the entire planned module.
+2. Verify the roadmap of phase 1 only,
+3. Do not modify any file.
+
+\---
+
+Delivery:
+
+1. Summarized checklist of compliance of the steps;
+2. Concise analysis of over-engineering risk of phase 1 roadmap;
+3. Minimal necessary revision proposal with position of modification or inserted clarification.
+````
+
+---
+
+
+
+# ================================================ 4 ================================================
+
+````text
+I see some amendments may need parallel amendments of root roadmap, please analyze the proposed module workflow of the module according to the `AGENTS.md`, `architecture.md` and `roadmap.md`, based on the analysis and the compliance checklist, analysis of over-engineering risk and minimal necessary revisions to `roadmap_phase_1.md`, propose concise revisions of `roadmap.md` and `roadmap_phase_1.md` consistently.
+
+\---
+
+The revision proposal must be consistent in the aspect of the module developing requirement, module workflow, root roadmap and phase 1 roadmap. Do not modify any file. Propose concise and necessary revisions only.
+````
+
+
