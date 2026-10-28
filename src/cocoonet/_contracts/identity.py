@@ -18,7 +18,7 @@ type ScalarLabel = str | np.str_
 type TargetValue = ScalarLabel | float | np.floating
 
 # Distinct static types prevent accidental interchange of identity roles.
-# Runtime value and association checks belong to the planned validators.
+# Local validators check values; consuming boundaries check identity associations.
 DatasetId = NewType("DatasetId", str)
 SampleId = NewType("SampleId", str)
 ModelId = NewType("ModelId", str)
@@ -34,10 +34,13 @@ ArtifactId = NewType("ArtifactId", str)
 
 
 class ReportName(StrEnum):
-    """Identify report categories shared by outcomes and failure context.
+    """Identify report categories for callers and failure context.
 
     Notes
     -----
+    A complete result's fixed report slot supplies its report category.
+    Independently consumed reports receive that category from their caller;
+    ReportOutcome does not store a duplicate name.
     Node usage scope: Shared - Used by both root and worker nodes.
     """
 
@@ -62,7 +65,9 @@ class UnitKey:
     Notes
     -----
     Construction stores candidate identities without validating their values.
-    Dataset and evaluation settings resolve through the parent.
+    Allocation and operational records use this independently consumed key.
+    The consuming boundary verifies that the model belongs to the parent;
+    dataset and evaluation settings resolve through that parent.
     Node usage scope: Shared - Used by both root and worker nodes.
     """
 
@@ -71,34 +76,36 @@ class UnitKey:
 
 
 def validate_identifier(value: str, *, field: str) -> None:
-    """Validate an opaque identifier without changing its representation.
+    """Validate a nonempty opaque string identifier without conversion.
 
     Parameters
     ----------
     value : str
-        Identifier to validate.
+        Identifier to validate, including supported string subclasses.
     field : str
-        Field name included in validation errors.
+        Field path included in validation errors.
 
     Raises
     ------
     TypeError
-        If the identifier is not a string or ``field`` is not a string.
+        If the identifier is not a string or the diagnostic field path
+        is not a built-in string.
     ValueError
         If the identifier is empty.
 
     Notes
     -----
+    String subclasses, including NumPy string scalars, retain their type
+    and value. Whitespace and spelling are preserved. This check does not
+    infer an identifier format, enforce uniqueness, or resolve associations.
     Node usage scope: Shared - Used by both root and worker nodes.
     """
-    validate_declared_types(
-        value,
-        expected_type=str,
-        field=field,
-    )
+    # Share the string-family check without imposing exact built-in types.
+    validate_label(value, field=field)
 
+    # Identifiers require content, but whitespace has no special meaning.
     if not value:
-        raise ValueError(f"{field} must be a nonempty string.")
+        raise ValueError(f"{field} must be a nonempty string; got an empty string.")
 
 
 def validate_label(value: ScalarLabel, *, field: str) -> None:
@@ -137,7 +144,7 @@ def validate_label(value: ScalarLabel, *, field: str) -> None:
 
 
 def validate_unit_key(value: UnitKey) -> None:
-    """Validate the two identifiers forming a unit key.
+    """Validate a unit key's record type and two opaque identifiers.
 
     Parameters
     ----------
@@ -153,12 +160,17 @@ def validate_unit_key(value: UnitKey) -> None:
 
     Notes
     -----
+    Each identifier is validated without conversion. This function does
+    not resolve a parent or establish that its model collection contains
+    the referenced model; those checks belong to the consuming boundary.
+    Validation does not mutate the key.
     Node usage scope: Shared - Used by both root and worker nodes.
     """
-    validate_declared_types(
-        value,
-        expected_type=UnitKey,
-    )
+    # Check the outer record without recursively validating its fields.
+    # Incorrect outer types use the established bounded diagnostic path.
+    if not isinstance(value, UnitKey):
+        validate_declared_types(value, expected_type=UnitKey)
 
+    # Delegate each field's string and nonempty requirements to its owner.
     validate_identifier(value.parent_id, field="parent_id")
     validate_identifier(value.model_id, field="model_id")
