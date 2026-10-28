@@ -63,6 +63,10 @@ validation responsibilities for a reusable computation, parent evaluation, unit 
 dataset/model reference, prediction, report outcome, and failure. These contracts are the first dependency; they do
 not require a worker, filesystem workflow, or scheduler.
 
+Shared family metadata distinguishes standard scikit-learn models, custom scikit-learn-like models,
+PyTorch models, and Cocoonet-native compositions. Phase 1 records identities and family tags;
+construction and evaluation behavior belong to the later model-adapter phases.
+
 Keep module-generated dataset_id, sample_id, and model_id distinct from user-facing sample/model labels. Sample
 identity and its one-to-one label mapping are dataset-scoped; model labels distinguish unit tasks within their parent.
 A parent fixes one dataset, realized partition schedule, task-wide evaluation configuration, and one or more model

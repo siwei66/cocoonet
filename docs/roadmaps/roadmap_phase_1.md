@@ -289,12 +289,18 @@ compatibility remains Phase 4 work and must preserve the universal separation ru
 | Record / enum | Fields / values |
 | --- | --- |
 | `TaskKind` | `regression`, `classification` |
-| `ModelFamily` | `sklearn`, `sklearn_like`, `pytorch` |
+| `ModelFamily` | `sklearn`, `sklearn-like`, `pytorch`, `cocoonet` |
 | `ModelReference` | `model_id: ModelId`, `model_label: ScalarLabel`, `family: ModelFamily`, `task_kind: TaskKind` |
 | `EvaluationReference` | `configuration_id: EvaluationConfigId`, `task_kind: TaskKind`, `class_labels: tuple[ScalarLabel, ...]`, `influence_requested: bool` |
 | `ComputationSnapshot` | `root_dir: str`, `consolidation: ConsolidationState`, `partition: PartitionReference | None`, `evaluation: EvaluationReference | None`, `models: tuple[ModelReference, ...]`, `worker_ids: tuple[WorkerId, ...]`, `parent_id: ParentId | None` |
 | `ParentEvaluation` | `parent_id: ParentId`, `partition: PartitionReference`, `evaluation: EvaluationReference`, `models: tuple[ModelReference, ...]` |
 | `AttemptInputs` | `attempt_id: AttemptId`, `parent_id: ParentId`, `model_id: ModelId`, `worker_id: WorkerId` |
+
+ModelFamily members are SKLEARN="sklearn", SKLEARN_LIKE="sklearn-like", PYTORCH="pytorch",
+and COCOONET="cocoonet". COCOONET identifies models constructed through Cocoonet-native composition
+tools, including native ensembles and nested native compositions. Each constituent retains its own
+family identity. Standard scikit-learn ensembles and compositions remain SKLEARN.
+Phase 1 validates these tags without inspecting model behavior or defining composition APIs.
 
 `ConsolidationState` has exactly `initialized`, `consolidated`, and `unconsolidated`.
 
@@ -347,7 +353,7 @@ Parent and attempt invariants:
 | `validate_source_reference(value: SourceReference) -> None` | Validate logical relative syntax only. | Valid nested reference; empty/absolute/drive/backslash/dot/traversal forms rejected; no filesystem access. |
 | `validate_sample_record(value: SampleRecord) -> None` | Validate identity/label/group, standardized target type and floating-point finiteness, normalized masks, and nonempty unique sources; do not infer task kind. | Python/NumPy scalar acceptance without conversion; reject integer/boolean targets and nonfinite floating targets; preserve extended precision; valid/invalid masks and sources. |
 | `validate_partition_schedule(value: PartitionSchedule) -> None` | Validate complete logical associations and per-fold eligibility/disjointness/group rules. | Duplicate ID/label/fold; unknown ID; forbidden membership; group leakage; legal file overlap; reordered metadata; empty populations; repeated cross-fold use. |
-| `validate_model_reference(value: ModelReference) -> None` | Check identity/label and declared family/task-kind tags. | Valid families/kinds; invalid tags; no model object/API inspection or derived descriptions. |
+| `validate_model_reference(value: ModelReference) -> None` | Check identity/label and declared family/task-kind tags. | Exact four-family enum vocabulary, including sklearn-like and cocoonet; valid/invalid family and task-kind tags; no model object/API inspection or derived descriptions. |
 | `validate_evaluation_reference(value: EvaluationReference) -> None` | Check settings handle, task kind, class order, influence flag. | Regression/classification class rules; equality collisions; one class allowed; no sorting/coercion. |
 | `validate_computation_snapshot(value: ComputationSnapshot) -> None` | Check structural consolidation/parent relationships, the optional partition and evaluation references, and model/worker uniqueness while allowing incomplete configuration. | All three states; zero models/workers/partition; present partition with valid or invalid partition/dataset identity; missing required parent; unchanged parent after worker-list edit; snapshot unchanged by validation. |
 | `validate_parent_evaluation(value: ParentEvaluation) -> None` | Check partition-reference identities, fixed parent structure, nonempty models, unique model IDs/labels, and agreement with the task-wide task kind. | Invalid partition/dataset identity; empty models; mixed task kinds; duplicate IDs/labels; same label in different parents allowed. |
