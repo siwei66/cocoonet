@@ -1,6 +1,5 @@
 """Shared scalar types and opaque identities for internal component contracts."""
 
-from dataclasses import dataclass
 from enum import StrEnum
 from typing import NewType
 
@@ -49,30 +48,6 @@ class ReportName(StrEnum):
     RESIDUAL = "residual"
     VISUALIZATION = "visualization"
     INFLUENCE = "influence"
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class UnitKey:
-    """Identify one model-evaluation unit within its parent.
-
-    Parameters
-    ----------
-    parent_id : ParentId
-        Parent evaluation containing the unit.
-    model_id : ModelId
-        Fixed model input evaluated by the unit.
-
-    Notes
-    -----
-    Construction stores candidate identities without validating their values.
-    Allocation and operational records use this independently consumed key.
-    The consuming boundary verifies that the model belongs to the parent;
-    dataset and evaluation settings resolve through that parent.
-    Node usage scope: Shared - Used by both root and worker nodes.
-    """
-
-    parent_id: ParentId
-    model_id: ModelId
 
 
 def validate_identifier(value: str, *, field: str) -> None:
@@ -141,36 +116,3 @@ def validate_label(value: ScalarLabel, *, field: str) -> None:
 
     # Reuse the existing bounded diagnostics for rejected label values.
     validate_declared_types(value, expected_type=ScalarLabel, field=field)
-
-
-def validate_unit_key(value: UnitKey) -> None:
-    """Validate a unit key's record type and two opaque identifiers.
-
-    Parameters
-    ----------
-    value : UnitKey
-        Candidate parent/model identity pair.
-
-    Raises
-    ------
-    TypeError
-        If the value is not a UnitKey or either identifier is not a string.
-    ValueError
-        If either identifier is empty.
-
-    Notes
-    -----
-    Each identifier is validated without conversion. This function does
-    not resolve a parent or establish that its model collection contains
-    the referenced model; those checks belong to the consuming boundary.
-    Validation does not mutate the key.
-    Node usage scope: Shared - Used by both root and worker nodes.
-    """
-    # Check the outer record without recursively validating its fields.
-    # Incorrect outer types use the established bounded diagnostic path.
-    if not isinstance(value, UnitKey):
-        validate_declared_types(value, expected_type=UnitKey)
-
-    # Delegate each field's string and nonempty requirements to its owner.
-    validate_identifier(value.parent_id, field="parent_id")
-    validate_identifier(value.model_id, field="model_id")
