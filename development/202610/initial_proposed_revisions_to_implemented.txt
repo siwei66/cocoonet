@@ -1,0 +1,576 @@
+**The implementation needs selective simplification, not a wholesale replacement of records with dictionaries or functions.** Its records contain no custom methods; computation and validation already use standalone functions. The larger problems are duplicated information, repeated structural validation, outdated normalized-value contracts, and representations selected before their scientific consumers exist.
+
+I inspected the current source and corresponding tests. This was static analysis: **no files were modified and no tests were run**.
+
+## 1. Module-wide assessment
+
+The future workflow needs three different kinds of information:
+
+| Information | Appropriate representation |
+|---|---|
+| Fixed dataset, partition, model, and evaluation inputs | Explicit references and small records with clear ownership |
+| Predictions, reports, and failure provenance | Direct scientific payloads with unambiguous sample/class associations |
+| Execution, stop, delivery, persistence, and acceptance observations | Separate operational facts owned by their respective components |
+
+Scientific functions should consume the first category and produce the second. The third belongs to the surrounding workflow. Flattening should shorten access paths and remove competing copies of facts, while preserving these boundaries.
+
+Several existing choices are justified:
+
+- `UnitKey` expresses a useful, hashable parent/model identity.
+- `PartitionReference` binds a dataset to its realized partition.
+- Separate configuration and parent records preserve prospective-edit and resume semantics.
+- `TraceContext` is useful across scientific and operational failures.
+- Report status cannot reliably be inferred from payload presence.
+- Stop request, observed stop, scientific completion, and result acceptance must remain distinct.
+- Generic type parameters provide static typing; they do not themselves introduce runtime state.
+
+The implemented `state.py` currently contains only `ExecutionStatus`, `ParentProgress`, `AttemptStatus`, and `StopStatus`. Most planned operational records and compatibility functions are **not implemented**. Their absence is unfinished Phase 1 work, not evidence of excessive implementation.
+
+### Summary of identified issues
+
+| Issue | Evidence | Assessment |
+|---|---|---|
+| Standardized labels still accept integers, floats, and booleans | `identity.py:12,101`; corresponding acceptance tests | Direct mismatch with updated policy |
+| Target validation does not enforce standardized target semantics or task compatibility | `data.py:123`; `result.py:1148` | Correctness gap requiring explicit validation ownership |
+| Classification success test uses floating-point sample targets | `test_result.py:516,762` | Test fixture masks the target-context gap |
+| Single-path wrapper adds construction and traversal without another field or behavior | `data.py:19` | Reasonable simplification candidate |
+| Parent records duplicate parent/model identity through embedded unit records | `execution.py:392–537` | Strong simplification candidate |
+| Attempt result repeats report identity and stores a derivable outcome | `result.py:79,176` | Strong simplification candidate |
+| Generic type validation repeatedly traverses structures already checked by child validators | Data, execution, failure, prediction, and result validators | Unnecessary validation work and indirection |
+| Primitive contract imports load NumPy, pandas, and PyTorch | `_type_validation.py:31–33` | Dependency-boundary mismatch |
+| Dense nested prediction failure references mirror every value position | `prediction.py:19,59` | Review required; sparse storage is not automatically better |
+| Some explicit errors render entire sample/class sequences | `prediction.py:175–184,246–262` | Conflicts with bounded diagnostics |
+| Tests frequently require complete diagnostic strings | Prediction and result tests | Makes representation changes unnecessarily brittle |
+| Fifteen result helpers have only summary docstrings | `result.py:388–1147` | Preconditions, returns, and local mutation are insufficiently documented |
+
+The performance concerns above follow from the call structure; I have not measured their runtime cost.
+
+## 2. Proposal status and documentation conventions
+
+The updated roadmap explicitly requires selecting and reconciling schemas before requesting implementation approval. Consequently:
+
+- **Policy correction:** the required behavior is already established.
+- **Roadmap-first:** this is a proposed design decision; its affected roadmap declarations and validator signatures must be reconciled before an implementation unit is proposed.
+- **Retain:** the current structure has sufficient justification.
+
+This follows the instruction to “record the selected schema and reconcile its declarations, validators, tests” before implementation approval in [Phase 1, Section 9](E:/swectral_new/cocoonet/docs/roadmaps/roadmap_phase_1.md:779).
+
+For each revision below, I include the associated documentation and functional-block comments. These comments describe responsibilities and reasoning; they are not instructions to comment every assignment. Changed non-helper functions and records must retain the applicable node-usage statement in their NumPy-style `Notes` sections.
+
+## 3. File-by-file proposals
+
+### 3.1 `identity.py`: correct standardized labels
+
+**Location:** [identity.py, lines 10–15 and 101–131](E:/swectral_new/cocoonet/src/cocoonet/_contracts/identity.py:10).
+
+**Intention:** Apply the already-established text-label contract without adding a normalization framework.
+
+**Proposed revision:**
+
+- Narrow `ScalarLabel` to `str`.
+- Remove the finite-float label branch and its now-unused `isfinite` import.
+- Preserve the identifier types and `UnitKey`.
+- Perform no integer-to-text conversion here: that remains input standardization.
+- Do not combine this with the separate target-schema decision.
+
+The corresponding function would be:
+
+```python
+type ScalarLabel = str
+
+
+def validate_label(value: ScalarLabel, *, field: str) -> None:
+    """Validate a standardized text label without conversion.
+
+    Parameters
+    ----------
+    value : str
+        Standardized sample, model, group, or class label.
+    field : str
+        Field path included in validation errors.
+
+    Raises
+    ------
+    TypeError
+        If the label or diagnostic field path is not a string.
+
+    Notes
+    -----
+    Input conversion belongs to dataset or configuration standardization.
+    This check preserves spelling and does not enforce scoped uniqueness.
+    Node usage scope: Shared - Used by both root and worker nodes.
+    """
+    # Require the standardized representation; never repair an internal label.
+    validate_declared_types(value, expected_type=str, field=field)
+```
+
+Retaining the existing type-checking call in this first correction avoids combining semantic migration with validation-engine replacement.
+
+**Associated changes:** Update dependent docstrings that discuss finite float labels or Python scalar-equality collisions. Update numeric-label acceptance fixtures throughout the contract tests.
+
+**Unit review:** **Policy correction.** Necessary and bounded. Narrowing the shared alias and updating its directly affected fixtures is a coherent consistency revision. No new helper or model-label domain is needed.
+
+---
+
+### 3.2 `data.py`: separate target validity from input conversion
+
+**Location:** [SampleRecord and validate_sample_record](E:/swectral_new/cocoonet/src/cocoonet/_contracts/data.py:86), with the alias in [identity.py](E:/swectral_new/cocoonet/src/cocoonet/_contracts/identity.py:15).
+
+**Intention:** Prevent a record described as standardized from accepting boolean or nonfinite targets, while avoiding an import cycle or a duplicate task-kind field on every sample.
+
+**Proposed revision:**
+
+1. Remove boolean and integer alternatives from the standardized target domain.
+2. Specify the permitted floating scalar representation before finalizing the annotation. The current roadmap deliberately leaves that representation to dataset design.
+3. Have `validate_sample_record` enforce task-independent target conditions: standardized text or an allowed finite floating scalar, without coercion.
+4. Check classification versus regression compatibility where the schedule and evaluation context meet. Initially, that includes `validate_attempt_result`; future dataset registration must apply the corresponding check before committing execution.
+5. Classification targets must use the declared class vocabulary; regression targets must satisfy the selected floating-point contract.
+
+Do **not** add `task_kind` to every `SampleRecord`, infer it from individual target values, or import `execution.py` into `data.py`.
+
+**Associated docstring changes:**
+
+For `validate_sample_record`, replace the broad deferral of target admissibility with:
+
+> Validate the standardized target’s task-independent representation and finiteness. Classification/regression compatibility requires explicit evaluation context and is checked at the consuming boundary. Validation performs no conversion or cleansing.
+
+For the contextual check in `validate_attempt_result`:
+
+> The supplied schedule’s targets must agree with the parent’s task kind and, for classification, its authoritative class vocabulary. This checks metadata associations without loading source features.
+
+**Functional-block comments:**
+
+```python
+# Reject invalid standardized target values without performing input conversion.
+
+# Bind target interpretation to the parent's explicit evaluation task.
+
+# Check classification targets against the authoritative class vocabulary.
+```
+
+**Tests:** Add nonfinite/boolean target rejection and task-mismatch cases. Correct the classification fixture at [test_result.py:762](E:/swectral_new/cocoonet/tests/contracts/test_result.py:762), whose shared schedule currently contains float targets.
+
+**Unit review:** **Roadmap-first for the exact target representation and validation boundary.** The defect is established, but choosing a floating type silently would exceed the settled contract. Resolve that narrow decision before drafting the coordinated source revision.
+
+---
+
+### 3.3 `data.py`: simplify the source-path wrapper
+
+**Location:** [SourceReference and validate_source_reference](E:/swectral_new/cocoonet/src/cocoonet/_contracts/data.py:19), and `SampleRecord.sources`.
+
+**Intention:** Preserve logical source identity while eliminating a one-field object that adds no association or lifecycle behavior.
+
+**Recommended design decision:**
+
+Replace the dataclass with a named string alias:
+
+```python
+type SourceReference = str
+```
+
+Keep `SampleRecord.sources: tuple[SourceReference, ...]` and the existing lexical validator. It would validate the string directly rather than accessing `.relative_path`.
+
+Keep the current rules: relative `/`-separated paths, no traversal segments, no normalization, no filesystem access.
+
+**Associated docstring wording:**
+
+> Validate a logical dataset-relative source path. The dataset context determines its root; this function checks syntax only and does not establish physical containment or file existence.
+
+**Functional-block comments:**
+
+```python
+# Validate the logical string before applying path-syntax rules.
+
+# Reject absolute, drive-prefixed, or platform-specific path forms.
+
+# Reject ambiguous or traversing segments without normalizing the reference.
+```
+
+**Tests:** Preserve every lexical rejection and source-association test. Remove wrapper-construction and field-mutation tests; strings already provide immutable values.
+
+**Unit review:** **Roadmap-first.** The responsibility is necessary; the wrapper is not demonstrably necessary. Prefer an alias over introducing another custom path class or generic reference framework.
+
+---
+
+### 3.4 `execution.py`: remove duplicate identities inside the parent
+
+**Location:** [UnitTask, ParentEvaluation, and their validation](E:/swectral_new/cocoonet/src/cocoonet/_contracts/execution.py:392).
+
+**Intention:** Store each parent/model association once while retaining independently usable unit identities.
+
+**Recommended design decision:**
+
+Replace:
+
+```text
+ParentEvaluation.units
+    → UnitTask.key(parent_id, model_id)
+    → UnitTask.model(model_id, ...)
+```
+
+with:
+
+```python
+ParentEvaluation.models: tuple[ModelReference, ...]
+```
+
+A logical unit remains `(parent.parent_id, model.model_id)`. Keep `UnitKey` for allocation, lookup, reception, and other independently consumed boundaries.
+
+Consequences:
+
+- Remove the embedded `UnitTask` wrapper.
+- Validate model IDs, labels, and task kinds directly in `validate_parent_evaluation`.
+- Resolve `AttemptInputs.unit` against the parent ID and parent model collection.
+- Preserve `ComputationSnapshot`: prospective configuration and committed parent configuration are different scopes, so their separate records are justified.
+
+**Associated docstring changes:**
+
+`ParentEvaluation`:
+
+> Store one fixed parent context and its ordered model references. Each model defines one logical unit within this parent; unit identity is derived from the parent and model IDs rather than stored again inside the parent.
+
+`validate_attempt_inputs`:
+
+> Require the attempt’s parent ID to match the supplied parent and its model ID to identify one of that parent’s fixed models. No scientific input override is permitted.
+
+**Functional-block comments:**
+
+```python
+# Validate parent-owned context once before checking its model collection.
+
+# Enforce model uniqueness and agreement with the parent's task kind.
+
+# Resolve the detached attempt key against this parent's model identities.
+```
+
+**Tests:** Preserve cross-parent rejection, duplicate models/labels, mixed-family support, task-kind agreement, and duplicate-attempt semantics. Remove tests of inconsistencies that the new schema makes impossible inside a parent.
+
+**Unit review:** **Roadmap-first.** This removes duplicated facts without changing unit semantics. Do not replace it with a cached model registry or another persistent lookup object.
+
+---
+
+### 3.5 `failure.py`: retain meaningful context composition
+
+**Location:** [TraceContext and FailureRecord](E:/swectral_new/cocoonet/src/cocoonet/_contracts/failure.py:78).
+
+**Intention:** Preserve independently interpretable provenance across scientific failures, synchronization, persistence, and worker operations.
+
+**Proposed revision:**
+
+Retain `FailureRecord.context`. It is a useful shared boundary, unlike the single-path wrapper. Also retain origin IDs and the existing iterative origin-chain validation.
+
+Make only the directly associated changes:
+
+- Apply the standardized text-label correction to class coordinates and documentation.
+- Remove redundant recursive structural validation during the later validation-boundary migration.
+- Correct the `FailureScope` note that contrasts “fatal … baseline-fit failures” with “isolated prediction failures.” Both primary fold fit and prediction failures produce `validation_failed`, while later independent folds may continue.
+
+**Replacement note:**
+
+> Initial reconstruction failure ends evaluation before primary validation. After reconstruction, a primary-fold initialization, fitting/training, or prediction failure makes the attempt `validation_failed`; later independent folds continue when usable. These failures do not imply worker-process failure.
+
+**Validation docstring clarification:**
+
+> Failure-origin traversal uses local lookup and visited sets. These are temporary validation data, not retained runtime state.
+
+**Functional-block comments:**
+
+```python
+# Validate each failure once and build an unambiguous local identity lookup.
+
+# Resolve origin links without discarding narrower dependent-failure context.
+
+# Detect cycles iteratively; do not introduce a general graph framework.
+```
+
+**Unit review:** **Retain the schema.** The documentation correction is bounded. Validation restructuring belongs to the migration below; flattening context merely to reduce class count is not justified.
+
+---
+
+### 3.6 `prediction.py`: preserve alignment, review storage, fix diagnostics
+
+**Location:** [Prediction records](E:/swectral_new/cocoonet/src/cocoonet/_contracts/prediction.py:19), [regression validation](E:/swectral_new/cocoonet/src/cocoonet/_contracts/prediction.py:121), and [classification validation](E:/swectral_new/cocoonet/src/cocoonet/_contracts/prediction.py:411).
+
+**Intention:** Keep scientific meaning directly inspectable without selecting a replacement container solely because it has fewer brackets.
+
+**Proposed revisions now:**
+
+- Apply standardized text class labels.
+- Preserve separate regression and classification records and the wrapper-free `PredictionBatch` union.
+- Replace errors that render complete sample/class sequences with lengths, the first differing position, and bounded values.
+- Preserve exact order checks, finite predictions, probability bounds, independent label/probability unavailability, and failure associations.
+
+**Container decision:** I do **not** recommend immediately replacing every tuple with an array or every failure container with a dictionary.
+
+A sparse representation could associate failures with:
+
+```text
+regression value:     sample_id → failure IDs
+predicted label:      sample_id → failure IDs
+probability value:   (sample_id, class_label) → failure IDs
+```
+
+That avoids empty failure containers for successful cells, but introduces key validation and potentially mutable ownership. Arrays also require an explicit representation for `None`; substituting `NaN` would violate the scientific contract.
+
+Select the replacement only after comparing:
+
+- all-success output;
+- one unavailable probability with an available predicted label;
+- a shared fold failure;
+- later successful folds;
+- influence reuse of the baseline.
+
+**Associated docstring clarification:**
+
+> Values follow the saved sample order and explicit class order. Failure associations identify unavailable values exactly. Container layout does not alter the meanings of `None`, `NaN`, or a present prediction.
+
+For private classification helpers:
+
+> Inputs have passed structural validation by the owning validator. This helper checks only its stated alignment, shape, or value/provenance invariant.
+
+**Functional-block comments:**
+
+```python
+# Establish exact sample and class alignment before interpreting values.
+
+# Check dimensions independently of the physical failure-reference layout.
+
+# Require applicable provenance for every unavailable value.
+
+# Report the first mismatch with bounded context, not the complete dataset.
+```
+
+**Unit review:** Diagnostic changes are a **policy correction**. Container migration remains **roadmap-first**; its ownership and unavailable-value representation are not yet sufficiently specified. Do not force that unresolved decision into a validator refactor.
+
+---
+
+### 3.7 `result.py`: simplify identity and derive the summary outcome
+
+#### A. Flatten attempt-routing metadata
+
+**Location:** [AttemptResult](E:/swectral_new/cocoonet/src/cocoonet/_contracts/result.py:176).
+
+**Intention:** Make a detached scientific result easy to inspect without embedding allocation records.
+
+**Recommended schema decision:**
+
+Replace `inputs: AttemptInputs` with direct:
+
+```python
+parent_id: ParentId
+model_id: ModelId
+attempt_id: AttemptId
+worker_id: WorkerId
+```
+
+Keep `AttemptInputs` at the allocation boundary. Do not store both representations in the result.
+
+The result remains independent of worker readiness, connections, delivery state, and retry counters.
+
+**Associated docstring note:**
+
+> Routing identities associate this detached result with one producing attempt. They reference the parent’s fixed scientific context and do not embed allocation or worker-lifecycle state.
+
+**Functional-block comments:**
+
+```python
+# Resolve the result's routing identities against the fixed parent context.
+
+# Require every supplied failure coordinate to identify this producing attempt.
+```
+
+**Unit review:** **Roadmap-first.** This removes two metadata access layers while preserving detached-result provenance.
+
+#### B. Remove duplicate report names; retain one small report envelope
+
+**Location:** [ReportOutcome](E:/swectral_new/cocoonet/src/cocoonet/_contracts/result.py:79), [validate_report_outcome](E:/swectral_new/cocoonet/src/cocoonet/_contracts/result.py:237), and [_validate_report_slot](E:/swectral_new/cocoonet/src/cocoonet/_contracts/result.py:331).
+
+**Intention:** Eliminate competing report identities without creating parallel payload/status/failure dictionaries.
+
+**Recommended schema decision:**
+
+Keep:
+
+```text
+ReportOutcome[T]:
+    status
+    payload
+    failure_ids
+```
+
+Remove `name`. The fixed attempt-result slot supplies the report category. A detached report must be passed with an explicit category by its exporting/consuming boundary.
+
+Keep generic payload typing and the report envelope: associating content, report status, and failures is a concrete benefit. Flattening those into separate mappings would make consistency harder.
+
+**Associated docstring note:**
+
+> The containing result slot or explicit consuming context identifies the report category. This record associates report content with its overall status and failure references. Payload absence is distinct from an unavailable scientific value inside the payload.
+
+Update the existing “immutable instance” wording:
+
+> Present content follows its concrete schema’s ownership rules. Freezing this envelope does not freeze mutable payload contents.
+
+**Functional-block comments:**
+
+```python
+# Obtain report identity from its owning slot rather than a duplicate field.
+
+# Validate status, payload presence, and failure references as one relationship.
+
+# Leave concrete scientific payload validation to the report's owning schema.
+```
+
+**Unit review:** **Roadmap-first.** Removing the duplicated name is justified; removing the entire report envelope is not.
+
+#### C. Derive `EvaluationOutcome` through one pure function
+
+**Location:** [Outcome validation helpers](E:/swectral_new/cocoonet/src/cocoonet/_contracts/result.py:596), [primary-failure handling](E:/swectral_new/cocoonet/src/cocoonet/_contracts/result.py:1040), and [successful-primary handling](E:/swectral_new/cocoonet/src/cocoonet/_contracts/result.py:1108).
+
+**Intention:** Eliminate an independently supplied summary that can contradict the detailed facts.
+
+**Recommended design decision:**
+
+- Retain the `EvaluationOutcome` vocabulary.
+- Remove the authoritative `outcome` constructor field.
+- Introduce one pure `derive_evaluation_outcome(...)` function for a validated complete result.
+- Preserve precedence: reconstruction failure → primary-validation failure → downstream report errors → completion.
+- Continue rejecting inconsistent reports, missing predictions, and invalid provenance. Derivation must not make incomplete results appear valid.
+- Phase 12 may serialize the derived summary; loading must check consistency if it is stored.
+
+**Proposed function documentation:**
+
+> Derive the scientific outcome of a validated complete attempt result.  
+> **Returns:** `EvaluationOutcome`.  
+> **Notes:** Requires the complete-result invariants to have been checked. It does not validate arbitrary candidates, mutate the result, infer acceptance, or perform recovery. `NaN` and schema-permitted `None` do not themselves indicate computational failure.
+
+**Functional-block comments:**
+
+```python
+# Reconstruction failure takes precedence because primary validation never began.
+
+# Any primary-fold failure determines validation_failed despite later successes.
+
+# After successful primary validation, inspect requested report outcomes.
+
+# Scientific completion does not establish delivery or root acceptance.
+```
+
+**Unit review:** **Roadmap-first; new function requires its own named unit or explicit bundle.** Do not introduce a stateful builder, cached outcome property, or alternate derivation path.
+
+#### D. Document and simplify the validation pipeline
+
+**Location:** [validate_attempt_result](E:/swectral_new/cocoonet/src/cocoonet/_contracts/result.py:1148) and its helpers.
+
+Preserve the existing substantive checks: schedule identity, fold ordering, sample/class failure ownership, origin reachability, reconstruction-only output, partial-fold preservation, and influence prerequisites.
+
+After schema selection, remove checks whose only purpose was synchronizing duplicated fields. Do not split or merge helpers mechanically to meet file-length guidance.
+
+Expand retained helper docstrings to state:
+
+- required prevalidated inputs;
+- returned values and their meanings;
+- whether a call-local set such as `referenced_failure_ids` is updated;
+- intentionally propagated exceptions.
+
+For `_resolve_attempt_failure_reference`, for example:
+
+> Resolve a failure ID against the validated attempt failure set, check applicable coordinates, and add the resolved ID to the caller-owned reference set. Broader fold failures may support narrower unavailable values; supplied coordinates must not conflict.
+
+**Unit review:** Necessary documentation and simplification accompanying the selected schema. Local dictionaries and sets are appropriate functional implementation tools; they are not problematic persistent state.
+
+---
+
+### 3.8 `_type_validation.py`: migrate away from the general engine
+
+**Location:** [Imports and general machinery](E:/swectral_new/cocoonet/src/cocoonet/_type_validation.py:1), [recursive structured validation](E:/swectral_new/cocoonet/src/cocoonet/_type_validation.py:980), and [public utility functions](E:/swectral_new/cocoonet/src/cocoonet/_type_validation.py:1377).
+
+**Intention:** Make primitive contract checks independent of unrelated scientific frameworks and remove validation machinery without a current consumer.
+
+Current evidence:
+
+- All implemented contract modules use `validate_declared_types`.
+- A schedule is recursively traversed before individual samples and sources are validated again.
+- Failure collections recursively traverse records/context before invoking their validators.
+- Result prediction collections are traversed before per-batch validation.
+- The decorator and dtype helper interfaces have no callers elsewhere in production source.
+
+**Proposed migration:**
+
+1. Specify a small, standard-library-only type-checking and bounded-diagnostic boundary.
+2. Migrate validators in dependency order. Each checks its own fields and delegates nested records once.
+3. Keep complete checks at independently loaded/produced boundaries. Do not add `skip_validation=True`, persistent “validated” flags, or caches tied to mutable objects.
+4. Remove the annotation interpreter, decorator, and unused dtype interfaces only after their production consumers have been migrated and the approved scope explicitly covers removal.
+5. Implement framework-specific validation later where an actual array/table/tensor consumer requires it.
+
+Do not remove scientific package dependencies from project configuration as part of this proposal; their module-wide role is a separate decision.
+
+**Associated helper docstring requirements:**
+
+> Check an explicitly supplied runtime type requirement without interpreting typing annotations or traversing nested records. Reject booleans where integer or floating contracts exclude them. Report field, expected type, observed type, and a bounded value preview without coercion.
+
+For diagnostic support:
+
+> Generate bounded diagnostic context without scanning complete containers, moving tensors, or replacing the original validation error when preview generation fails.
+
+**Functional-block comments:**
+
+```python
+# Check this boundary's immediate fields before accessing their values.
+
+# Delegate each nested record once to its owning validator.
+
+# Keep diagnostic work bounded independently of the supplied payload size.
+```
+
+**Unit review:** **Roadmap-first migration, not one replacement unit.** Reimplementing a smaller annotation interpreter would retain the underlying over-engineering risk. Exact new helper signatures and removals must be enumerated before implementation approval.
+
+---
+
+### 3.9 `state.py` and package initializers: retain current scope
+
+**Locations:** [state.py](E:/swectral_new/cocoonet/src/cocoonet/_contracts/state.py:1), [public initializer](E:/swectral_new/cocoonet/src/cocoonet/__init__.py:1), and [contract initializer](E:/swectral_new/cocoonet/src/cocoonet/_contracts/__init__.py:1).
+
+No structural revision is warranted now.
+
+`ParentProgress` explicitly records a root-owned observation rather than claiming to derive acceptance. Stop status is independent of attempt processing. Their documentation already explains the distinctions.
+
+The initializers remain minimal. No public exports, runtime managers, compatibility engine, or missing scheduler records should be added as part of this refactoring review.
+
+**Unit review:** **Retain.** Their present scope is proportional to the planned workflow.
+
+## 4. Corresponding test revisions
+
+Tests should accompany each approved production revision, rather than form a separate broad rewrite.
+
+| Test file | Necessary changes |
+|---|---|
+| [test_identity.py](E:/swectral_new/cocoonet/tests/contracts/test_identity.py:164) | Replace numeric-label acceptance with non-text rejection; preserve exact text and identifier-scope behavior. |
+| [test_data.py](E:/swectral_new/cocoonet/tests/contracts/test_data.py:163) | Add standardized-target checks; adapt source representation if approved; retain mask, group, membership, and source-association coverage. |
+| [test_execution.py](E:/swectral_new/cocoonet/tests/contracts/test_execution.py:928) | Adapt parent fixtures; preserve model uniqueness, task agreement, parent binding, and duplicate-attempt behavior. |
+| [test_failure.py](E:/swectral_new/cocoonet/tests/contracts/test_failure.py:868) | Update class-label fixtures; retain shared origins, scope requirements, context consistency, and cycle rejection. |
+| [test_prediction.py](E:/swectral_new/cocoonet/tests/contracts/test_prediction.py:666) | Preserve independent unavailability and alignment; check bounded diagnostic information instead of complete messages. |
+| [test_result.py](E:/swectral_new/cocoonet/tests/contracts/test_result.py:753) | Correct classification targets; adapt flattened metadata/report identity; test derived precedence and preserve later successful folds and failure provenance. |
+| [test_type_validation.py](E:/swectral_new/cocoonet/tests/test_type_validation.py:1) | Retire only tests for explicitly removed utility behavior; preserve required strictness, bounded diagnostics, and exception behavior in the replacement boundaries. |
+| [test_state.py](E:/swectral_new/cocoonet/tests/contracts/test_state.py:1) | No change required by this proposal. |
+
+Test docstrings should name the protected invariant. Comments should explain deliberately invalid fixtures and semantic edge cases, for example:
+
+```python
+# A failed earlier fold must not discard a later successful fold.
+
+# The predicted label remains available even when one probability is unavailable.
+
+# A failed scientific outcome remains independent of root acceptance.
+```
+
+## 5. Recommended revision order
+
+1. Correct standardized labels and their directly affected documentation/tests.
+2. Resolve the target representation and task-context validation boundary.
+3. Record the selected source, parent, report, and attempt-result schemas in Phase 1.
+4. Implement those bounded schema migrations with their corresponding validators/tests.
+5. Derive the attempt outcome through one approved pure function.
+6. Migrate validation support without weakening independent boundaries.
+7. Select a prediction-container change only after its ownership and scientific-consumer examples justify it.
+
+The highest-value changes are **correcting standardized values, removing duplicated identity, deriving the attempt summary, and narrowing validation responsibilities**. Replacing every record or tuple would add migration work without an established module-wide benefit.

@@ -166,6 +166,7 @@ Please check and revise the proposal if needed for my following concerns:
 - Do not use instruction or description like migrate / modify / revise / change / improve the current implementation, the `roadmap_phase_1.md` should be an initial guide, and the implementations all follow this guide including the implemented features. So there is no concept of modification for the roadmaps.
 ````
 
+
 ````text
 Then propose the source code revision file by file. The format requirements are the same, including the intention of revision, position of revision and the revision content.
 
@@ -173,6 +174,7 @@ The revision should also comply with the development requirements like correspon
 
 The next file to revise is `identity.md`, do not modify any file, propose revision only.
 ````
+
 
 ````text
 Approved. Implement the revision exactly as proposed. Do not introduce any modification beyond the proposal.
@@ -182,6 +184,7 @@ After finished, propose a standard one-line git commit message with scope.
 Then continue with the next source file. Propose revisions only. And verify before you finalize your proposal and put it in your answer. Do not modify any file.
 ````
 
+
 ````text
 Then re-propose the complete simplification revisions of the `execution.py` file based on the latest roadmaps and the interpretation without `UnitKey`. The format requirements are the same, including the intention of revision, position of revision and the revision content.
 
@@ -189,5 +192,25 @@ The revision should also comply with the development requirements like correspon
 
 Do not modify any file, propose revisions only.
 ````
+
+
+````text
+The continue to the simplification revision of the next file.
+
+- Review the attached analysis but use it only for reference.
+- Read the corresponding part of the current roadmap of phase 1 and the requirements in the AGENTS.md and architecture.md, and propose the simplification revisions based on the corresponding requirements.
+- The revisions should be designed for the benefit of the entire module instead of focusing on the local code logic.
+- Verify your proposal according to the dev docs requirements before you finalize it.
+
+\---
+
+The requirements for answer delivering are the same for the modification intention and position.
+
+Propose only, do not modify any file.
+
+\---
+
+Please note: do not subset references in the error messages to [:80] (of the reference strings), use the entire reference string like entire paths and labels instead.
+```
 
 
