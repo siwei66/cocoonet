@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+import numpy as np
+
 from cocoonet._contracts.identity import (
     DatasetId,
     FoldId,
@@ -14,72 +16,50 @@ from cocoonet._contracts.identity import (
 )
 from cocoonet._type_validation import validate_declared_types
 
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class SourceReference:
-    """Reference a source file relative to its dataset root.
-
-    Parameters
-    ----------
-    relative_path : str
-        Logical dataset-relative path, interpreted within the dataset context.
-
-    Notes
-    -----
-    Construction preserves the candidate path without validating or normalizing it.
-    This record does not access the filesystem.
-    Node usage scope: Shared - Used by both root and worker nodes.
-    """
-
-    relative_path: str
+# Logical paths carry no row locator or filesystem behavior.
+type SourceReference = str
 
 
 def validate_source_reference(value: SourceReference) -> None:
-    """Validate a platform-independent logical source-file reference.
+    """Validate a logical dataset-relative source path without conversion.
 
     Parameters
     ----------
     value : SourceReference
-        Logical dataset-relative source reference to validate.
+        Nonempty slash-separated standardized dataset-relative logical file path string.
 
     Raises
     ------
     TypeError
-        If ``value`` is not a SourceReference or ``relative_path`` is not a
-        string.
+        If the source reference is not a string.
     ValueError
-        If the logical path is empty, absolute, drive-prefixed, contains a
-        backslash, or contains an empty, current-directory, or parent-directory
-        segment.
+        If the path is empty, absolute, drive-prefixed, contains a backslash,
+        or contains an empty, current-directory, or parent-directory segment.
 
     Notes
     -----
-    Validation is lexical and does not access the filesystem, resolve
-    symlinks, establish physical containment, or normalize the supplied path.
-    Physical-path resolution belongs to the later dataset I/O boundary.
+    Validation preserves spelling and case. It does not access files,
+    resolve symlinks, establish physical containment, or normalize paths.
+    Physical-path resolution belongs to the dataset I/O boundary.
     Node usage scope: Shared - Used by both root and worker nodes.
     """
-    validate_declared_types(
-        value,
-        expected_type=SourceReference,
-    )
+    # Validate the string once without narrowing supported string subclasses.
+    validate_identifier(value, field="source")
 
-    path = value.relative_path
-    if not path:
-        raise ValueError("relative_path must be nonempty.")
+    # Reject absolute and drive-qualified syntax without interpreting OS paths.
+    if value.startswith("/"):
+        raise ValueError("source must be relative; got a leading '/'.")
+    if len(value) >= 2 and value[0].isalpha() and value[1] == ":":
+        raise ValueError(f"source must have no drive prefix; got {value[:2]!r}.")
 
-    if path.startswith("/"):
-        raise ValueError("relative_path must be relative and must not start with '/'.")
+    # Logical references have one separator convention on every platform.
+    if "\\" in value:
+        raise ValueError("source must use '/' separators; got a backslash.")
 
-    if len(path) >= 2 and path[0].isalpha() and path[1] == ":":
-        raise ValueError("relative_path must not contain a drive prefix.")
-
-    if "\\" in path:
-        raise ValueError("relative_path must use '/' separators; backslashes are not allowed.")
-
-    segments = path.split("/")
-    if any(segment in ("", ".", "..") for segment in segments):
-        raise ValueError("relative_path must not contain empty, '.', or '..' segments; " f"got {path!r}.")
+    # Report only the offending segment, never the complete potentially long path.
+    for index, segment in enumerate(value.split("/")):
+        if segment in ("", ".", ".."):
+            raise ValueError(f"source segment {index} must not be empty, '.', or '..'; got {segment!r}.")
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -99,14 +79,17 @@ class SampleRecord:
     test_mask : int
         Testing eligibility, independently specified from training eligibility.
     target : TargetValue
-        True class label or single regression target.
+        Standardized string classification target or finite floating-point
+        regression target, preserving its scalar type and value.
     sources : tuple[SourceReference, ...]
-        Dataset-relative source references associated with the sample.
+        Logical dataset-relative path strings for the sample's source files.
 
     Notes
     -----
     Training and testing populations use this same record structure.
     Construction does not normalize or validate candidate field values.
+    Inline samples reference their input table; file-backed samples reference
+    their X-bearing files. Managed reference/metadata tables are not sources.
     Feature data and computed predictions are represented separately.
     Node usage scope: Shared - Used by both root and worker nodes.
     """
@@ -121,50 +104,61 @@ class SampleRecord:
 
 
 def validate_sample_record(value: SampleRecord) -> None:
-    """Validate one normalized sample metadata record.
+    """Validate standardized sample metadata without converting its values.
 
     Parameters
     ----------
     value : SampleRecord
-        Sample identity, metadata, target, eligibility masks, and source
-        references to validate.
+        Candidate identity, labels, masks, target, and logical source paths.
 
     Raises
     ------
     TypeError
-        If the record or any field has an incorrect runtime type.
+        If the record or a field has an incorrect runtime type.
     ValueError
-        If the sample identity is empty, a label is invalid, an eligibility
-        mask is not 0 or 1, no source is present, a source is invalid, or
-        source references are duplicated.
+        If the identity is empty, a mask is not 0 or 1, a floating target
+        is nonfinite, or sources are empty, invalid, or duplicated.
 
     Notes
     -----
     This validator does not normalize input, modify targets, access source
     files, or enforce dataset-wide sample-ID or sample-label uniqueness.
-    Target admissibility for a particular task belongs to the later dataset
-    input design.
+    It accepts standardized string or finite floating-point targets without
+    conversion. Consumers with evaluation context enforce task compatibility
+    and classification class membership. Source references must be unique
+    within each sample, but are not compared across samples.
     Node usage scope: Shared - Used by both root and worker nodes.
     """
-    validate_declared_types(
-        value,
-        expected_type=SampleRecord,
-    )
+    # Check the outer record; field validity belongs to the checks below.
+    if not isinstance(value, SampleRecord):
+        validate_declared_types(value, expected_type=SampleRecord)
 
+    # Validate identity and string families without exact-built-in restrictions.
     validate_identifier(value.sample_id, field="sample_id")
     validate_label(value.sample_label, field="sample_label")
     validate_label(value.group, field="group")
 
+    # Validate target families before checking finiteness at their own precision.
+    if not isinstance(value.target, (str, np.str_, float, np.floating)):
+        validate_declared_types(value.target, expected_type=TargetValue, field="target")
+    if isinstance(value.target, (float, np.floating)) and not np.isfinite(value.target):
+        raise ValueError(f"target must be finite; got {value.target!r}.")
+
+    # Masks use exact integer semantics, including explicit rejection of bool.
     for field, mask in (
         ("train_mask", value.train_mask),
         ("test_mask", value.test_mask),
     ):
+        validate_declared_types(mask, expected_type=int, field=field)
         if mask not in (0, 1):
             raise ValueError(f"{field} must be exactly 0 or 1; got {mask!r}.")
 
+    # Validate the container without recursively checking its source strings.
+    validate_declared_types(value.sources, expected_type=tuple, field="sources")
     if not value.sources:
-        raise ValueError("sources must contain at least one source reference.")
+        raise ValueError("sources must contain at least one path; got an empty tuple.")
 
+    # Validate each path once; duplicate diagnostics use a bounded string prefix.
     source_paths: set[str] = set()
     for index, source in enumerate(value.sources):
         try:
@@ -172,12 +166,9 @@ def validate_sample_record(value: SampleRecord) -> None:
         except (TypeError, ValueError) as error:
             raise type(error)(f"sources[{index}] is invalid: {error}") from error
 
-        if source.relative_path in source_paths:
-            raise ValueError(
-                "sources must contain unique source references; "
-                f"duplicate path at sources[{index}]: {source.relative_path!r}."
-            )
-        source_paths.add(source.relative_path)
+        if source in source_paths:
+            raise ValueError(f"sources[{index}] must be unique; duplicate path prefix: {source!r}.")
+        source_paths.add(source)
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -255,54 +246,51 @@ class PartitionSchedule:
 
 
 def validate_partition_schedule(value: PartitionSchedule) -> None:  # noqa: C901
-    """Validate a complete realized partition schedule.
+    """Validate a complete realized schedule and its sample associations.
 
     Parameters
     ----------
     value : PartitionSchedule
-        Dataset association, sample metadata, and realized fold memberships
-        to validate.
+        Candidate partition reference, sample metadata, and ordered folds.
 
     Raises
     ------
     TypeError
-        If the schedule or any nested field has an incorrect runtime type.
+        If a record, container, or field has an incorrect runtime type.
     ValueError
-        If an identity is invalid, samples or folds are absent, scoped
-        identities or labels are duplicated, a membership is unknown or
-        repeated, training and testing memberships overlap, a mask forbids
-        a recorded membership, or a group crosses a fold boundary.
+        If sample metadata is invalid, samples or folds are empty, identities
+        or labels are duplicated, memberships are unknown or repeated,
+        a mask forbids membership, or training/testing samples or groups duplicate.
 
     Notes
     -----
-    Validation preserves tuple order and the supplied memberships. It does
-    not infer a splitting strategy, regenerate a split, require nonempty
-    fold populations, require every sample to appear, or access persistent
-    partition artifacts.
+    Sample validators own sample validity; this function owns partition
+    identities, fold structure, and cross-record associations. Local
+    dictionaries and sets index validated records without mutating input.
+    Validation preserves order and memberships. It does not infer task kind
+    or splitting strategy, regenerate splits, require nonempty fold
+    populations or complete sample coverage, or access persistent artifacts.
     Node usage scope: Shared - Used by both root and worker nodes.
     """
-    # Validate the complete nested record structure before accessing fields.
-    validate_declared_types(
-        value,
-        expected_type=PartitionSchedule,
-    )
+    # Validate outer records without recursively traversing their fields.
+    if not isinstance(value, PartitionSchedule):
+        validate_declared_types(value, expected_type=PartitionSchedule)
+    if not isinstance(value.reference, PartitionReference):
+        validate_declared_types(value.reference, expected_type=PartitionReference, field="reference")
 
-    # Validate the partition and associated dataset identities.
-    validate_identifier(
-        value.reference.partition_id,
-        field="reference.partition_id",
-    )
-    validate_identifier(
-        value.reference.dataset_id,
-        field="reference.dataset_id",
-    )
+    # Validate the fixed dataset/partition identity pair without artifact access.
+    validate_identifier(value.reference.partition_id, field="reference.partition_id")
+    validate_identifier(value.reference.dataset_id, field="reference.dataset_id")
 
-    # Require sample metadata because memberships cannot resolve without it.
+    # Require ordered, nonempty containers; their elements are checked below.
+    validate_declared_types(value.samples, expected_type=tuple, field="samples")
+    validate_declared_types(value.folds, expected_type=tuple, field="folds")
     if not value.samples:
-        raise ValueError("samples must contain at least one sample record.")
+        raise ValueError("samples must contain at least one record; got an empty tuple.")
+    if not value.folds:
+        raise ValueError("folds must contain at least one record; got an empty tuple.")
 
-    # Validate every sample and build the ID lookup used by fold validation.
-    # Sample IDs and user-facing labels are independently unique.
+    # Validate each sample once and index its independently unique ID and label.
     sample_by_id: dict[SampleId, SampleRecord] = {}
     sample_labels: set[ScalarLabel] = set()
     for sample_index, sample in enumerate(value.samples):
@@ -313,91 +301,77 @@ def validate_partition_schedule(value: PartitionSchedule) -> None:  # noqa: C901
 
         if sample.sample_id in sample_by_id:
             raise ValueError(
-                "samples must contain unique sample_id values; "
-                f"duplicate at samples[{sample_index}]: {sample.sample_id!r}."
+                f"samples[{sample_index}].sample_id must be unique; " f"duplicate ID prefix: {sample.sample_id!r}."
             )
         if sample.sample_label in sample_labels:
             raise ValueError(
-                "samples must contain unique sample_label values; "
-                f"duplicate at samples[{sample_index}]: {sample.sample_label!r}."
+                f"samples[{sample_index}].sample_label must be unique; "
+                f"duplicate label prefix: {sample.sample_label!r}."
             )
-
         sample_by_id[sample.sample_id] = sample
         sample_labels.add(sample.sample_label)
 
-    # Require at least one realized fold while permitting empty populations
-    # inside an individual fold.
-    if not value.folds:
-        raise ValueError("folds must contain at least one fold record.")
-
-    # Validate each fold in its authoritative tuple order.
+    # Visit folds in saved order and validate each fold's own fields once.
     fold_ids: set[FoldId] = set()
     for fold_index, fold in enumerate(value.folds):
         fold_field = f"folds[{fold_index}]"
+        if not isinstance(fold, FoldRecord):
+            validate_declared_types(fold, expected_type=FoldRecord, field=fold_field)
 
-        # Validate fold identity and uniqueness within this schedule.
+        # Fold identities are unique within this schedule.
         validate_identifier(fold.fold_id, field=f"{fold_field}.fold_id")
         if fold.fold_id in fold_ids:
-            raise ValueError(
-                "folds must contain unique fold_id values; " f"duplicate at {fold_field}: {fold.fold_id!r}."
-            )
+            raise ValueError(f"{fold_field}.fold_id must be unique; duplicate ID prefix: {fold.fold_id!r}.")
         fold_ids.add(fold.fold_id)
 
-        # Validate both populations using the same membership rules while
-        # applying the corresponding training or testing eligibility mask.
+        # Both populations share membership rules and have independent masks.
         for membership_field, memberships, mask_field in (
-            (
-                "training_sample_ids",
-                fold.training_sample_ids,
-                "train_mask",
-            ),
-            (
-                "testing_sample_ids",
-                fold.testing_sample_ids,
-                "test_mask",
-            ),
+            ("training_sample_ids", fold.training_sample_ids, "train_mask"),
+            ("testing_sample_ids", fold.testing_sample_ids, "test_mask"),
         ):
+            population_path = f"{fold_field}.{membership_field}"
+            validate_declared_types(memberships, expected_type=tuple, field=population_path)
             seen_memberships: set[SampleId] = set()
             for membership_index, sample_id in enumerate(memberships):
-                membership_path = f"{fold_field}.{membership_field}[{membership_index}]"
+                membership_path = f"{population_path}[{membership_index}]"
 
-                # Validate each membership identity before lookup.
+                # Validate each identity before hashing it or resolving its sample.
                 validate_identifier(sample_id, field=membership_path)
-
-                # Reject repetition within one fold population.
                 if sample_id in seen_memberships:
                     raise ValueError(
-                        f"{fold_field}.{membership_field} must not repeat "
-                        f"sample IDs; duplicate at index {membership_index}: "
-                        f"{sample_id!r}."
+                        f"{membership_path} must be unique within its population; "
+                        f"duplicate ID prefix: {sample_id!r}."
                     )
                 seen_memberships.add(sample_id)
 
-                # Require every membership to resolve to this schedule's
-                # exact sample collection.
+                # Every membership must resolve within this exact sample collection.
                 member = sample_by_id.get(sample_id)
                 if member is None:
-                    raise ValueError(f"{membership_path} references unknown sample_id " f"{sample_id!r}.")
-
-                # Enforce the eligibility mask corresponding to the current
-                # training or testing population.
-                if getattr(member, mask_field) != 1:
                     raise ValueError(
-                        f"{membership_path} references sample_id " f"{sample_id!r}, whose {mask_field} is not 1."
+                        f"{membership_path} must reference a known sample_id; "
+                        f"unknown ID prefix: {sample_id!r}."
                     )
 
-        # Require training and testing sample memberships to be disjoint.
-        overlapping_ids = set(fold.training_sample_ids) & set(fold.testing_sample_ids)
-        if overlapping_ids:
-            duplicate_id = next(sample_id for sample_id in fold.training_sample_ids if sample_id in overlapping_ids)
-            raise ValueError(
-                f"{fold_field} contains sample_id {duplicate_id!r} in both " "training and testing memberships."
-            )
+                # Eligibility is permission for the corresponding population only.
+                mask = getattr(member, mask_field)
+                if mask != 1:
+                    raise ValueError(f"{membership_path} requires {mask_field} == 1; got {mask!r}.")
 
-        # Enforce group separation unconditionally. Repeated groups remain
-        # valid within either population when they do not cross the boundary.
+        # Require disjoint sample memberships without comparing source-file sets.
+        testing_ids = set(fold.testing_sample_ids)
+        for index, sample_id in enumerate(fold.training_sample_ids):
+            if sample_id in testing_ids:
+                raise ValueError(
+                    f"{fold_field}.training_sample_ids[{index}] must be absent from testing; "
+                    f"duplicate ID prefix: {sample_id!r}."
+                )
+
+        # Groups may repeat within a population but never cross the fold boundary.
         testing_groups = {sample_by_id[sample_id].group for sample_id in fold.testing_sample_ids}
-        for sample_id in fold.training_sample_ids:
+        for index, sample_id in enumerate(fold.training_sample_ids):
             group = sample_by_id[sample_id].group
             if group in testing_groups:
-                raise ValueError(f"{fold_field} places group {group!r} in both training " "and testing populations.")
+                raise ValueError(
+                    f"{fold_field}.training_sample_ids[{index}] must have a group absent from testing; "
+                    f"duplicate group prefix: {group!r}."
+                )
