@@ -211,6 +211,22 @@ Propose only, do not modify any file.
 \---
 
 Please note: do not subset references in the error messages to [:80] (of the reference strings), use the entire reference string like entire paths and labels instead.
-```
+````
+
+
+````text
+The continue to the simplification revision of the next file.
+
+- Review the previously attached analysis `initial_proposed_revisions_to_implemented.txt`.
+- Read the corresponding part of the current roadmap of phase 1 and the requirements in the AGENTS.md and architecture.md, and propose the simplification revisions based on the corresponding requirements.
+- The revisions should be designed for the benefit of the entire module instead of focusing on the local code logic.
+- Verify your proposal according to the dev docs requirements before you finalize it.
+
+\---
+
+The requirements for answer delivering are the same for the modification intention and position.
+
+Propose only, do not modify any file.
+````
 
 

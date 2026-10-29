@@ -482,8 +482,8 @@ in their assigned phases.
 
 | Record | Fields |
 | --- | --- |
-| `RegressionPredictions` | `fold_id: FoldId`, `sample_ids: tuple[SampleId, ...]`, `values: tuple[float | None, ...]`, `failure_ids: tuple[tuple[FailureId, ...], ...]` |
-| `ClassificationPredictions` | `fold_id: FoldId`, `sample_ids: tuple[SampleId, ...]`, `class_labels: tuple[ScalarLabel, ...]`, `predicted_labels: tuple[ScalarLabel | None, ...]`, `label_failure_ids: tuple[tuple[FailureId, ...], ...]`, `probabilities: tuple[tuple[float | None, ...], ...]`, `probability_failure_ids: tuple[tuple[tuple[FailureId, ...], ...], ...]` |
+| `RegressionPredictions` | `fold_id: FoldId`, `sample_ids: tuple[SampleId, ...]`, `values: tuple[float | np.floating | None, ...]`, `failure_ids: tuple[tuple[FailureId, ...], ...]` |
+| `ClassificationPredictions` | `fold_id: FoldId`, `sample_ids: tuple[SampleId, ...]`, `class_labels: tuple[ScalarLabel, ...]`, `predicted_labels: tuple[ScalarLabel | None, ...]`, `label_failure_ids: tuple[tuple[FailureId, ...], ...]`, `probabilities: tuple[tuple[float | np.floating | None, ...], ...]`, `probability_failure_ids: tuple[tuple[tuple[FailureId, ...], ...], ...]` |
 
 `PredictionBatch = RegressionPredictions | ClassificationPredictions` is a type alias, not another wrapper class.
 Per-value and per-class failure references allow independently computed values to survive a failed component without
@@ -501,7 +501,9 @@ Prediction invariants:
 - A present predicted class label belongs to the parent class vocabulary and has no value-level failure reference.
   An unavailable predicted label is `None` and has at least one applicable failure ID. Non-applicability is not valid
   for a prediction corresponding to a saved testing sample.
-- Present regression predictions are finite floats. Present probabilities are finite floats in `[0, 1]`. `NaN` and
+- Present regression predictions and probabilities accept Python and NumPy floating-point scalars without
+  conversion or precision restriction. Present regression predictions are finite; present probabilities are finite
+  and within `[0, 1]`. Arrays and tensors remain model-adapter inputs. `NaN` and
   infinity are invalid standardized model outputs rather than formula-defined prediction values. An unavailable
   regression prediction or probability is `None` with at least one applicable failure ID.
 - Present predictions have no unavailability failure association. Every `None` prediction has applicable failure
