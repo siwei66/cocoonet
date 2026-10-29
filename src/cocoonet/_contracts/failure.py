@@ -330,8 +330,7 @@ def validate_failure_record(value: FailureRecord) -> None:
     for field, context_value in required_context[value.scope]:
         if context_value is None:
             raise ValueError(
-                f"failure {value.failure_id!r} with scope {value.scope.value!r} "
-                f"requires context.{field}; got None."
+                f"failure {value.failure_id!r} with scope {value.scope.value!r} " f"requires context.{field}; got None."
             )
 
     # Require the designated report category for sample-influence failures.

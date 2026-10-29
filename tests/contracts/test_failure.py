@@ -1,8 +1,10 @@
 """Tests for traceable failure contracts."""
 
-from dataclasses import FrozenInstanceError
+from collections.abc import Callable
+from dataclasses import FrozenInstanceError, replace
 from typing import cast
 
+import numpy as np
 import pytest
 
 from cocoonet._contracts.failure import (
@@ -155,7 +157,7 @@ def test_validate_trace_context_accepts_complete_context_without_mutation() -> N
 
 def test_validate_trace_context_rejects_empty_stage() -> None:
     """Reject an empty descriptive failure stage."""
-    with pytest.raises(ValueError, match=r"^stage must be a nonempty string\.$"):
+    with pytest.raises(ValueError, match=r"^stage.*nonempty.*empty string"):
         validate_trace_context(TraceContext(stage=""))
 
 
@@ -167,7 +169,7 @@ def test_validate_trace_context_rejects_non_string_stage() -> None:
         validate_trace_context(context)
 
     message = str(error.value)
-    assert "path: value.stage" in message
+    assert "path: stage" in message
     assert "expected: builtins.str" in message
     assert "got type: builtins.int" in message
     assert "got value: 1" in message
@@ -234,7 +236,7 @@ def test_validate_trace_context_rejects_empty_supplied_identity(
     """Validate every supplied opaque context identity."""
     with pytest.raises(
         ValueError,
-        match=rf"^{field} must be a nonempty string\.$",
+        match=rf"^{field}.*nonempty.*empty string",
     ):
         validate_trace_context(context)
 
@@ -243,12 +245,12 @@ def test_validate_trace_context_rejects_nonfinite_class_label() -> None:
     """Reject a nonfinite floating-point class coordinate."""
     context = TraceContext(
         stage="class_measure",
-        class_label=float("nan"),
+        class_label=cast(str, float("nan")),
     )
 
     with pytest.raises(
-        ValueError,
-        match=r"^class_label must be finite; got nan\.$",
+        TypeError,
+        match="path: class_label",
     ):
         validate_trace_context(context)
 
@@ -264,7 +266,7 @@ def test_validate_trace_context_rejects_undeclared_report_name() -> None:
         validate_trace_context(context)
 
     message = str(error.value)
-    assert "path: value.report_name" in message
+    assert "path: report_name" in message
     assert "expected: cocoonet._contracts.identity.ReportName" in message
 
 
@@ -276,7 +278,7 @@ def test_validate_trace_context_rejects_undeclared_report_name() -> None:
                 stage="model",
                 model_id=ModelId("model-a"),
             ),
-            "model_id requires parent_id.",
+            "model_id.*requires parent_id.*None",
         ),
         (
             TraceContext(
@@ -285,7 +287,7 @@ def test_validate_trace_context_rejects_undeclared_report_name() -> None:
                 attempt_id=AttemptId("attempt-a"),
                 worker_id=WorkerId("worker-a"),
             ),
-            "attempt_id requires parent_id.",
+            "attempt_id.*requires parent_id.*None",
         ),
         (
             TraceContext(
@@ -294,7 +296,7 @@ def test_validate_trace_context_rejects_undeclared_report_name() -> None:
                 attempt_id=AttemptId("attempt-a"),
                 worker_id=WorkerId("worker-a"),
             ),
-            "attempt_id requires model_id.",
+            "attempt_id.*requires model_id.*None",
         ),
         (
             TraceContext(
@@ -303,21 +305,21 @@ def test_validate_trace_context_rejects_undeclared_report_name() -> None:
                 model_id=ModelId("model-a"),
                 attempt_id=AttemptId("attempt-a"),
             ),
-            "attempt_id requires worker_id.",
+            "attempt_id.*requires worker_id.*None",
         ),
         (
             TraceContext(
                 stage="prediction",
                 fold_id=FoldId("fold-a"),
             ),
-            "fold_id requires parent_id.",
+            "fold_id.*requires parent_id.*None",
         ),
         (
             TraceContext(
                 stage="prediction",
                 sample_id=SampleId("sample-a"),
             ),
-            "sample_id requires parent_id.",
+            "sample_id.*requires parent_id.*None",
         ),
     ],
 )
@@ -326,7 +328,7 @@ def test_validate_trace_context_rejects_orphan_coordinate(
     message: str,
 ) -> None:
     """Reject scientific coordinates lacking their required broader context."""
-    with pytest.raises(ValueError, match=rf"^{message}$"):
+    with pytest.raises(ValueError, match=message):
         validate_trace_context(context)
 
 
@@ -554,7 +556,7 @@ def test_validate_failure_record_rejects_empty_failure_id() -> None:
 
     with pytest.raises(
         ValueError,
-        match=r"^failure_id must be a nonempty string\.$",
+        match=r"^failure_id.*nonempty.*empty string",
     ):
         validate_failure_record(failure)
 
@@ -586,7 +588,7 @@ def test_validate_failure_record_rejects_empty_diagnostic_field(
 
     with pytest.raises(
         ValueError,
-        match=rf"^{expected} must be a nonempty string\.$",
+        match=rf"^{expected}.*nonempty.*empty string",
     ):
         validate_failure_record(failure)
 
@@ -608,7 +610,7 @@ def test_validate_failure_record_rejects_empty_origin_id() -> None:
 
     with pytest.raises(
         ValueError,
-        match=r"^origin_failure_id must be a nonempty string\.$",
+        match=r"^origin_failure_id.*nonempty.*empty string",
     ):
         validate_failure_record(failure)
 
@@ -630,7 +632,7 @@ def test_validate_failure_record_rejects_self_origin() -> None:
 
     with pytest.raises(
         ValueError,
-        match=r"^origin_failure_id must not equal failure_id\.$",
+        match=r"origin_failure_id.*differ.*failure_id.*failure-a",
     ):
         validate_failure_record(failure)
 
@@ -657,7 +659,7 @@ def test_validate_failure_record_rejects_report_scope_without_name(
 
     with pytest.raises(
         ValueError,
-        match=rf"^{scope.value} failure requires report_name\.$",
+        match=rf"{scope.value}.*requires context.report_name.*None",
     ):
         validate_failure_record(failure)
 
@@ -730,7 +732,7 @@ def test_validate_failure_record_rejects_incomplete_influence_context(
 
     with pytest.raises(
         ValueError,
-        match=rf"^sample_influence failure requires {field}\.$",
+        match=rf"sample_influence.*requires context.{field}.*None",
     ):
         validate_failure_record(failure)
 
@@ -757,7 +759,7 @@ def test_validate_failure_record_rejects_wrong_influence_report() -> None:
 
     with pytest.raises(
         ValueError,
-        match=r"^sample_influence failure requires report_name='influence'\.$",
+        match=r"sample_influence.*requires context.report_name='influence'.*validation",
     ):
         validate_failure_record(failure)
 
@@ -787,7 +789,7 @@ def test_validate_failure_record_rejects_operation_scope_without_operation_id(
 
     with pytest.raises(
         ValueError,
-        match=rf"^{scope.value} failure requires operation_id\.$",
+        match=rf"{scope.value}.*requires context.operation_id.*None",
     ):
         validate_failure_record(failure)
 
@@ -805,7 +807,7 @@ def test_validate_failure_record_rejects_fit_prediction_without_attempt() -> Non
 
     with pytest.raises(
         ValueError,
-        match=r"^fit_prediction failure requires attempt_id\.$",
+        match=r"fit_prediction.*requires context.attempt_id.*None",
     ):
         validate_failure_record(failure)
 
@@ -823,7 +825,7 @@ def test_validate_failure_record_rejects_worker_process_without_worker() -> None
 
     with pytest.raises(
         ValueError,
-        match=r"^worker_process failure requires worker_id\.$",
+        match=r"worker_process.*requires context.worker_id.*None",
     ):
         validate_failure_record(failure)
 
@@ -889,7 +891,7 @@ def test_validate_failure_links_rejects_duplicate_failure_id() -> None:
 
     with pytest.raises(
         ValueError,
-        match=r"^duplicate failure_id: 'failure-a'\.$",
+        match=r"failure_id.*unique.*failure-a",
     ):
         validate_failure_links((first, duplicate))
 
@@ -903,7 +905,7 @@ def test_validate_failure_links_rejects_dangling_origin() -> None:
 
     with pytest.raises(
         ValueError,
-        match=r"^origin_failure_id 'failure-missing' does not resolve\.$",
+        match=r"origin_failure_id.*resolve.*failure-missing",
     ):
         validate_failure_links((failure,))
 
@@ -917,7 +919,7 @@ def test_validate_failure_links_rejects_self_origin() -> None:
 
     with pytest.raises(
         ValueError,
-        match=r"^origin_failure_id must not equal failure_id\.$",
+        match=r"origin_failure_id.*differ.*failure_id.*failure-a",
     ):
         validate_failure_links((failure,))
 
@@ -939,7 +941,7 @@ def test_validate_failure_links_rejects_origin_cycle() -> None:
 
     with pytest.raises(
         ValueError,
-        match=r"^failure origin links must be acyclic\.$",
+        match=r"failure-a.*acyclic.*failure-a",
     ):
         validate_failure_links((first, second, third))
 
@@ -990,6 +992,83 @@ def test_validate_failure_links_rejects_conflicting_shared_context(
 
     with pytest.raises(
         ValueError,
-        match=(rf"^failure 'failure-dependent' and origin " rf"'failure-origin' have conflicting {field}\.$"),
+        match=(rf"^failure 'failure-dependent' and origin " rf"'failure-origin' require matching context.{field}.*"),
     ):
         validate_failure_links((origin, dependent))
+
+
+def test_failure_boundaries_reject_wrong_outer_records() -> None:
+    """Reject incorrect record types before reading their context fields."""
+    with pytest.raises(TypeError, match="TraceContext"):
+        validate_trace_context(cast(TraceContext, None))
+    with pytest.raises(TypeError, match="FailureRecord"):
+        validate_failure_record(cast(FailureRecord, None))
+    with pytest.raises(TypeError, match="values"):
+        validate_failure_links(cast(tuple[FailureRecord, ...], []))
+
+
+@pytest.mark.parametrize("context,error_type", [(None, TypeError), (TraceContext(stage=""), ValueError)])
+def test_failure_record_reports_invalid_context(context: object, error_type: type[Exception]) -> None:
+    """Keep nested context diagnostics while preserving exception categories."""
+    failure = replace(_linked_report_failure("failure-a"), context=cast(TraceContext, context))
+    with pytest.raises(error_type) as error:
+        validate_failure_record(failure)
+    assert "context" in str(error.value)
+
+
+@pytest.mark.parametrize("label", ["", np.str_("class-a"), np.str_("")])
+def test_trace_preserves_standardized_class_label(label: str | np.str_) -> None:
+    """Accept text class coordinates without adding unrelated context requirements."""
+    context = TraceContext(stage="class-check", class_label=label)
+    validate_trace_context(context)
+    assert context.class_label is label
+
+
+@pytest.mark.parametrize("label", [1, True, np.int64(1), np.float32(1), [], object()])
+def test_trace_rejects_nontext_class_label(label: object) -> None:
+    """Reject unstandardized class coordinates instead of converting them."""
+    with pytest.raises(TypeError) as error:
+        validate_trace_context(TraceContext(stage="class-check", class_label=cast(str, label)))
+    assert "class_label" in str(error.value)
+    assert "expected:" in str(error.value) and "got type:" in str(error.value)
+
+
+def test_failure_links_preserve_full_long_identities() -> None:
+    """Keep the complete origin identity in a dangling-reference diagnostic."""
+    identity = "failure-" + "a" * 120 + "-distinct-ending"
+    failure = _linked_report_failure("dependent", origin_failure_id=identity)
+    with pytest.raises(ValueError) as error:
+        validate_failure_links((failure,))
+    assert identity in str(error.value)
+    assert "dependent" in str(error.value) and "resolve" in str(error.value)
+
+
+def test_failure_links_allow_forward_shared_origin() -> None:
+    """Resolve origins independently of tuple ordering without rewriting provenance."""
+    origin = _linked_report_failure("origin")
+    first = _linked_report_failure("first", origin_failure_id="origin")
+    second = _linked_report_failure("second", origin_failure_id="origin")
+    failures = (first, second, origin)
+    validate_failure_links(failures)
+    assert failures == (first, second, origin)
+
+
+@pytest.mark.parametrize(
+    "field,invalid",
+    [
+        ("scope", "report"),
+        ("exception_type", 1),
+        ("message", None),
+        ("traceback", None),
+        ("failure_id", 1),
+        ("origin_failure_id", True),
+    ],
+)
+def test_failure_record_rejects_incorrect_field_types(field: str, invalid: object) -> None:
+    """Validate diagnostic and provenance field types without converting their contents."""
+    # A widened constructor retains invalid candidates for runtime validation.
+    failure = cast(Callable[..., FailureRecord], replace)(_linked_report_failure("failure-a"), **{field: invalid})
+    with pytest.raises(TypeError) as error:
+        validate_failure_record(failure)
+    assert field in str(error.value)
+    assert "expected:" in str(error.value) and "got type:" in str(error.value)

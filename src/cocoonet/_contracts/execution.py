@@ -348,9 +348,7 @@ def validate_computation_snapshot(value: ComputationSnapshot) -> None:  # noqa: 
         except (TypeError, ValueError) as error:
             raise type(error)(f"models[{index}] is invalid: {error}") from error
         if model.model_id in model_ids:
-            raise ValueError(
-                f"models[{index}].model_id must be unique; duplicate ID prefix: {model.model_id!r}."
-            )
+            raise ValueError(f"models[{index}].model_id must be unique; duplicate ID prefix: {model.model_id!r}.")
         if model.model_label in model_labels:
             raise ValueError(
                 f"models[{index}].model_label must be unique; duplicate label prefix: {model.model_label!r}."
@@ -371,9 +369,7 @@ def validate_computation_snapshot(value: ComputationSnapshot) -> None:  # noqa: 
         validate_identifier(value.parent_id, field="parent_id")
     if value.consolidation is ConsolidationState.INITIALIZED:
         if value.parent_id is not None:
-            raise ValueError(
-                f"Initialized snapshots require parent_id=None; got ID prefix: {value.parent_id!r}."
-            )
+            raise ValueError(f"Initialized snapshots require parent_id=None; got ID prefix: {value.parent_id!r}.")
     elif value.parent_id is None:
         raise ValueError(f"{value.consolidation.value} snapshots require a parent_id; got None.")
 
@@ -471,9 +467,7 @@ def validate_parent_evaluation(value: ParentEvaluation) -> None:
                 f"got {model.task_kind.value!r}."
             )
         if model.model_id in model_ids:
-            raise ValueError(
-                f"models[{index}].model_id must be unique; duplicate ID prefix: {model.model_id!r}."
-            )
+            raise ValueError(f"models[{index}].model_id must be unique; duplicate ID prefix: {model.model_id!r}.")
         if model.model_label in model_labels:
             raise ValueError(
                 f"models[{index}].model_label must be unique; duplicate label prefix: {model.model_label!r}."
@@ -569,7 +563,4 @@ def validate_attempt_inputs(
 
     # Compare model IDs directly; one lookup needs no auxiliary key collection.
     if not any(model.model_id == value.model_id for model in parent.models):
-        raise ValueError(
-            "model_id must identify a parent model; "
-            f"unknown ID prefix: {value.model_id!r}."
-        )
+        raise ValueError("model_id must identify a parent model; " f"unknown ID prefix: {value.model_id!r}.")

@@ -1,8 +1,10 @@
 """Tests for dataset and partition contracts."""
 
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
 from typing import cast
 
+import numpy as np
 import pytest
 
 from cocoonet._contracts.data import (
@@ -20,24 +22,18 @@ from cocoonet._contracts.identity import DatasetId, FoldId, PartitionId, SampleI
 
 def test_source_reference_preserves_exact_path_identity() -> None:
     """Preserve path spelling and distinguish different logical references."""
-    reference = SourceReference(relative_path="Samples/source.csv")
-    same = SourceReference(relative_path="Samples/source.csv")
-    different_case = SourceReference(relative_path="samples/source.csv")
-    different_file = SourceReference(relative_path="Samples/other.csv")
+    reference = "Samples/source.csv"
+    same = "Samples/source.csv"
+    different_case = "samples/source.csv"
+    different_file = "Samples/other.csv"
 
-    assert reference.relative_path == "Samples/source.csv"
+    for candidate in (reference, same, different_case, different_file):
+        validate_source_reference(candidate)
+
+    assert reference == "Samples/source.csv"
     assert reference == same
     assert reference != different_case
     assert reference != different_file
-
-
-def test_source_reference_rejects_path_mutation() -> None:
-    """Prevent redirection of an existing source reference."""
-    reference = SourceReference(relative_path="Samples/source.csv")
-
-    # Exercise runtime mutation rejection without a statically invalid assignment.
-    with pytest.raises(FrozenInstanceError):
-        reference.__setattr__("relative_path", "Samples/other.csv")
 
 
 @pytest.mark.parametrize(
@@ -54,56 +50,56 @@ def test_validate_source_reference_accepts_logical_relative_paths(
     relative_path: str,
 ) -> None:
     """Accept nonempty slash-separated logical references without normalization."""
-    reference = SourceReference(relative_path=relative_path)
+    reference = relative_path
 
     validate_source_reference(reference)
 
-    assert reference.relative_path == relative_path
+    assert reference == relative_path
 
 
 @pytest.mark.parametrize(
     ("relative_path", "expected_message"),
     [
-        ("", "relative_path must be nonempty."),
+        ("", "nonempty string"),
         (
             "/dataset/source.csv",
-            "relative_path must be relative and must not start with '/'.",
+            "leading '/'",
         ),
         (
             "C:/dataset/source.csv",
-            "relative_path must not contain a drive prefix.",
+            "no drive prefix",
         ),
         (
             "c:dataset/source.csv",
-            "relative_path must not contain a drive prefix.",
+            "no drive prefix",
         ),
         (
             r"dataset\source.csv",
-            "relative_path must use '/' separators; backslashes are not allowed.",
+            "backslash",
         ),
         (
             ".",
-            "relative_path must not contain empty, '.', or '..' segments",
+            "must not be empty, '.', or '..'",
         ),
         (
             "..",
-            "relative_path must not contain empty, '.', or '..' segments",
+            "must not be empty, '.', or '..'",
         ),
         (
             "dataset/./source.csv",
-            "relative_path must not contain empty, '.', or '..' segments",
+            "must not be empty, '.', or '..'",
         ),
         (
             "dataset/../source.csv",
-            "relative_path must not contain empty, '.', or '..' segments",
+            "must not be empty, '.', or '..'",
         ),
         (
             "dataset//source.csv",
-            "relative_path must not contain empty, '.', or '..' segments",
+            "must not be empty, '.', or '..'",
         ),
         (
             "dataset/",
-            "relative_path must not contain empty, '.', or '..' segments",
+            "must not be empty, '.', or '..'",
         ),
     ],
 )
@@ -112,7 +108,7 @@ def test_validate_source_reference_rejects_invalid_logical_paths(
     expected_message: str,
 ) -> None:
     """Reject logical paths that are empty, platform-specific, or ambiguous."""
-    reference = SourceReference(relative_path=relative_path)
+    reference = relative_path
 
     with pytest.raises(ValueError) as error:
         validate_source_reference(reference)
@@ -122,28 +118,28 @@ def test_validate_source_reference_rejects_invalid_logical_paths(
 
 @pytest.mark.parametrize(
     "value",
-    [None, "source.csv", {"relative_path": "source.csv"}, object()],
+    [None, 1, True, b"source.csv", {"relative_path": "source.csv"}, object()],
 )
 def test_validate_source_reference_rejects_other_objects(value: object) -> None:
-    """Reject values that are not source-reference records."""
+    """Reject values that are not logical path strings."""
     with pytest.raises(TypeError) as error:
         validate_source_reference(cast(SourceReference, value))
 
     message = str(error.value)
-    assert "path: value" in message
-    assert "expected: cocoonet._contracts.data.SourceReference" in message
+    assert "path: source" in message
+    assert "expected: builtins.str" in message
     assert f"got type: {type(value).__module__}.{type(value).__qualname__}" in message
 
 
 def test_validate_source_reference_rejects_non_string_path() -> None:
     """Reject a source reference whose logical path is not text."""
-    reference = SourceReference(relative_path=cast(str, 1))
+    reference = cast(str, 1)
 
     with pytest.raises(TypeError) as error:
         validate_source_reference(reference)
 
     message = str(error.value)
-    assert "path: value.relative_path" in message
+    assert "path: source" in message
     assert "expected: builtins.str" in message
     assert "got type: builtins.int" in message
     assert "got value: 1" in message
@@ -151,13 +147,11 @@ def test_validate_source_reference_rejects_non_string_path() -> None:
 
 def test_validate_source_reference_does_not_require_physical_file() -> None:
     """Validate a logical reference without checking host filesystem state."""
-    reference = SourceReference(
-        relative_path="not-created/feature:name.csv",
-    )
+    reference = "not-created/feature:name.csv"
 
     validate_source_reference(reference)
 
-    assert reference.relative_path == "not-created/feature:name.csv"
+    assert reference == "not-created/feature:name.csv"
 
 
 @pytest.mark.parametrize("target", ["positive", 2.5])
@@ -170,8 +164,8 @@ def test_sample_record_preserves_metadata_association(target: TargetValue) -> No
         Classification or regression target associated with the sample.
     """
     sources = (
-        SourceReference(relative_path="tables/samples.csv"),
-        SourceReference(relative_path="measurements/specimen-a.csv"),
+        "tables/samples.csv",
+        "measurements/specimen-a.csv",
     )
     sample = SampleRecord(
         sample_id=SampleId("sample-7"),
@@ -213,7 +207,7 @@ def test_sample_record_rejects_metadata_mutation(field: str) -> None:
         train_mask=1,
         test_mask=0,
         target="positive",
-        sources=(SourceReference(relative_path="tables/samples.csv"),),
+        sources=("tables/samples.csv",),
     )
 
     # Exercise runtime mutation rejection without a statically invalid assignment.
@@ -231,7 +225,7 @@ def valid_sample_record() -> SampleRecord:
         train_mask=1,
         test_mask=1,
         target="positive",
-        sources=(SourceReference(relative_path="tables/samples.csv"),),
+        sources=("tables/samples.csv",),
     )
 
 
@@ -246,8 +240,8 @@ def test_validate_sample_record_accepts_normalized_masks_and_unique_sources(
 ) -> None:
     """Accept every normalized mask combination and multiple unique sources."""
     sources = (
-        SourceReference(relative_path="tables/samples.csv"),
-        SourceReference(relative_path="measurements/specimen-a.csv"),
+        "tables/samples.csv",
+        "measurements/specimen-a.csv",
     )
     sample = replace(
         valid_sample_record,
@@ -328,7 +322,7 @@ def test_validate_sample_record_rejects_boolean_masks(
         validate_sample_record(sample)
 
     message = str(error.value)
-    assert f"path: value.{field}" in message
+    assert f"path: {field}" in message
     assert "expected: builtins.int" in message
     assert "got type: builtins.bool" in message
 
@@ -339,12 +333,13 @@ def test_validate_sample_record_validates_identity_and_labels(
     """Apply the established identifier and scalar-label value contracts."""
     invalid_records = (
         (replace(valid_sample_record, sample_id=SampleId("")), "sample_id"),
-        (replace(valid_sample_record, sample_label=float("nan")), "sample_label"),
-        (replace(valid_sample_record, group=float("inf")), "group"),
+        (replace(valid_sample_record, sample_label=cast(str, float("nan"))), "sample_label"),
+        (replace(valid_sample_record, group=cast(str, float("inf"))), "group"),
     )
 
     for sample, expected_field in invalid_records:
-        with pytest.raises(ValueError) as error:
+        error_type = ValueError if expected_field == "sample_id" else TypeError
+        with pytest.raises(error_type) as error:
             validate_sample_record(sample)
 
         assert expected_field in str(error.value)
@@ -363,7 +358,7 @@ def test_validate_sample_record_rejects_non_scalar_target(
         validate_sample_record(sample)
 
     message = str(error.value)
-    assert "path: value.target" in message
+    assert "path: target" in message
     assert "got type: builtins.list" in message
 
 
@@ -375,7 +370,7 @@ def test_validate_sample_record_requires_a_source(
 
     with pytest.raises(
         ValueError,
-        match="sources must contain at least one source reference",
+        match="sources must contain at least one path",
     ):
         validate_sample_record(sample)
 
@@ -384,14 +379,14 @@ def test_validate_sample_record_rejects_duplicate_sources(
     valid_sample_record: SampleRecord,
 ) -> None:
     """Reject repeated logical source references within one sample."""
-    source = SourceReference(relative_path="tables/samples.csv")
+    source = "tables/samples.csv"
     sample = replace(valid_sample_record, sources=(source, source))
 
     with pytest.raises(ValueError) as error:
         validate_sample_record(sample)
 
     message = str(error.value)
-    assert "sources must contain unique source references" in message
+    assert "must be unique" in message
     assert "sources[1]" in message
     assert "'tables/samples.csv'" in message
 
@@ -402,7 +397,7 @@ def test_validate_sample_record_validates_each_source(
     """Report the position of an invalid logical source reference."""
     sample = replace(
         valid_sample_record,
-        sources=(SourceReference(relative_path="../samples.csv"),),
+        sources=("../samples.csv",),
     )
 
     with pytest.raises(ValueError) as error:
@@ -410,14 +405,14 @@ def test_validate_sample_record_validates_each_source(
 
     message = str(error.value)
     assert "sources[0] is invalid" in message
-    assert "relative_path must not contain empty, '.', or '..' segments" in message
+    assert "must not be empty, '.', or '..'" in message
 
 
 def test_validate_sample_record_allows_sources_shared_by_samples(
     valid_sample_record: SampleRecord,
 ) -> None:
     """Allow distinct samples to reference the same underlying source file."""
-    shared_source = SourceReference(relative_path="tables/samples.csv")
+    shared_source = "tables/samples.csv"
     first = replace(valid_sample_record, sources=(shared_source,))
     second = replace(
         valid_sample_record,
@@ -523,7 +518,7 @@ def test_partition_schedule_preserves_association_and_order() -> None:
             train_mask=1,
             test_mask=1,
             target=2.5,
-            sources=(SourceReference(relative_path="tables/samples.csv"),),
+            sources=("tables/samples.csv",),
         )
         for sample_id, label in [
             ("sample-7", "specimen-b"),
@@ -582,7 +577,7 @@ def valid_partition_schedule(
     valid_sample_record: SampleRecord,
 ) -> PartitionSchedule:
     """Provide a valid schedule with order-independent sample associations."""
-    shared_source = SourceReference(relative_path="tables/samples.csv")
+    shared_source = "tables/samples.csv"
     first = replace(
         valid_sample_record,
         sample_id=SampleId("sample-1"),
@@ -651,7 +646,7 @@ def test_validate_partition_schedule_allows_repeated_groups_within_population(
     valid_partition_schedule: PartitionSchedule,
 ) -> None:
     """Allow group repetition when the group remains on one side of a fold."""
-    shared_source = SourceReference(relative_path="tables/samples.csv")
+    shared_source = "tables/samples.csv"
     samples = (
         SampleRecord(
             sample_id=SampleId("sample-1"),
@@ -734,7 +729,7 @@ def test_validate_partition_schedule_validates_nested_records(
     """Validate partition, sample, and fold identities at their schedule paths."""
     invalid_sample = replace(
         valid_partition_schedule.samples[0],
-        sources=(SourceReference(relative_path="../samples.csv"),),
+        sources=("../samples.csv",),
     )
     invalid_schedules = (
         (
@@ -792,7 +787,7 @@ def test_validate_partition_schedule_rejects_duplicate_scoped_values(
                     replace(second, sample_id=first.sample_id),
                 ),
             ),
-            "unique sample_id",
+            "sample_id must be unique",
         ),
         (
             replace(
@@ -802,7 +797,7 @@ def test_validate_partition_schedule_rejects_duplicate_scoped_values(
                     replace(second, sample_label=first.sample_label),
                 ),
             ),
-            "unique sample_label",
+            "sample_label must be unique",
         ),
         (
             replace(
@@ -812,7 +807,7 @@ def test_validate_partition_schedule_rejects_duplicate_scoped_values(
                     valid_partition_schedule.folds[0],
                 ),
             ),
-            "unique fold_id",
+            "fold_id must be unique",
         ),
     )
 
@@ -834,7 +829,7 @@ def test_validate_partition_schedule_rejects_invalid_memberships(
                 training_sample_ids=(SampleId("unknown"),),
                 testing_sample_ids=(),
             ),
-            "references unknown sample_id",
+            "reference a known sample_id",
         ),
         (
             FoldRecord(
@@ -845,7 +840,7 @@ def test_validate_partition_schedule_rejects_invalid_memberships(
                 ),
                 testing_sample_ids=(),
             ),
-            "must not repeat sample IDs",
+            "must be unique within its population",
         ),
         (
             FoldRecord(
@@ -853,7 +848,7 @@ def test_validate_partition_schedule_rejects_invalid_memberships(
                 training_sample_ids=(SampleId("sample-1"),),
                 testing_sample_ids=(SampleId("sample-1"),),
             ),
-            "in both training and testing memberships",
+            "must be absent from testing",
         ),
     )
 
@@ -901,7 +896,7 @@ def test_validate_partition_schedule_enforces_membership_masks(
     with pytest.raises(ValueError) as error:
         validate_partition_schedule(schedule)
 
-    assert f"whose {expected_mask} is not 1" in str(error.value)
+    assert f"requires {expected_mask} == 1; got 0" in str(error.value)
 
 
 def test_validate_partition_schedule_rejects_group_leakage(
@@ -922,5 +917,115 @@ def test_validate_partition_schedule_rejects_group_leakage(
 
     message = str(error.value)
     assert "folds[0]" in message
-    assert "places group" in message
-    assert "in both training and testing populations" in message
+    assert "group absent from testing" in message
+    assert "duplicate group" in message
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        np.str_("positive"),
+        0.0,
+        -0.0,
+        np.float16(0.5),
+        np.float32(0.5),
+        np.float64(0.5),
+        np.longdouble("1.00000000000000001"),
+        np.finfo(np.longdouble).max,
+        np.nextafter(np.longdouble(0), np.longdouble(1)),
+    ],
+)
+def test_sample_target_preserves_scalar_precision(valid_sample_record: SampleRecord, target: TargetValue) -> None:
+    """Preserve standardized text and finite floats, including dtype limits."""
+    sample = replace(valid_sample_record, target=target)
+    validate_sample_record(sample)
+    assert sample.target is target
+
+
+@pytest.mark.parametrize(
+    "target", [float("nan"), float("inf"), float("-inf"), np.float32("nan"), np.float64("inf"), np.longdouble("-inf")]
+)
+def test_sample_rejects_nonfinite_target(valid_sample_record: SampleRecord, target: TargetValue) -> None:
+    """Reject nonfinite input targets without treating them as report NaN."""
+    with pytest.raises(ValueError) as error:
+        validate_sample_record(replace(valid_sample_record, target=target))
+    assert "target" in str(error.value) and "finite" in str(error.value)
+    assert repr(target) in str(error.value)
+
+
+@pytest.mark.parametrize("target", [0, True, np.int64(1), np.bool_(False), 1j, np.array(1.0)])
+def test_sample_rejects_unstandardized_target(valid_sample_record: SampleRecord, target: object) -> None:
+    """Reject integers, booleans, complex values, and arrays without coercion."""
+    with pytest.raises(TypeError) as error:
+        validate_sample_record(replace(valid_sample_record, target=cast(TargetValue, target)))
+    assert "path: target" in str(error.value)
+    assert "expected:" in str(error.value) and "got type:" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "field,invalid",
+    [
+        ("sources", ["samples.csv"]),
+        ("sources", (1,)),
+        ("sample_label", 1),
+        ("group", True),
+        ("train_mask", 1.0),
+        ("test_mask", np.int64(1)),
+    ],
+)
+def test_sample_rejects_invalid_field_types(valid_sample_record: SampleRecord, field: str, invalid: object) -> None:
+    """Validate standardized field types before indexing or hashing values."""
+    # Widen only test construction so runtime validators receive the invalid candidate.
+    sample = cast(Callable[..., SampleRecord], replace)(valid_sample_record, **{field: invalid})
+    with pytest.raises(TypeError) as error:
+        validate_sample_record(sample)
+    assert field in str(error.value)
+    assert "expected:" in str(error.value) and "got type:" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "field,invalid", [("reference", None), ("samples", []), ("folds", []), ("samples", (None,)), ("folds", (None,))]
+)
+def test_schedule_rejects_invalid_record_and_container_types(
+    valid_partition_schedule: PartitionSchedule,
+    field: str,
+    invalid: object,
+) -> None:
+    """Validate each independently supplied schedule component."""
+    schedule = cast(Callable[..., PartitionSchedule], replace)(valid_partition_schedule, **{field: invalid})
+    with pytest.raises(TypeError) as error:
+        validate_partition_schedule(schedule)
+    assert field in str(error.value)
+    assert "expected:" in str(error.value) and "got type:" in str(error.value)
+
+
+@pytest.mark.parametrize("field", ["training_sample_ids", "testing_sample_ids"])
+@pytest.mark.parametrize("invalid,error_type", [([], TypeError), ((1,), TypeError), (("",), ValueError)])
+def test_schedule_rejects_invalid_membership_types(
+    valid_partition_schedule: PartitionSchedule,
+    field: str,
+    invalid: object,
+    error_type: type[Exception],
+) -> None:
+    """Validate tuple membership and each identity before resolving samples."""
+    fold = cast(Callable[..., FoldRecord], replace)(valid_partition_schedule.folds[0], **{field: invalid})
+    with pytest.raises(error_type) as error:
+        validate_partition_schedule(replace(valid_partition_schedule, folds=(fold,)))
+    assert f"folds[0].{field}" in str(error.value)
+
+
+def test_duplicate_source_diagnostic_preserves_full_reference(valid_sample_record: SampleRecord) -> None:
+    """Identify an entire duplicate path even when its useful suffix is long."""
+    source = "sources/" + "a" * 120 + "/distinguishing-file.csv"
+    with pytest.raises(ValueError) as error:
+        validate_sample_record(replace(valid_sample_record, sources=(source, source)))
+    assert source in str(error.value)
+    assert "sources[1]" in str(error.value)
+
+
+def test_sample_paths_keep_case_distinctions(valid_sample_record: SampleRecord) -> None:
+    """Treat differently spelled logical paths as distinct without filesystem normalization."""
+    sources = ("Samples/source.csv", "samples/source.csv", "Samples/other.csv")
+    sample = replace(valid_sample_record, sources=sources)
+    validate_sample_record(sample)
+    assert sample.sources is sources

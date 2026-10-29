@@ -379,10 +379,10 @@ def _validate_predicted_labels(
     if not class_labels:
         raise ValueError("class_labels must contain at least one class label; got zero.")
     known_labels: set[ScalarLabel] = set()
-    for index, label in enumerate(class_labels):
-        if label in known_labels:
-            raise ValueError(f"class_labels[{index}] must be unique; got duplicate {label!r}.")
-        known_labels.add(label)
+    for index, class_label in enumerate(class_labels):
+        if class_label in known_labels:
+            raise ValueError(f"class_labels[{index}] must be unique; got duplicate {class_label!r}.")
+        known_labels.add(class_label)
 
     # Validate each predicted label and its applicable failure identifiers.
     for sample_index, (label, failure_ids) in enumerate(

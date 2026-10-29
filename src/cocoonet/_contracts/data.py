@@ -348,8 +348,7 @@ def validate_partition_schedule(value: PartitionSchedule) -> None:  # noqa: C901
                 member = sample_by_id.get(sample_id)
                 if member is None:
                     raise ValueError(
-                        f"{membership_path} must reference a known sample_id; "
-                        f"unknown ID prefix: {sample_id!r}."
+                        f"{membership_path} must reference a known sample_id; " f"unknown ID prefix: {sample_id!r}."
                     )
 
                 # Eligibility is permission for the corresponding population only.

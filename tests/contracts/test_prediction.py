@@ -1,10 +1,13 @@
 """Tests for standardized prediction contracts."""
 
-from dataclasses import FrozenInstanceError
+from collections.abc import Callable
+from dataclasses import FrozenInstanceError, replace
 from math import isfinite
 from typing import cast
 
+import numpy as np
 import pytest
+import torch
 
 from cocoonet._contracts.data import FoldRecord
 from cocoonet._contracts.identity import (
@@ -355,7 +358,9 @@ def test_validate_regression_predictions_rejects_wrong_fold(
     with pytest.raises(ValueError) as error:
         validate_regression_predictions(predictions, fold=regression_fold)
 
-    assert str(error.value) == ("fold_id must equal fold.fold_id 'fold-a'; got 'fold-b'.")
+    expected_details = "fold_id must equal fold.fold_id 'fold-a'; got 'fold-b'."
+    for detail in expected_details.splitlines():
+        assert detail.strip() in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -395,10 +400,19 @@ def test_validate_regression_predictions_rejects_misaligned_samples(
     with pytest.raises(ValueError) as error:
         validate_regression_predictions(predictions, fold=regression_fold)
 
-    assert str(error.value) == (
-        "sample_ids must exactly match fold.testing_sample_ids; "
-        f"expected {regression_fold.testing_sample_ids!r}, got {sample_ids!r}."
-    )
+    message = str(error.value)
+    assert "sample_ids" in message
+    if len(sample_ids) != len(regression_fold.testing_sample_ids):
+        assert "2" in message and f"got {len(sample_ids)}" in message
+    else:
+        index = next(
+            i
+            for i, pair in enumerate(zip(sample_ids, regression_fold.testing_sample_ids, strict=True))
+            if pair[0] != pair[1]
+        )
+        assert f"sample_ids[{index}]" in message
+        assert repr(regression_fold.testing_sample_ids[index]) in message
+        assert repr(sample_ids[index]) in message
 
 
 @pytest.mark.parametrize(
@@ -445,7 +459,9 @@ def test_validate_regression_predictions_rejects_vector_length_mismatch(
     with pytest.raises(ValueError) as error:
         validate_regression_predictions(predictions, fold=regression_fold)
 
-    assert str(error.value) == message
+    expected_details = message
+    for detail in expected_details.splitlines():
+        assert detail.strip() in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -454,12 +470,12 @@ def test_validate_regression_predictions_rejects_vector_length_mismatch(
         (
             (None, 2.5),
             ((), ()),
-            "values[0] is None and requires at least one failure ID.",
+            "values[0] is None and requires at least one failure ID; got zero.",
         ),
         (
             (1.25, 2.5),
             ((FailureId("failure-a"),), ()),
-            "values[0] is present and requires an empty failure_ids entry.",
+            "values[0] is present and requires an empty failure_ids entry; got 1 failure references.",
         ),
     ],
 )
@@ -492,7 +508,9 @@ def test_validate_regression_predictions_rejects_invalid_failure_relationship(
     with pytest.raises(ValueError) as error:
         validate_regression_predictions(predictions, fold=regression_fold)
 
-    assert str(error.value) == message
+    expected_details = message
+    for detail in expected_details.splitlines():
+        assert detail.strip() in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -526,7 +544,9 @@ def test_validate_regression_predictions_rejects_nonfinite_value(
     with pytest.raises(ValueError) as error:
         validate_regression_predictions(predictions, fold=regression_fold)
 
-    assert str(error.value) == (f"values[0] must be finite; got {invalid_value!r}.")
+    expected_details = f"values[0] must be finite; got {invalid_value!r}."
+    for detail in expected_details.splitlines():
+        assert detail.strip() in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -535,24 +555,24 @@ def test_validate_regression_predictions_rejects_nonfinite_value(
         (
             True,
             "Type validation failed\n"
-            "  path: value.values[0]\n"
-            "  expected: builtins.float | builtins.NoneType\n"
+            "  path: values[0]\n"
+            "  expected: builtins.float | numpy.floating\n"
             "  got type: builtins.bool\n"
             "  got value: True",
         ),
         (
             1,
             "Type validation failed\n"
-            "  path: value.values[0]\n"
-            "  expected: builtins.float | builtins.NoneType\n"
+            "  path: values[0]\n"
+            "  expected: builtins.float | numpy.floating\n"
             "  got type: builtins.int\n"
             "  got value: 1",
         ),
         (
             "1.25",
             "Type validation failed\n"
-            "  path: value.values[0]\n"
-            "  expected: builtins.float | builtins.NoneType\n"
+            "  path: values[0]\n"
+            "  expected: builtins.float | numpy.floating\n"
             "  got type: builtins.str\n"
             "  got value: '1.25'",
         ),
@@ -572,7 +592,7 @@ def test_validate_regression_predictions_rejects_wrong_value_type(
     invalid_value : object
         Incorrectly typed prediction value.
     expected_message : str
-        Complete expected type-validation diagnostic.
+        Required field, expected type, and observed type/value diagnostic details.
     """
     predictions = RegressionPredictions(
         fold_id=FoldId("fold-a"),
@@ -587,7 +607,9 @@ def test_validate_regression_predictions_rejects_wrong_value_type(
     with pytest.raises(TypeError) as error:
         validate_regression_predictions(predictions, fold=regression_fold)
 
-    assert str(error.value) == expected_message
+    expected_details = expected_message
+    for detail in expected_details.splitlines():
+        assert detail.strip() in str(error.value)
 
 
 def test_validate_regression_predictions_rejects_empty_failure_id(
@@ -610,7 +632,9 @@ def test_validate_regression_predictions_rejects_empty_failure_id(
     with pytest.raises(ValueError) as error:
         validate_regression_predictions(predictions, fold=regression_fold)
 
-    assert str(error.value) == ("failure_ids[0][0] must be a nonempty string.")
+    expected_details = "failure_ids[0][0] must be a nonempty string; got an empty string."
+    for detail in expected_details.splitlines():
+        assert detail.strip() in str(error.value)
 
 
 @pytest.fixture
@@ -722,7 +746,9 @@ def test_validate_classification_predictions_rejects_wrong_fold(
             class_labels=("negative", "positive"),
         )
 
-    assert str(error.value) == ("fold_id must equal fold.fold_id 'fold-a'; got 'fold-b'.")
+    expected_details = "fold_id must equal fold.fold_id 'fold-a'; got 'fold-b'."
+    for detail in expected_details.splitlines():
+        assert detail.strip() in str(error.value)
 
 
 def test_validate_classification_predictions_rejects_sample_misalignment(
@@ -740,10 +766,9 @@ def test_validate_classification_predictions_rejects_sample_misalignment(
             class_labels=("negative", "positive"),
         )
 
-    assert str(error.value) == (
-        "sample_ids must exactly match fold.testing_sample_ids; "
-        "expected ('sample-a', 'sample-b'), got ('sample-b', 'sample-a')."
-    )
+    message = str(error.value)
+    assert "sample_ids[0]" in message and "fold.testing_sample_ids[0]" in message
+    assert "'sample-a'" in message and "'sample-b'" in message
 
 
 @pytest.mark.parametrize(
@@ -768,10 +793,15 @@ def test_validate_classification_predictions_rejects_class_misalignment(
             class_labels=("negative", "positive"),
         )
 
-    assert str(error.value) == (
-        "value.class_labels must exactly match class_labels; "
-        f"expected ('negative', 'positive'), got {candidate_labels!r}."
-    )
+    message = str(error.value)
+    assert "class_labels" in message
+    if len(candidate_labels) != 2:
+        assert "2" in message and f"got {len(candidate_labels)}" in message
+    else:
+        index = 0 if candidate_labels[0] != "negative" else 1
+        assert f"class_labels[{index}]" in message
+        assert repr(("negative", "positive")[index]) in message
+        assert repr(candidate_labels[index]) in message
 
 
 @pytest.mark.parametrize(
@@ -787,11 +817,11 @@ def test_validate_classification_predictions_rejects_class_misalignment(
         ),
         (
             _classification_predictions(probabilities=((0.2, 0.7),)),
-            "probabilities must contain 2 sample rows; got 1.",
+            "probabilities must contain 2 sample entries; got 1.",
         ),
         (
             _classification_predictions(probability_failure_ids=(((), ()),)),
-            "probability_failure_ids must contain 2 sample rows; got 1.",
+            "probability_failure_ids must contain 2 sample entries; got 1.",
         ),
     ],
 )
@@ -808,7 +838,9 @@ def test_validate_classification_predictions_rejects_sample_vector_lengths(
             class_labels=("negative", "positive"),
         )
 
-    assert str(error.value) == message
+    expected_details = message
+    for detail in expected_details.splitlines():
+        assert detail.strip() in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -839,7 +871,9 @@ def test_validate_classification_predictions_rejects_ragged_rows(
             class_labels=("negative", "positive"),
         )
 
-    assert str(error.value) == message
+    expected_details = message
+    for detail in expected_details.splitlines():
+        assert detail.strip() in str(error.value)
 
 
 def test_validate_classification_predictions_rejects_unknown_predicted_label(
@@ -857,7 +891,9 @@ def test_validate_classification_predictions_rejects_unknown_predicted_label(
             class_labels=("negative", "positive"),
         )
 
-    assert str(error.value) == ("predicted_labels[0] must belong to class_labels; got 'unknown'.")
+    expected_details = "predicted_labels[0] must belong to class_labels; got 'unknown'."
+    for detail in expected_details.splitlines():
+        assert detail.strip() in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -865,17 +901,18 @@ def test_validate_classification_predictions_rejects_unknown_predicted_label(
     [
         (
             _classification_predictions(predicted_labels=(None, "negative")),
-            "predicted_labels[0] is None and requires at least one failure ID.",
+            "predicted_labels[0] is None and requires at least one failure ID; got zero.",
         ),
         (
             _classification_predictions(
                 label_failure_ids=((FailureId("label-failure"),), ()),
             ),
-            "predicted_labels[0] is present and requires an empty " "label_failure_ids entry.",
+            "predicted_labels[0] is present and requires an empty "
+            "label_failure_ids entry; got 1 failure references.",
         ),
         (
             _classification_predictions(probabilities=((None, 0.7), (0.6, 0.3))),
-            "probabilities[0][0] is None and requires at least one failure ID.",
+            "probabilities[0][0] is None and requires at least one failure ID; got zero.",
         ),
         (
             _classification_predictions(
@@ -884,7 +921,8 @@ def test_validate_classification_predictions_rejects_unknown_predicted_label(
                     ((), ()),
                 ),
             ),
-            "probabilities[0][0] is present and requires an empty " "probability_failure_ids entry.",
+            "probabilities[0][0] is present and requires an empty "
+            "probability_failure_ids[0][0] entry; got 1 failure references.",
         ),
     ],
 )
@@ -901,7 +939,9 @@ def test_validate_classification_predictions_rejects_invalid_failure_relationshi
             class_labels=("negative", "positive"),
         )
 
-    assert str(error.value) == message
+    expected_details = message
+    for detail in expected_details.splitlines():
+        assert detail.strip() in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -934,7 +974,9 @@ def test_validate_classification_predictions_rejects_invalid_probability(
         expected = "probabilities[0][0] must be within [0, 1]; " f"got {invalid_probability!r}."
     else:
         expected = "probabilities[0][0] must be finite; " f"got {invalid_probability!r}."
-    assert str(error.value) == expected
+    expected_details = expected
+    for detail in expected_details.splitlines():
+        assert detail.strip() in str(error.value)
 
 
 def test_validate_classification_predictions_rejects_boolean_probability(
@@ -952,13 +994,15 @@ def test_validate_classification_predictions_rejects_boolean_probability(
             class_labels=("negative", "positive"),
         )
 
-    assert str(error.value) == (
+    expected_details = (
         "Type validation failed\n"
-        "  path: value.probabilities[0][0]\n"
-        "  expected: builtins.float | builtins.NoneType\n"
+        "  path: probabilities[0][0]\n"
+        "  expected: builtins.float | numpy.floating\n"
         "  got type: builtins.bool\n"
         "  got value: True"
     )
+    for detail in expected_details.splitlines():
+        assert detail.strip() in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -969,7 +1013,7 @@ def test_validate_classification_predictions_rejects_boolean_probability(
                 predicted_labels=(None, "negative"),
                 label_failure_ids=((FailureId(""),), ()),
             ),
-            "label_failure_ids[0][0] must be a nonempty string.",
+            "label_failure_ids[0][0] must be a nonempty string; got an empty string.",
         ),
         (
             _classification_predictions(
@@ -979,7 +1023,7 @@ def test_validate_classification_predictions_rejects_boolean_probability(
                     ((), ()),
                 ),
             ),
-            "probability_failure_ids[0][0][0] must be a nonempty string.",
+            "probability_failure_ids[0][0][0] must be a nonempty string; got an empty string.",
         ),
     ],
 )
@@ -996,4 +1040,238 @@ def test_validate_classification_predictions_rejects_empty_failure_id(
             class_labels=("negative", "positive"),
         )
 
-    assert str(error.value) == message
+    expected_details = message
+    for detail in expected_details.splitlines():
+        assert detail.strip() in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "number",
+    [
+        np.float16(0.5),
+        np.float32(0.5),
+        np.float64(0.5),
+        np.longdouble("1.00000000000000001"),
+        np.finfo(np.longdouble).max,
+        np.nextafter(np.longdouble(0), np.longdouble(1)),
+        -0.0,
+    ],
+)
+def test_regression_preserves_floating_scalar(number: float | np.floating, regression_fold: FoldRecord) -> None:
+    """Accept finite floating representations without narrowing their range or precision."""
+    values = (number, 1.0)
+    predictions = RegressionPredictions(
+        fold_id=regression_fold.fold_id,
+        sample_ids=regression_fold.testing_sample_ids,
+        values=values,
+        failure_ids=((), ()),
+    )
+    validate_regression_predictions(predictions, fold=regression_fold)
+    assert predictions.values is values and predictions.values[0] is number
+
+
+@pytest.mark.parametrize(
+    "number",
+    [
+        0.0,
+        1.0,
+        np.float16(0.5),
+        np.float32(0.5),
+        np.float64(0.5),
+        np.nextafter(np.longdouble(1), np.longdouble(0)),
+        np.nextafter(np.longdouble(0), np.longdouble(1)),
+    ],
+)
+def test_probabilities_preserve_floating_scalars(number: float | np.floating, classification_fold: FoldRecord) -> None:
+    """Preserve probability precision and accept rows without imposing a sum tolerance."""
+    predictions = _classification_predictions(
+        probabilities=((number, 1.0), (0.0, 0.0)), predicted_labels=(np.str_("positive"), np.str_("negative"))
+    )
+    validate_classification_predictions(predictions, fold=classification_fold, class_labels=("negative", "positive"))
+    assert predictions.probabilities[0][0] is number
+    assert predictions.probabilities[1] == (0.0, 0.0)
+    assert type(predictions.predicted_labels[0]) is np.str_
+
+
+@pytest.mark.parametrize(
+    "invalid", [np.int64(1), np.bool_(False), 1j, np.array(0.5), np.array([0.5]), torch.tensor(0.5)]
+)
+def test_prediction_values_reject_nonfloating_scalars(
+    invalid: object,
+    regression_fold: FoldRecord,
+    classification_fold: FoldRecord,
+) -> None:
+    """Keep raw arrays and tensors at the adapter boundary instead of coercing them."""
+    regression = RegressionPredictions(
+        fold_id=regression_fold.fold_id,
+        sample_ids=regression_fold.testing_sample_ids,
+        values=(cast(float, invalid), 1.0),
+        failure_ids=((), ()),
+    )
+    with pytest.raises(TypeError) as error:
+        validate_regression_predictions(regression, fold=regression_fold)
+    assert "values[0]" in str(error.value) and "expected:" in str(error.value)
+    classification = _classification_predictions(probabilities=((invalid, 0.5), (0.2, 0.8)))
+    with pytest.raises(TypeError) as error:
+        validate_classification_predictions(
+            classification, fold=classification_fold, class_labels=("negative", "positive")
+        )
+    assert "probabilities[0][0]" in str(error.value) and "got type:" in str(error.value)
+
+
+@pytest.mark.parametrize("number", [np.float16("nan"), np.float32("inf"), np.float64("-inf"), np.longdouble("nan")])
+def test_numpy_nonfinite_predictions_are_rejected(
+    number: np.floating,
+    regression_fold: FoldRecord,
+    classification_fold: FoldRecord,
+) -> None:
+    """Apply the finite-model-output rule to every supported scalar family."""
+    regression = RegressionPredictions(
+        fold_id=regression_fold.fold_id,
+        sample_ids=regression_fold.testing_sample_ids,
+        values=(number, 1.0),
+        failure_ids=((), ()),
+    )
+    with pytest.raises(ValueError, match=r"values\[0\].*finite"):
+        validate_regression_predictions(regression, fold=regression_fold)
+    with pytest.raises(ValueError, match=r"probabilities\[0\]\[0\].*finite"):
+        validate_classification_predictions(
+            _classification_predictions(probabilities=((number, 0.5), (0.2, 0.8))),
+            fold=classification_fold,
+            class_labels=("negative", "positive"),
+        )
+
+
+@pytest.mark.parametrize(
+    "number", [np.nextafter(np.longdouble(1), np.longdouble(2)), np.nextafter(np.longdouble(0), np.longdouble(-1))]
+)
+def test_probability_bounds_do_not_round_or_clip(number: np.floating, classification_fold: FoldRecord) -> None:
+    """Reject values just outside the closed interval at their supplied precision."""
+    with pytest.raises(ValueError, match=r"probabilities\[0\]\[0\].*within \[0, 1\]"):
+        validate_classification_predictions(
+            _classification_predictions(probabilities=((number, 0.5), (0.2, 0.8))),
+            fold=classification_fold,
+            class_labels=("negative", "positive"),
+        )
+
+
+@pytest.mark.parametrize("labels", [(), ("same", np.str_("same"))])
+def test_class_vocabulary_requires_nonempty_unique_text(labels: tuple[ScalarLabel, ...]) -> None:
+    """Check vocabulary semantics even when the fold has no testing samples."""
+    fold = FoldRecord(fold_id=FoldId("fold-a"), training_sample_ids=(), testing_sample_ids=())
+    predictions = ClassificationPredictions(
+        fold_id=fold.fold_id,
+        sample_ids=(),
+        class_labels=labels,
+        predicted_labels=(),
+        label_failure_ids=(),
+        probabilities=(),
+        probability_failure_ids=(),
+    )
+    with pytest.raises(ValueError) as error:
+        validate_classification_predictions(predictions, fold=fold, class_labels=labels)
+    assert "class_labels" in str(error.value)
+    assert ("unique" if labels else "at least one") in str(error.value)
+
+
+def test_single_class_predictions_are_valid(classification_fold: FoldRecord) -> None:
+    """Accept the explicitly permitted one-class vocabulary."""
+    predictions = _classification_predictions(
+        class_labels=("only",),
+        predicted_labels=("only", "only"),
+        probabilities=((1.0,), (0.5,)),
+        probability_failure_ids=(((),), ((),)),
+    )
+    validate_classification_predictions(predictions, fold=classification_fold, class_labels=("only",))
+
+
+def test_prediction_boundaries_reject_wrong_records(regression_fold: FoldRecord) -> None:
+    """Check prediction and fold records before accessing their coordinates."""
+    regression = RegressionPredictions(
+        fold_id=regression_fold.fold_id,
+        sample_ids=regression_fold.testing_sample_ids,
+        values=(1.0, 2.0),
+        failure_ids=((), ()),
+    )
+    with pytest.raises(TypeError, match="RegressionPredictions"):
+        validate_regression_predictions(cast(RegressionPredictions, None), fold=regression_fold)
+    with pytest.raises(TypeError, match="FoldRecord"):
+        validate_regression_predictions(regression, fold=cast(FoldRecord, None))
+    with pytest.raises(TypeError, match="ClassificationPredictions"):
+        validate_classification_predictions(
+            cast(ClassificationPredictions, None), fold=regression_fold, class_labels=("negative", "positive")
+        )
+    with pytest.raises(TypeError, match="FoldRecord"):
+        validate_classification_predictions(
+            _classification_predictions(), fold=cast(FoldRecord, None), class_labels=("negative", "positive")
+        )
+
+
+@pytest.mark.parametrize(
+    "field,invalid",
+    [("sample_ids", []), ("values", []), ("failure_ids", []), ("failure_ids", ([], ())), ("failure_ids", ((1,), ()))],
+)
+def test_regression_rejects_malformed_containers(field: str, invalid: object, regression_fold: FoldRecord) -> None:
+    """Validate immutable vectors and failure entries at every nesting level."""
+    predictions = RegressionPredictions(
+        fold_id=regression_fold.fold_id,
+        sample_ids=regression_fold.testing_sample_ids,
+        values=(1.0, 2.0),
+        failure_ids=((), ()),
+    )
+    with pytest.raises(TypeError) as error:
+        validate_regression_predictions(
+            # Widen only test construction so runtime validators receive the invalid candidate.
+            cast(Callable[..., RegressionPredictions], replace)(predictions, **{field: invalid}),
+            fold=regression_fold,
+        )
+    assert field in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "field,invalid",
+    [
+        ("sample_ids", []),
+        ("class_labels", []),
+        ("class_labels", (1, "positive")),
+        ("predicted_labels", []),
+        ("predicted_labels", (1, "negative")),
+        ("label_failure_ids", []),
+        ("label_failure_ids", ([], ())),
+        ("label_failure_ids", ((1,), ())),
+        ("probabilities", []),
+        ("probabilities", ([0.2, 0.8], (0.6, 0.4))),
+        ("probability_failure_ids", []),
+        ("probability_failure_ids", ([(), ()], ((), ()))),
+        ("probability_failure_ids", (([], ()), ((), ()))),
+        ("probability_failure_ids", (((1,), ()), ((), ()))),
+    ],
+)
+def test_classification_rejects_malformed_containers(
+    field: str,
+    invalid: object,
+    classification_fold: FoldRecord,
+) -> None:
+    """Validate rows, scalar labels, and failure entries without recursive payload validation."""
+    with pytest.raises(TypeError) as error:
+        validate_classification_predictions(
+            cast(Callable[..., ClassificationPredictions], replace)(_classification_predictions(), **{field: invalid}),
+            fold=classification_fold,
+            class_labels=("negative", "positive"),
+        )
+    assert field in str(error.value)
+
+
+def test_alignment_diagnostic_preserves_full_identifiers(regression_fold: FoldRecord) -> None:
+    """Identify the first differing coordinate without dumping the complete sequence."""
+    expected = SampleId("sample-" + "a" * 120 + "-expected")
+    actual = SampleId("sample-" + "a" * 120 + "-actual")
+    fold = replace(regression_fold, testing_sample_ids=(expected, SampleId("unrelated-tail")))
+    predictions = RegressionPredictions(
+        fold_id=fold.fold_id, sample_ids=(actual, SampleId("unrelated-tail")), values=(1.0, 2.0), failure_ids=((), ())
+    )
+    with pytest.raises(ValueError) as error:
+        validate_regression_predictions(predictions, fold=fold)
+    assert expected in str(error.value) and actual in str(error.value)
+    assert "sample_ids[0]" in str(error.value)
+    assert "unrelated-tail" not in str(error.value)

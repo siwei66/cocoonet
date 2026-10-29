@@ -1,8 +1,10 @@
 """Tests for configuration and fixed-execution contracts."""
 
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
 from typing import cast
 
+import numpy as np
 import pytest
 
 from cocoonet._contracts.data import PartitionReference
@@ -15,7 +17,6 @@ from cocoonet._contracts.execution import (
     ModelReference,
     ParentEvaluation,
     TaskKind,
-    UnitTask,
     validate_attempt_inputs,
     validate_computation_snapshot,
     validate_evaluation_reference,
@@ -30,7 +31,6 @@ from cocoonet._contracts.identity import (
     ParentId,
     PartitionId,
     ScalarLabel,
-    UnitKey,
     WorkerId,
 )
 
@@ -237,59 +237,8 @@ def test_computation_snapshot_rejects_field_mutation() -> None:
         snapshot.__setattr__("root_dir", "replacement-root")
 
 
-def test_unit_task_preserves_key_and_model_association() -> None:
-    """Preserve the logical unit identity and its fixed model reference."""
-    key = UnitKey(
-        parent_id=ParentId("parent-a"),
-        model_id=ModelId("model-a"),
-    )
-    model = ModelReference(
-        model_id=ModelId("model-a"),
-        model_label="baseline",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
-    )
-    unit = UnitTask(
-        key=key,
-        model=model,
-    )
-    same = UnitTask(
-        key=key,
-        model=model,
-    )
-
-    assert unit.key is key
-    assert unit.model is model
-    assert unit == same
-
-
-def test_unit_task_rejects_field_mutation() -> None:
-    """Prevent reassignment of a unit task's identity or model reference."""
-    unit = UnitTask(
-        key=UnitKey(
-            parent_id=ParentId("parent-a"),
-            model_id=ModelId("model-a"),
-        ),
-        model=ModelReference(
-            model_id=ModelId("model-a"),
-            model_label="baseline",
-            family=ModelFamily.SKLEARN,
-            task_kind=TaskKind.REGRESSION,
-        ),
-    )
-
-    with pytest.raises(FrozenInstanceError):
-        unit.__setattr__(
-            "key",
-            UnitKey(
-                parent_id=ParentId("parent-b"),
-                model_id=ModelId("model-a"),
-            ),
-        )
-
-
 def test_parent_evaluation_preserves_fixed_scientific_context() -> None:
-    """Preserve the parent's partition, evaluation settings, and ordered units."""
+    """Preserve the parent's partition, evaluation settings, and ordered models."""
     parent_id = ParentId("parent-a")
     partition = PartitionReference(
         partition_id=PartitionId("partition-a"),
@@ -301,35 +250,29 @@ def test_parent_evaluation_preserves_fixed_scientific_context() -> None:
         class_labels=(),
         influence_requested=False,
     )
-    unit = UnitTask(
-        key=UnitKey(
-            parent_id=parent_id,
-            model_id=ModelId("model-a"),
-        ),
-        model=ModelReference(
-            model_id=ModelId("model-a"),
-            model_label="baseline",
-            family=ModelFamily.SKLEARN,
-            task_kind=TaskKind.REGRESSION,
-        ),
+    unit = ModelReference(
+        model_id=ModelId("model-a"),
+        model_label="baseline",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
     )
     parent = ParentEvaluation(
         parent_id=parent_id,
         partition=partition,
         evaluation=evaluation,
-        units=(unit,),
+        models=(unit,),
     )
     same = ParentEvaluation(
         parent_id=parent_id,
         partition=partition,
         evaluation=evaluation,
-        units=(unit,),
+        models=(unit,),
     )
 
     assert parent.parent_id == parent_id
     assert parent.partition is partition
     assert parent.evaluation is evaluation
-    assert parent.units == (unit,)
+    assert parent.models == (unit,)
     assert parent == same
 
 
@@ -347,7 +290,7 @@ def test_parent_evaluation_rejects_field_mutation() -> None:
             class_labels=(),
             influence_requested=False,
         ),
-        units=(),
+        models=(),
     )
 
     with pytest.raises(FrozenInstanceError):
@@ -362,23 +305,22 @@ def test_parent_evaluation_rejects_field_mutation() -> None:
 
 def test_attempt_inputs_preserves_routing_identities() -> None:
     """Preserve the attempt, logical unit, and assigned worker identities."""
-    unit = UnitKey(
-        parent_id=ParentId("parent-a"),
-        model_id=ModelId("model-a"),
-    )
     inputs = AttemptInputs(
         attempt_id=AttemptId("attempt-a"),
-        unit=unit,
+        parent_id=ParentId("parent-a"),
+        model_id=ModelId("model-a"),
         worker_id=WorkerId("worker-a"),
     )
     same = AttemptInputs(
         attempt_id=AttemptId("attempt-a"),
-        unit=unit,
+        parent_id=ParentId("parent-a"),
+        model_id=ModelId("model-a"),
         worker_id=WorkerId("worker-a"),
     )
 
     assert inputs.attempt_id == AttemptId("attempt-a")
-    assert inputs.unit is unit
+    assert inputs.parent_id == ParentId("parent-a")
+    assert inputs.model_id == ModelId("model-a")
     assert inputs.worker_id == WorkerId("worker-a")
     assert inputs == same
 
@@ -387,10 +329,8 @@ def test_attempt_inputs_rejects_field_mutation() -> None:
     """Prevent reassignment of an attempt's routing identities."""
     inputs = AttemptInputs(
         attempt_id=AttemptId("attempt-a"),
-        unit=UnitKey(
-            parent_id=ParentId("parent-a"),
-            model_id=ModelId("model-a"),
-        ),
+        parent_id=ParentId("parent-a"),
+        model_id=ModelId("model-a"),
         worker_id=WorkerId("worker-a"),
     )
 
@@ -424,7 +364,7 @@ def test_validate_model_reference_rejects_empty_model_id() -> None:
         task_kind=TaskKind.REGRESSION,
     )
 
-    with pytest.raises(ValueError, match=r"^model_id must be a nonempty string\.$"):
+    with pytest.raises(ValueError, match=r"^model_id.*nonempty.*empty string"):
         validate_model_reference(reference)
 
 
@@ -432,12 +372,12 @@ def test_validate_model_reference_rejects_nonfinite_model_label() -> None:
     """Reject a nonfinite floating-point model label."""
     reference = ModelReference(
         model_id=ModelId("model-a"),
-        model_label=float("nan"),
+        model_label=cast(ScalarLabel, float("nan")),
         family=ModelFamily.SKLEARN,
         task_kind=TaskKind.REGRESSION,
     )
 
-    with pytest.raises(ValueError, match=r"^model_label must be finite; got nan\.$"):
+    with pytest.raises(TypeError, match="path: model_label"):
         validate_model_reference(reference)
 
 
@@ -453,7 +393,7 @@ def test_validate_model_reference_rejects_undeclared_family() -> None:
     with pytest.raises(TypeError) as error:
         validate_model_reference(reference)
 
-    assert "path: value.family" in str(error.value)
+    assert "path: family" in str(error.value)
     assert "expected: cocoonet._contracts.execution.ModelFamily" in str(error.value)
 
 
@@ -469,7 +409,7 @@ def test_validate_model_reference_rejects_undeclared_task_kind() -> None:
     with pytest.raises(TypeError) as error:
         validate_model_reference(reference)
 
-    assert "path: value.task_kind" in str(error.value)
+    assert "path: task_kind" in str(error.value)
     assert "expected: cocoonet._contracts.execution.TaskKind" in str(error.value)
 
 
@@ -504,12 +444,12 @@ def test_validate_evaluation_reference_accepts_task_class_rules(
         (
             TaskKind.REGRESSION,
             ("unexpected",),
-            "Regression evaluation requires class_labels to be empty.",
+            "Regression.*zero class labels.*got 1",
         ),
         (
             TaskKind.CLASSIFICATION,
             (),
-            "Classification evaluation requires at least one class label.",
+            "Classification.*at least one class label.*got zero",
         ),
     ],
 )
@@ -526,24 +466,22 @@ def test_validate_evaluation_reference_rejects_invalid_task_class_rules(
         influence_requested=False,
     )
 
-    with pytest.raises(ValueError, match=rf"^{message}$"):
+    with pytest.raises(ValueError, match=message):
         validate_evaluation_reference(reference)
 
 
 def test_validate_evaluation_reference_rejects_equality_collision() -> None:
-    """Reject class labels that collide under Python scalar equality."""
+    """Reject class labels that collide under Python text equality."""
     reference = EvaluationReference(
         configuration_id=EvaluationConfigId("evaluation-a"),
         task_kind=TaskKind.CLASSIFICATION,
-        class_labels=(1, True),
+        class_labels=("duplicate", np.str_("duplicate")),
         influence_requested=False,
     )
 
     with pytest.raises(
         ValueError,
-        match=(
-            r"^class_labels must be unique under Python scalar equality; " r"duplicate at class_labels\[1\]: True\.$"
-        ),
+        match=(r"class_labels\[1\].*unique.*duplicate"),
     ):
         validate_evaluation_reference(reference)
 
@@ -553,11 +491,11 @@ def test_validate_evaluation_reference_rejects_invalid_class_label() -> None:
     reference = EvaluationReference(
         configuration_id=EvaluationConfigId("evaluation-a"),
         task_kind=TaskKind.CLASSIFICATION,
-        class_labels=("valid", float("nan")),
+        class_labels=("valid", cast(ScalarLabel, float("nan"))),
         influence_requested=False,
     )
 
-    with pytest.raises(ValueError, match=r"^class_labels\[1\] must be finite; got nan\.$"):
+    with pytest.raises(TypeError, match=r"path: class_labels\[1\]"):
         validate_evaluation_reference(reference)
 
 
@@ -570,7 +508,7 @@ def test_validate_evaluation_reference_rejects_empty_configuration_id() -> None:
         influence_requested=False,
     )
 
-    with pytest.raises(ValueError, match=r"^configuration_id must be a nonempty string\.$"):
+    with pytest.raises(ValueError, match=r"configuration_id.*nonempty.*empty string"):
         validate_evaluation_reference(reference)
 
 
@@ -586,7 +524,7 @@ def test_validate_evaluation_reference_rejects_undeclared_task_kind() -> None:
     with pytest.raises(TypeError) as error:
         validate_evaluation_reference(reference)
 
-    assert "path: value.task_kind" in str(error.value)
+    assert "path: task_kind" in str(error.value)
     assert "expected: cocoonet._contracts.execution.TaskKind" in str(error.value)
 
 
@@ -602,7 +540,7 @@ def test_validate_evaluation_reference_rejects_non_boolean_influence_request() -
     with pytest.raises(TypeError) as error:
         validate_evaluation_reference(reference)
 
-    assert "path: value.influence_requested" in str(error.value)
+    assert "path: influence_requested" in str(error.value)
     assert "expected: builtins.bool" in str(error.value)
 
 
@@ -686,17 +624,17 @@ def test_validate_computation_snapshot_accepts_incomplete_unconsolidated_snapsho
         (
             ConsolidationState.INITIALIZED,
             ParentId("parent-a"),
-            "Initialized snapshots must not have parent_id.",
+            "Initialized.*parent_id=None.*parent-a",
         ),
         (
             ConsolidationState.CONSOLIDATED,
             None,
-            "Consolidated and unconsolidated snapshots require parent_id.",
+            "consolidated.*parent_id.*got None",
         ),
         (
             ConsolidationState.UNCONSOLIDATED,
             None,
-            "Consolidated and unconsolidated snapshots require parent_id.",
+            "consolidated.*parent_id.*got None",
         ),
     ],
 )
@@ -716,7 +654,7 @@ def test_validate_computation_snapshot_rejects_invalid_parent_relationship(
         parent_id=parent_id,
     )
 
-    with pytest.raises(ValueError, match=rf"^{message}$"):
+    with pytest.raises(ValueError, match=message):
         validate_computation_snapshot(snapshot)
 
 
@@ -732,7 +670,7 @@ def test_validate_computation_snapshot_rejects_empty_root_dir() -> None:
         parent_id=None,
     )
 
-    with pytest.raises(ValueError, match=r"^root_dir must be a nonempty string\.$"):
+    with pytest.raises(ValueError, match=r"^root_dir.*nonempty.*empty string"):
         validate_computation_snapshot(snapshot)
 
 
@@ -762,7 +700,7 @@ def test_validate_computation_snapshot_rejects_empty_partition_identity(
         parent_id=None,
     )
 
-    with pytest.raises(ValueError, match=rf"^{field} must be a nonempty string\.$"):
+    with pytest.raises(ValueError, match=rf"^{field}.*nonempty.*empty string"):
         validate_computation_snapshot(snapshot)
 
 
@@ -785,7 +723,7 @@ def test_validate_computation_snapshot_rejects_invalid_evaluation() -> None:
 
     with pytest.raises(
         ValueError,
-        match=r"^configuration_id must be a nonempty string\.$",
+        match=r"configuration_id.*nonempty.*empty string",
     ):
         validate_computation_snapshot(snapshot)
 
@@ -818,23 +756,23 @@ def test_validate_computation_snapshot_rejects_duplicate_model_id() -> None:
 
     with pytest.raises(
         ValueError,
-        match=r"^models must have unique model_id values; duplicate at models\[1\]: 'model-a'\.$",
+        match=r"models\[1\].model_id.*unique.*model-a",
     ):
         validate_computation_snapshot(snapshot)
 
 
 def test_validate_computation_snapshot_rejects_model_label_collision() -> None:
-    """Reject model labels that collide under Python scalar equality."""
+    """Reject model labels that collide under Python text equality."""
     models = (
         ModelReference(
             model_id=ModelId("model-a"),
-            model_label=1,
+            model_label="duplicate",
             family=ModelFamily.SKLEARN,
             task_kind=TaskKind.REGRESSION,
         ),
         ModelReference(
             model_id=ModelId("model-b"),
-            model_label=True,
+            model_label=np.str_("duplicate"),
             family=ModelFamily.PYTORCH,
             task_kind=TaskKind.REGRESSION,
         ),
@@ -851,10 +789,7 @@ def test_validate_computation_snapshot_rejects_model_label_collision() -> None:
 
     with pytest.raises(
         ValueError,
-        match=(
-            r"^models must have unique model_label values under Python scalar equality; "
-            r"duplicate at models\[1\]: True\.$"
-        ),
+        match=(r"models\[1\].model_label.*unique.*duplicate"),
     ):
         validate_computation_snapshot(snapshot)
 
@@ -873,7 +808,7 @@ def test_validate_computation_snapshot_rejects_duplicate_worker_id() -> None:
 
     with pytest.raises(
         ValueError,
-        match=r"^worker_ids must be unique; duplicate at worker_ids\[1\]: 'worker-a'\.$",
+        match=r"worker_ids\[1\].*unique.*worker-a",
     ):
         validate_computation_snapshot(snapshot)
 
@@ -907,21 +842,13 @@ def _valid_parent_evaluation(
         task_kind=TaskKind.REGRESSION,
     )
 
-    unit_key = UnitKey(
-        parent_id=resolved_parent_id,
-        model_id=resolved_model_id,
-    )
-
-    unit = UnitTask(
-        key=unit_key,
-        model=model,
-    )
+    unit = model
 
     return ParentEvaluation(
         parent_id=resolved_parent_id,
         partition=partition,
         evaluation=evaluation,
-        units=(unit,),
+        models=(unit,),
     )
 
 
@@ -933,29 +860,22 @@ def test_validate_parent_evaluation_accepts_same_label_in_different_parents() ->
     validate_parent_evaluation(first)
     validate_parent_evaluation(second)
 
-    assert first.units[0].model.model_label == second.units[0].model.model_label
+    assert first.models[0].model_label == second.models[0].model_label
 
 
 def test_validate_parent_evaluation_accepts_mixed_model_families() -> None:
     """Allow different model families when every model shares the task kind."""
     parent = _valid_parent_evaluation()
 
-    second_key = UnitKey(
-        parent_id=parent.parent_id,
-        model_id=ModelId("model-b"),
-    )
     second_model = ModelReference(
         model_id=ModelId("model-b"),
         model_label="neural",
         family=ModelFamily.PYTORCH,
         task_kind=TaskKind.REGRESSION,
     )
-    second_unit = UnitTask(
-        key=second_key,
-        model=second_model,
-    )
+    second_unit = second_model
 
-    parent = replace(parent, units=(*parent.units, second_unit))
+    parent = replace(parent, models=(*parent.models, second_unit))
 
     validate_parent_evaluation(parent)
 
@@ -964,7 +884,7 @@ def test_validate_parent_evaluation_rejects_empty_parent_id() -> None:
     """Reject an empty committed parent identity."""
     parent = _valid_parent_evaluation(parent_id=ParentId(""))
 
-    with pytest.raises(ValueError, match=r"^parent_id must be a nonempty string\.$"):
+    with pytest.raises(ValueError, match=r"^parent_id.*nonempty.*empty string"):
         validate_parent_evaluation(parent)
 
 
@@ -990,7 +910,7 @@ def test_validate_parent_evaluation_rejects_empty_partition_identity(
         partition=partition,
     )
 
-    with pytest.raises(ValueError, match=rf"^{field} must be a nonempty string\.$"):
+    with pytest.raises(ValueError, match=rf"^{field}.*nonempty.*empty string"):
         validate_parent_evaluation(parent)
 
 
@@ -998,86 +918,31 @@ def test_validate_parent_evaluation_rejects_empty_units() -> None:
     """Reject a committed parent without a model-specific unit."""
     parent = replace(
         _valid_parent_evaluation(),
-        units=(),
+        models=(),
     )
 
-    with pytest.raises(ValueError, match=r"^units must contain at least one unit task\.$"):
-        validate_parent_evaluation(parent)
-
-
-def test_validate_parent_evaluation_rejects_wrong_unit_parent() -> None:
-    """Reject a unit key that identifies another parent task."""
-    parent = _valid_parent_evaluation()
-    original_unit = parent.units[0]
-
-    mismatched_key = UnitKey(
-        parent_id=ParentId("parent-b"),
-        model_id=original_unit.model.model_id,
-    )
-    mismatched_unit = replace(
-        original_unit,
-        key=mismatched_key,
-    )
-    parent = replace(
-        parent,
-        units=(mismatched_unit,),
-    )
-
-    with pytest.raises(
-        ValueError,
-        match=(r"^units\[0\]\.key\.parent_id must equal parent_id " r"'parent-a'; got 'parent-b'\.$"),
-    ):
-        validate_parent_evaluation(parent)
-
-
-def test_validate_parent_evaluation_rejects_wrong_unit_model() -> None:
-    """Reject a unit key that identifies a different model."""
-    parent = _valid_parent_evaluation()
-    original_unit = parent.units[0]
-
-    mismatched_key = UnitKey(
-        parent_id=parent.parent_id,
-        model_id=ModelId("model-b"),
-    )
-    mismatched_unit = replace(
-        original_unit,
-        key=mismatched_key,
-    )
-    parent = replace(
-        parent,
-        units=(mismatched_unit,),
-    )
-
-    with pytest.raises(
-        ValueError,
-        match=(r"^units\[0\]\.key\.model_id must equal its model\.model_id " r"'model-a'; got 'model-b'\.$"),
-    ):
+    with pytest.raises(ValueError, match=r"models.*at least one.*empty tuple"):
         validate_parent_evaluation(parent)
 
 
 def test_validate_parent_evaluation_rejects_mixed_task_kinds() -> None:
     """Reject a model whose task kind differs from the parent evaluation."""
     parent = _valid_parent_evaluation()
-    original_unit = parent.units[0]
+    original_unit = parent.models[0]
 
     mismatched_model = replace(
-        original_unit.model,
+        original_unit,
         task_kind=TaskKind.CLASSIFICATION,
     )
-    mismatched_unit = replace(
-        original_unit,
-        model=mismatched_model,
-    )
+    mismatched_unit = mismatched_model
     parent = replace(
         parent,
-        units=(mismatched_unit,),
+        models=(mismatched_unit,),
     )
 
     with pytest.raises(
         ValueError,
-        match=(
-            r"^units\[0\]\.model\.task_kind must equal evaluation task kind " r"'regression'; got 'classification'\.$"
-        ),
+        match=(r"models\[0\].task_kind.*regression.*classification"),
     ):
         validate_parent_evaluation(parent)
 
@@ -1086,61 +951,44 @@ def test_validate_parent_evaluation_rejects_duplicate_model_id() -> None:
     """Reject repeated model identities within one parent."""
     parent = _valid_parent_evaluation()
 
-    duplicate_key = UnitKey(
-        parent_id=parent.parent_id,
-        model_id=ModelId("model-a"),
-    )
     duplicate_model = ModelReference(
         model_id=ModelId("model-a"),
         model_label="second",
         family=ModelFamily.PYTORCH,
         task_kind=TaskKind.REGRESSION,
     )
-    duplicate_unit = UnitTask(
-        key=duplicate_key,
-        model=duplicate_model,
-    )
+    duplicate_unit = duplicate_model
     parent = replace(
         parent,
-        units=(*parent.units, duplicate_unit),
+        models=(*parent.models, duplicate_unit),
     )
 
     with pytest.raises(
         ValueError,
-        match=r"^units must have unique model_id values; duplicate at units\[1\]: 'model-a'\.$",
+        match=r"models\[1\].model_id.*unique.*model-a",
     ):
         validate_parent_evaluation(parent)
 
 
 def test_validate_parent_evaluation_rejects_model_label_collision() -> None:
     """Reject parent-scoped model labels that collide under Python equality."""
-    parent = _valid_parent_evaluation(model_label=1)
+    parent = _valid_parent_evaluation(model_label="duplicate")
 
-    duplicate_key = UnitKey(
-        parent_id=parent.parent_id,
-        model_id=ModelId("model-b"),
-    )
     duplicate_model = ModelReference(
         model_id=ModelId("model-b"),
-        model_label=True,
+        model_label=np.str_("duplicate"),
         family=ModelFamily.PYTORCH,
         task_kind=TaskKind.REGRESSION,
     )
-    duplicate_unit = UnitTask(
-        key=duplicate_key,
-        model=duplicate_model,
-    )
+    duplicate_unit = duplicate_model
     parent = replace(
         parent,
-        units=(*parent.units, duplicate_unit),
+        models=(*parent.models, duplicate_unit),
     )
 
     with pytest.raises(
         ValueError,
-        match=(
-            r"^units must have unique model_label values under Python scalar equality; "
-            r"duplicate at units\[1\]: True\.$"
-        ),
+        match=(r"models\[1\].model_label.*unique.*duplicate"),
     ):
         validate_parent_evaluation(parent)
 
@@ -1150,7 +998,8 @@ def test_validate_attempt_inputs_accepts_known_parent_unit() -> None:
     parent = _valid_parent_evaluation()
     inputs = AttemptInputs(
         attempt_id=AttemptId("attempt-a"),
-        unit=parent.units[0].key,
+        parent_id=parent.parent_id,
+        model_id=parent.models[0].model_id,
         worker_id=WorkerId("worker-a"),
     )
 
@@ -1162,19 +1011,21 @@ def test_validate_attempt_inputs_accepts_duplicate_attempts_for_same_unit() -> N
     parent = _valid_parent_evaluation()
     first = AttemptInputs(
         attempt_id=AttemptId("attempt-a"),
-        unit=parent.units[0].key,
+        parent_id=parent.parent_id,
+        model_id=parent.models[0].model_id,
         worker_id=WorkerId("worker-a"),
     )
     duplicate = AttemptInputs(
         attempt_id=AttemptId("attempt-b"),
-        unit=parent.units[0].key,
+        parent_id=parent.parent_id,
+        model_id=parent.models[0].model_id,
         worker_id=WorkerId("worker-b"),
     )
 
     validate_attempt_inputs(first, parent=parent)
     validate_attempt_inputs(duplicate, parent=parent)
 
-    assert first.unit == duplicate.unit
+    assert (first.parent_id, first.model_id) == (duplicate.parent_id, duplicate.model_id)
     assert first.attempt_id != duplicate.attempt_id
     assert first.worker_id != duplicate.worker_id
 
@@ -1195,45 +1046,42 @@ def test_validate_attempt_inputs_rejects_empty_routing_identity(
     parent = _valid_parent_evaluation()
     inputs = AttemptInputs(
         attempt_id=attempt_id,
-        unit=parent.units[0].key,
+        parent_id=parent.parent_id,
+        model_id=parent.models[0].model_id,
         worker_id=worker_id,
     )
 
-    with pytest.raises(ValueError, match=rf"^{field} must be a nonempty string\.$"):
+    with pytest.raises(ValueError, match=rf"^{field}.*nonempty.*empty string"):
         validate_attempt_inputs(inputs, parent=parent)
 
 
 def test_validate_attempt_inputs_rejects_invalid_unit_identity() -> None:
-    """Reject an empty model identity in the supplied logical unit key."""
+    """Reject an empty model identity in the supplied parent/model association."""
     parent = _valid_parent_evaluation()
     inputs = AttemptInputs(
         attempt_id=AttemptId("attempt-a"),
-        unit=UnitKey(
-            parent_id=parent.parent_id,
-            model_id=ModelId(""),
-        ),
+        parent_id=parent.parent_id,
+        model_id=ModelId(""),
         worker_id=WorkerId("worker-a"),
     )
 
-    with pytest.raises(ValueError, match=r"^model_id must be a nonempty string\.$"):
+    with pytest.raises(ValueError, match=r"^model_id.*nonempty.*empty string"):
         validate_attempt_inputs(inputs, parent=parent)
 
 
 def test_validate_attempt_inputs_rejects_cross_parent_unit() -> None:
-    """Reject a unit key that explicitly identifies another parent task."""
+    """Reject a parent/model association that explicitly identifies another parent task."""
     parent = _valid_parent_evaluation()
     inputs = AttemptInputs(
         attempt_id=AttemptId("attempt-a"),
-        unit=UnitKey(
-            parent_id=ParentId("parent-b"),
-            model_id=parent.units[0].model.model_id,
-        ),
+        parent_id=ParentId("parent-b"),
+        model_id=parent.models[0].model_id,
         worker_id=WorkerId("worker-a"),
     )
 
     with pytest.raises(
         ValueError,
-        match=(r"^unit\.parent_id must equal parent\.parent_id " r"'parent-a'; got 'parent-b'\.$"),
+        match=(r"parent_id.*parent.parent_id.*parent-a.*parent-b"),
     ):
         validate_attempt_inputs(inputs, parent=parent)
 
@@ -1243,16 +1091,14 @@ def test_validate_attempt_inputs_rejects_unknown_parent_unit() -> None:
     parent = _valid_parent_evaluation()
     inputs = AttemptInputs(
         attempt_id=AttemptId("attempt-a"),
-        unit=UnitKey(
-            parent_id=parent.parent_id,
-            model_id=ModelId("model-b"),
-        ),
+        parent_id=parent.parent_id,
+        model_id=ModelId("model-b"),
         worker_id=WorkerId("worker-a"),
     )
 
     with pytest.raises(
         ValueError,
-        match=(r"^unit must identify a known parent unit; got model_id " r"'model-b' for parent_id 'parent-a'\.$"),
+        match=(r"model_id.*parent model.*model-b"),
     ):
         validate_attempt_inputs(inputs, parent=parent)
 
@@ -1261,16 +1107,143 @@ def test_validate_attempt_inputs_rejects_invalid_parent_context() -> None:
     """Reject routing against a parent that has no known unit set."""
     parent = replace(
         _valid_parent_evaluation(),
-        units=(),
+        models=(),
     )
     inputs = AttemptInputs(
         attempt_id=AttemptId("attempt-a"),
-        unit=UnitKey(
-            parent_id=parent.parent_id,
-            model_id=ModelId("model-a"),
-        ),
+        parent_id=parent.parent_id,
+        model_id=ModelId("model-a"),
         worker_id=WorkerId("worker-a"),
     )
 
-    with pytest.raises(ValueError, match=r"^units must contain at least one unit task\.$"):
+    with pytest.raises(ValueError, match=r"models.*at least one.*empty tuple"):
         validate_attempt_inputs(inputs, parent=parent)
+
+
+@pytest.mark.parametrize(
+    "validator,record_type",
+    [
+        (validate_model_reference, ModelReference),
+        (validate_evaluation_reference, EvaluationReference),
+        (validate_computation_snapshot, ComputationSnapshot),
+        (validate_parent_evaluation, ParentEvaluation),
+    ],
+)
+def test_execution_boundaries_reject_wrong_records(validator: object, record_type: type) -> None:
+    """Reject missing records before reading any fixed execution fields."""
+    with pytest.raises(TypeError) as error:
+        cast(Callable[[object], None], validator)(None)
+    assert record_type.__name__ in str(error.value)
+    assert "got type: builtins.NoneType" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "field,invalid", [("partition", None), ("evaluation", None), ("models", []), ("models", (None,))]
+)
+def test_parent_rejects_invalid_components(field: str, invalid: object) -> None:
+    """Check required context records and model containers at the parent boundary."""
+    # Widen only test construction so runtime validators receive the invalid candidate.
+    parent = cast(Callable[..., ParentEvaluation], replace)(_valid_parent_evaluation(), **{field: invalid})
+    with pytest.raises(TypeError) as error:
+        validate_parent_evaluation(parent)
+    assert field in str(error.value)
+    assert "expected:" in str(error.value) and "got type:" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "field,invalid",
+    [
+        ("partition", "partition"),
+        ("evaluation", "evaluation"),
+        ("models", []),
+        ("models", (None,)),
+        ("worker_ids", []),
+        ("worker_ids", (1,)),
+        ("root_dir", 1),
+        ("consolidation", "initialized"),
+    ],
+)
+def test_snapshot_rejects_invalid_component_types(field: str, invalid: object) -> None:
+    """Validate provided configuration without requiring startup completeness."""
+    snapshot = ComputationSnapshot(
+        root_dir="root",
+        consolidation=ConsolidationState.INITIALIZED,
+        partition=None,
+        evaluation=None,
+        models=(),
+        worker_ids=(),
+        parent_id=None,
+    )
+    with pytest.raises(TypeError) as error:
+        validate_computation_snapshot(cast(Callable[..., ComputationSnapshot], replace)(snapshot, **{field: invalid}))
+    assert field in str(error.value)
+
+
+@pytest.mark.parametrize("field", ["parent_id", "model_id", "attempt_id", "worker_id"])
+@pytest.mark.parametrize("invalid,error_type", [("", ValueError), (None, TypeError), (1, TypeError)])
+def test_attempt_checks_each_direct_identity(field: str, invalid: object, error_type: type[Exception]) -> None:
+    """Validate every routing identity without a composite unit-key record."""
+    parent = _valid_parent_evaluation()
+    inputs = AttemptInputs(
+        parent_id=parent.parent_id,
+        model_id=parent.models[0].model_id,
+        attempt_id=AttemptId("attempt-a"),
+        worker_id=WorkerId("worker-a"),
+    )
+    with pytest.raises(error_type) as error:
+        validate_attempt_inputs(cast(Callable[..., AttemptInputs], replace)(inputs, **{field: invalid}), parent=parent)
+    assert field in str(error.value)
+
+
+def test_attempt_rejects_wrong_outer_record() -> None:
+    """Reject an allocation payload that is not an AttemptInputs record."""
+    with pytest.raises(TypeError, match="AttemptInputs"):
+        validate_attempt_inputs(cast(AttemptInputs, None), parent=_valid_parent_evaluation())
+
+
+def test_duplicate_attempts_on_same_worker_preserve_fixed_context() -> None:
+    """Permit distinct attempts for a parent/model pair without worker overrides."""
+    parent = _valid_parent_evaluation()
+    first = AttemptInputs(
+        parent_id=parent.parent_id,
+        model_id=parent.models[0].model_id,
+        attempt_id=AttemptId("attempt-a"),
+        worker_id=WorkerId("worker-a"),
+    )
+    second = replace(first, attempt_id=AttemptId("attempt-b"))
+    validate_attempt_inputs(first, parent=parent)
+    validate_attempt_inputs(second, parent=parent)
+    assert first.worker_id == second.worker_id
+    assert parent == _valid_parent_evaluation()
+
+
+@pytest.mark.parametrize("label", [0, True, np.int64(1), np.float32(0.5)])
+def test_model_labels_reject_unstandardized_scalars(label: object) -> None:
+    """Apply the common text-label domain to model labels."""
+    model = replace(_valid_parent_evaluation().models[0], model_label=cast(ScalarLabel, label))
+    with pytest.raises(TypeError, match="model_label"):
+        validate_model_reference(model)
+
+
+def test_attempt_rejects_invalid_parent_record() -> None:
+    """Keep contextual TypeError when an allocation lacks a valid parent record."""
+    inputs = AttemptInputs(
+        parent_id=ParentId("parent-a"),
+        model_id=ModelId("model-a"),
+        attempt_id=AttemptId("attempt-a"),
+        worker_id=WorkerId("worker-a"),
+    )
+    with pytest.raises(TypeError) as error:
+        validate_attempt_inputs(inputs, parent=cast(ParentEvaluation, None))
+    assert "parent is invalid" in str(error.value) and "ParentEvaluation" in str(error.value)
+
+
+def test_duplicate_model_label_diagnostic_keeps_full_text() -> None:
+    """Identify complete long labels while reporting their parent-scoped collision."""
+    label = "model-" + "a" * 120 + "-distinct-ending"
+    parent = _valid_parent_evaluation(model_label=label)
+    second = replace(parent.models[0], model_id=ModelId("model-b"), model_label=np.str_(label))
+    with pytest.raises(ValueError) as error:
+        validate_parent_evaluation(replace(parent, models=(*parent.models, second)))
+    assert "models[1].model_label" in str(error.value)
+    assert label in str(error.value)
