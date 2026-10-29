@@ -3,16 +3,17 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
+import numpy as np
+
 from cocoonet._contracts.data import (
     FoldRecord,
     PartitionSchedule,
     validate_partition_schedule,
 )
 from cocoonet._contracts.execution import (
-    AttemptInputs,
     ParentEvaluation,
     TaskKind,
-    validate_attempt_inputs,
+    validate_parent_evaluation,
 )
 from cocoonet._contracts.failure import (
     FailureRecord,
@@ -20,11 +21,16 @@ from cocoonet._contracts.failure import (
     validate_failure_links,
 )
 from cocoonet._contracts.identity import (
+    AttemptId,
     FailureId,
     FoldId,
+    ModelId,
+    ParentId,
     ReportName,
     SampleId,
     ScalarLabel,
+    WorkerId,
+    validate_identifier,
 )
 from cocoonet._contracts.prediction import (
     ClassificationPredictions,
@@ -81,8 +87,6 @@ class ReportOutcome[T]:
 
     Parameters
     ----------
-    name : ReportName
-        Category of report represented by this record.
     status : ReportStatus
         Overall state of the report.
     payload : T | None
@@ -98,10 +102,12 @@ class ReportOutcome[T]:
 
     Notes
     -----
+    The containing result slot or consuming caller supplies the report category.
+
     ``payload`` is the general field name for the report's generated content;
     it does not mean serialized bytes or an unstructured dictionary. When
-    present, it must be an immutable instance of the concrete report-content
-    type defined by that report's implementation phase.
+    present, it must be an owned immutable snapshot of the concrete report-content
+    type. Freezing this envelope does not make mutable payload contents immutable.
 
     ``status`` describes the report as a whole. It does not replace or change
     the scientific-value and value-level failure rules defined by the report
@@ -124,7 +130,6 @@ class ReportOutcome[T]:
     Node usage scope: Shared - Used by both root and worker nodes.
     """
 
-    name: ReportName
     status: ReportStatus
     payload: T | None
     failure_ids: tuple[FailureId, ...]
@@ -159,9 +164,9 @@ class EvaluationOutcome(StrEnum):
 
     Outcome precedence is ``reconstruction_failed``, then
     ``validation_failed``, then ``completed_with_errors``, then ``completed``.
-    The declaration order does not define that precedence. Relationships
-    between an outcome and its predictions, reports, and failures are enforced
-    later by ``validate_attempt_result``.
+    The declaration order does not define that precedence.
+    ``derive_evaluation_outcome`` determines the outcome after
+    ``validate_attempt_result`` checks the complete result.
 
     Node usage scope: Shared - Used by both root and worker nodes.
     """
@@ -178,10 +183,14 @@ class AttemptResult[V, P, R, Z, I]:
 
     Parameters
     ----------
-    inputs : AttemptInputs
-        Attempt, unit-task, and worker identities associated with the result.
-    outcome : EvaluationOutcome
-        Final scientific outcome of the completed attempt.
+    parent_id : ParentId
+        Parent whose fixed scientific configuration produced this result.
+    model_id : ModelId
+        Model identity within that parent's model references.
+    attempt_id : AttemptId
+        Execution attempt that produced this result.
+    worker_id : WorkerId
+        Worker that executed the producing attempt.
     predictions : tuple[PredictionBatch, ...]
         Primary-validation predictions in realized schedule order.
     validation : ReportOutcome[V] | None
@@ -217,14 +226,17 @@ class AttemptResult[V, P, R, Z, I]:
     defined by their owning report schemas.
 
     Construction preserves candidate fields without validating schedule
-    order, report names, outcome relationships, failure links, or scientific
-    context. Those checks belong to ``validate_attempt_result``.
+    order, report relationships, failure links, or scientific context.
+    Those checks belong to ``validate_attempt_result``. Use
+    ``derive_evaluation_outcome`` to obtain the validated result's outcome.
 
     Node usage scope: Shared - Used by both root and worker nodes.
     """
 
-    inputs: AttemptInputs
-    outcome: EvaluationOutcome
+    parent_id: ParentId
+    model_id: ModelId
+    attempt_id: AttemptId
+    worker_id: WorkerId
     predictions: tuple[PredictionBatch, ...]
     validation: ReportOutcome[V] | None
     performance: ReportOutcome[P] | None
@@ -240,13 +252,13 @@ def validate_report_outcome[T](value: ReportOutcome[T]) -> None:
     Parameters
     ----------
     value : ReportOutcome[T]
-        Report identity, status, content, and failure references to validate.
+        Report status, content, and failure references to validate.
 
     Raises
     ------
     TypeError
-        If the report outcome or one of its declared fields has an incorrect
-        runtime type.
+        If the envelope, status, failure tuple, or a failure ID has an
+        incorrect runtime type.
     ValueError
         If a failure identity is empty or the status conflicts with the
         presence of report content or failure references.
@@ -259,8 +271,9 @@ def validate_report_outcome[T](value: ReportOutcome[T]) -> None:
 
     This generic validator does not inspect the report payload, resolve failure
     references, reject duplicate references, or decide whether
-    ``not_requested`` is permitted for a particular report slot. Concrete
-    payload validators and ``validate_attempt_result`` own those checks.
+    ``not_requested`` is permitted for a particular report slot.
+    ``validate_attempt_result`` resolves references and checks slot rules;
+    concrete report validators own payload checks.
 
     Validation preserves the report content, including permitted infinity,
     formula-defined ``NaN``, and schema-defined ``None`` values inside it.
@@ -268,24 +281,18 @@ def validate_report_outcome[T](value: ReportOutcome[T]) -> None:
 
     Node usage scope: Shared - Used by both root and worker nodes.
     """
-    # Validate the complete declared envelope before applying status rules.
-    validate_declared_types(
-        value,
-        expected_type=ReportOutcome,
-    )
+    # Validate the envelope type and fields without traversing its payload.
+    if not isinstance(value, ReportOutcome):
+        validate_declared_types(value, expected_type=ReportOutcome)
+    validate_declared_types(value.status, expected_type=ReportStatus, field="status")
+    validate_declared_types(value.failure_ids, expected_type=tuple, field="failure_ids")
 
-    error_context = "Invalid report outcome:\n" f"  report: {value.name.value}\n" f"  status: {value.status.value}"
+    # Identify the status without duplicating report identity or rendering content.
+    error_context = f"Invalid report outcome:\n  status: {value.status.value}"
 
-    # Validate every supplied failure identity without exposing unrelated
-    # report content in the diagnostic.
+    # Validate each failure identity without inspecting report content.
     for index, failure_id in enumerate(value.failure_ids):
-        if not failure_id:
-            raise ValueError(
-                f"{error_context}\n"
-                f"  field: failure_ids[{index}]\n"
-                "  expected: a nonempty failure identity\n"
-                "  got: an empty string"
-            )
+        validate_identifier(failure_id, field=f"failure_ids[{index}]")
 
     # Require content and prohibit operational failures for complete reports.
     if value.status is ReportStatus.COMPLETE:
@@ -328,11 +335,102 @@ type _AttemptReports[V, P, R, Z, I] = tuple[
 ]
 
 
+def _validate_attempt_context[V, P, R, Z, I](
+    value: AttemptResult[V, P, R, Z, I],
+    *,
+    parent: ParentEvaluation,
+    schedule: PartitionSchedule,
+) -> str:
+    """Validate direct routing, fixed context, and task-compatible targets.
+
+    Parameters
+    ----------
+    value : AttemptResult[V, P, R, Z, I]
+        Candidate whose outer record type has been checked by the caller.
+    parent : ParentEvaluation
+        Candidate fixed parent, including its model and evaluation references.
+    schedule : PartitionSchedule
+        Candidate authoritative partition and standardized samples.
+
+    Returns
+    -------
+    str
+        Diagnostic prefix identifying the validated result routing fields.
+
+    Raises
+    ------
+    TypeError
+        If routing, parent, schedule, or task-specific target types are invalid.
+    ValueError
+        If context validation fails, bindings differ, a model is unknown,
+        or a classification target is outside the parent vocabulary.
+
+    Notes
+    -----
+    The caller must check the outer result type. Parent and schedule validation
+    establish sample structure and target finiteness. Task compatibility is
+    checked for every sample, including masked samples. Inputs are preserved.
+    """
+    # Validate the authoritative parent and schedule before checking associations.
+    validate_parent_evaluation(parent)
+    validate_partition_schedule(schedule)
+
+    # Validate direct result identities without constructing allocation records.
+    for field, identity in (
+        ("parent_id", value.parent_id),
+        ("model_id", value.model_id),
+        ("attempt_id", value.attempt_id),
+        ("worker_id", value.worker_id),
+    ):
+        validate_identifier(identity, field=field)
+
+    # Identify the producing attempt in association diagnostics.
+    error_context = (
+        "Invalid attempt result:\n"
+        f"  parent_id: {value.parent_id}\n"
+        f"  model_id: {value.model_id}\n"
+        f"  attempt_id: {value.attempt_id}\n"
+        f"  worker_id: {value.worker_id}"
+    )
+
+    # Require the result and saved partition to share the parent's fixed binding.
+    for field, actual, expected in (
+        ("parent_id", value.parent_id, parent.parent_id),
+        ("schedule.reference.partition_id", schedule.reference.partition_id, parent.partition.partition_id),
+        ("schedule.reference.dataset_id", schedule.reference.dataset_id, parent.partition.dataset_id),
+    ):
+        if actual != expected:
+            raise ValueError(f"{error_context}\n  field: {field}\n  expected: {expected!r}\n  got: {actual!r}")
+
+    # Require the result's model identity to resolve within this parent.
+    model_ids = {model.model_id for model in parent.models}
+    if value.model_id not in model_ids:
+        raise ValueError(
+            f"{error_context}\n  field: model_id\n" f"  expected: a model in parent.models\n  got: {value.model_id!r}"
+        )
+
+    # Validate task-specific target types and classification vocabulary membership.
+    is_regression = parent.evaluation.task_kind is TaskKind.REGRESSION
+    target_types = (float, np.floating) if is_regression else (str, np.str_)
+    expected_target_type = float | np.floating if is_regression else ScalarLabel
+    class_labels = set(parent.evaluation.class_labels)
+    for index, sample in enumerate(schedule.samples):
+        field = f"schedule.samples[{index}].target (sample_id={sample.sample_id!r})"
+        if not isinstance(sample.target, target_types):
+            validate_declared_types(sample.target, expected_type=expected_target_type, field=field)
+        if not is_regression and sample.target not in class_labels:
+            raise ValueError(
+                f"{error_context}\n  field: {field}\n"
+                f"  expected: a class in parent.evaluation.class_labels\n  got: {sample.target!r}"
+            )
+
+    return error_context
+
+
 def _validate_report_slot[T](
     report: ReportOutcome[T] | None,
     *,
     field: str,
-    expected_name: ReportName,
     error_context: str,
 ) -> ReportOutcome[T]:
     """Validate and return one required report slot.
@@ -343,8 +441,6 @@ def _validate_report_slot[T](
         Candidate report stored in the slot.
     field : str
         Attempt-result field containing the report.
-    expected_name : ReportName
-        Report identity required by that field.
     error_context : str
         Attempt identity prefix used in diagnostics.
 
@@ -359,7 +455,7 @@ def _validate_report_slot[T](
         If the report or one of its declared fields has an incorrect runtime
         type.
     ValueError
-        If the required report is absent or has the wrong report identity.
+        If the required report is absent or violates status/payload/failure rules.
     """
     # Every report slot exists after initial reconstruction succeeds.
     if report is None:
@@ -371,16 +467,10 @@ def _validate_report_slot[T](
         )
 
     # Validate the generic report contract without interpreting its payload.
-    validate_report_outcome(report)
-
-    # Bind the report identity to its fixed result-envelope slot.
-    if report.name is not expected_name:
-        raise ValueError(
-            f"{error_context}\n"
-            f"  field: {field}.name\n"
-            f"  expected: {expected_name.value}\n"
-            f"  got: {report.name.value}"
-        )
+    try:
+        validate_report_outcome(report)
+    except (TypeError, ValueError) as error:
+        raise type(error)(f"{error_context}\n  field: {field}\n{error}") from error
 
     return report
 
@@ -393,6 +483,7 @@ def _validate_failure_fold(
     error_context: str,
 ) -> FoldRecord | None:
     """Resolve one failure's applicable fold against the saved schedule."""
+    # Read the validated failure context before resolving its fold.
     context = failure.context
 
     # Every post-reconstruction fit/prediction failure belongs to one fold.
@@ -428,6 +519,7 @@ def _validate_failure_sample(
     error_context: str,
 ) -> None:
     """Validate one failure's optional sample and population membership."""
+    # Check population membership only when a sample coordinate is supplied.
     sample_id = failure.context.sample_id
     if sample_id is None:
         return
@@ -473,6 +565,7 @@ def _validate_failure_class(
     error_context: str,
 ) -> None:
     """Validate one failure's optional class against the parent vocabulary."""
+    # Check vocabulary membership only when a class coordinate is supplied.
     class_label = failure.context.class_label
     if class_label is None:
         return
@@ -500,13 +593,16 @@ def _validate_attempt_failure_context(
     failure: FailureRecord,
     *,
     failure_index: int,
-    inputs: AttemptInputs,
+    model_id: ModelId,
+    attempt_id: AttemptId,
+    worker_id: WorkerId,
     parent: ParentEvaluation,
     folds_by_id: dict[FoldId, FoldRecord],
     schedule_sample_ids: set[SampleId],
     error_context: str,
 ) -> None:
     """Validate one failure's scope and attempt-specific coordinates."""
+    # Identify the validated failure and its context for association checks.
     failure_path = f"failures[{failure_index}]"
     context = failure.context
 
@@ -527,10 +623,10 @@ def _validate_attempt_failure_context(
 
     # Every supplied execution coordinate must identify this attempt.
     expected_coordinates = (
-        ("parent_id", context.parent_id, inputs.unit.parent_id),
-        ("model_id", context.model_id, inputs.unit.model_id),
-        ("attempt_id", context.attempt_id, inputs.attempt_id),
-        ("worker_id", context.worker_id, inputs.worker_id),
+        ("parent_id", context.parent_id, parent.parent_id),
+        ("model_id", context.model_id, model_id),
+        ("attempt_id", context.attempt_id, attempt_id),
+        ("worker_id", context.worker_id, worker_id),
     )
     for field, actual, expected in expected_coordinates:
         if actual is not None and actual != expected:
@@ -583,7 +679,9 @@ def _validate_attempt_failures[V, P, R, Z, I](
         _validate_attempt_failure_context(
             failure,
             failure_index=failure_index,
-            inputs=value.inputs,
+            model_id=value.model_id,
+            attempt_id=value.attempt_id,
+            worker_id=value.worker_id,
             parent=parent,
             folds_by_id=folds_by_id,
             schedule_sample_ids=schedule_sample_ids,
@@ -599,31 +697,18 @@ def _validate_reconstruction_outcome[V, P, R, Z, I](
     error_context: str,
 ) -> bool:
     """Validate reconstruction precedence and its failure-only envelope."""
+    # Identify reconstruction-stage failures from validated provenance.
     reconstruction_failures = tuple(
         failure
         for failure in value.failures
         if (failure.scope is FailureScope.FIT_PREDICTION and failure.context.stage == "reconstruction")
     )
 
-    # A recorded reconstruction failure determines the attempt outcome.
-    if value.outcome is not EvaluationOutcome.RECONSTRUCTION_FAILED:
-        if reconstruction_failures:
-            raise ValueError(
-                f"{error_context}\n"
-                "  field: outcome\n"
-                "  expected: reconstruction_failed because reconstruction failed\n"
-                f"  got: {value.outcome.value}"
-            )
+    # Require reconstruction provenance before applying the failure-only rules.
+    if not reconstruction_failures:
         return False
 
-    # The failure-only result requires explicit reconstruction provenance.
-    if not reconstruction_failures:
-        raise ValueError(
-            f"{error_context}\n"
-            "  field: failures\n"
-            "  expected: at least one fit_prediction failure at the reconstruction stage\n"
-            "  got: no reconstruction failure"
-        )
+    # Require all retained failures to belong to reconstruction.
     if len(reconstruction_failures) != len(value.failures):
         raise ValueError(
             f"{error_context}\n"
@@ -654,7 +739,7 @@ def _validate_reconstruction_outcome[V, P, R, Z, I](
                 f"{error_context}\n"
                 f"  field: {field}\n"
                 "  expected: None after reconstruction failure\n"
-                "  got: a report outcome"
+                f"  got: {type(report).__name__}"
             )
 
     return True
@@ -673,6 +758,7 @@ def _resolve_attempt_failure_reference(
     class_label: ScalarLabel | None = None,
 ) -> FailureRecord:
     """Resolve one failure reference and validate supplied value coordinates."""
+    # Resolve the reference within this attempt's validated failure collection.
     failure = failures_by_id.get(failure_id)
     if failure is None:
         raise ValueError(
@@ -706,6 +792,7 @@ def _resolve_attempt_failure_reference(
                 f"  got: failure context for {coordinate} {actual!r}"
             )
 
+    # Record successful resolution for the subsequent coverage check.
     referenced_failure_ids.add(failure_id)
     return failure
 
@@ -717,6 +804,7 @@ def _validate_report_failure_ownership[V, P, R, Z, I](
     error_context: str,
 ) -> None:
     """Require each report computation failure to fail its owning report."""
+    # Associate fixed report categories with their validated slot statuses.
     validation, performance, residual, visualization, influence = reports
     status_by_name = {
         ReportName.VALIDATION: validation.status,
@@ -757,36 +845,31 @@ def _validate_attempt_reports[V, P, R, Z, I](
     referenced_failure_ids: set[FailureId],
     error_context: str,
 ) -> _AttemptReports[V, P, R, Z, I]:
-    """Validate report slots, names, request state, and failure references."""
+    """Validate report slots, request state, and failure references."""
     # Validate every required report while preserving its payload type.
     validation = _validate_report_slot(
         value.validation,
         field="validation",
-        expected_name=ReportName.VALIDATION,
         error_context=error_context,
     )
     performance = _validate_report_slot(
         value.performance,
         field="performance",
-        expected_name=ReportName.PERFORMANCE,
         error_context=error_context,
     )
     residual = _validate_report_slot(
         value.residual,
         field="residual",
-        expected_name=ReportName.RESIDUAL,
         error_context=error_context,
     )
     visualization = _validate_report_slot(
         value.visualization,
         field="visualization",
-        expected_name=ReportName.VISUALIZATION,
         error_context=error_context,
     )
     influence = _validate_report_slot(
         value.influence,
         field="influence",
-        expected_name=ReportName.INFLUENCE,
         error_context=error_context,
     )
 
@@ -868,6 +951,7 @@ def _validate_regression_prediction_batch(
     error_context: str,
 ) -> bool:
     """Validate one regression batch and resolve unavailable-value failures."""
+    # Validate batch structure and values before resolving failure references.
     validate_regression_predictions(prediction, fold=fold)
     unavailable = False
 
@@ -902,6 +986,7 @@ def _validate_classification_prediction_batch(
     error_context: str,
 ) -> bool:
     """Validate one classification batch and resolve value-level failures."""
+    # Validate batch structure and values before resolving failure references.
     validate_classification_predictions(
         prediction,
         fold=fold,
@@ -966,6 +1051,7 @@ def _validate_attempt_predictions[V, P, R, Z, I](
             f"  got: {len(value.predictions)} batches"
         )
 
+    # Accumulate availability while preserving every scheduled batch.
     unavailable = False
 
     # Validate each batch using the parent task kind and matching saved fold.
@@ -1014,6 +1100,7 @@ def _validate_failure_coverage(
     error_context: str,
 ) -> None:
     """Require every non-reconstruction failure to support retained results."""
+    # Copy resolved references for local traversal of their origin chains.
     reachable_ids = set(referenced_failure_ids)
     pending_ids = list(referenced_failure_ids)
 
@@ -1038,27 +1125,18 @@ def _validate_failure_coverage(
 
 
 def _validate_primary_failure_outcome[V, P, R, Z, I](
-    value: AttemptResult[V, P, R, Z, I],
     *,
     parent: ParentEvaluation,
     reports: _AttemptReports[V, P, R, Z, I],
     primary_validation_failed: bool,
     error_context: str,
 ) -> bool:
-    """Validate attempt and report states after primary-validation failure."""
+    """Validate report states after primary-validation failure."""
+    # Apply these report requirements only after primary-validation failure.
     if not primary_validation_failed:
         return False
 
     validation, performance, residual, visualization, influence = reports
-
-    # Primary failure has precedence over all report-level outcomes.
-    if value.outcome is not EvaluationOutcome.VALIDATION_FAILED:
-        raise ValueError(
-            f"{error_context}\n"
-            "  field: outcome\n"
-            "  expected: validation_failed because primary validation contains a failure\n"
-            f"  got: {value.outcome.value}"
-        )
 
     # The validation report retains its available fold-level content.
     if validation.status is not ReportStatus.FAILED:
@@ -1105,46 +1183,6 @@ def _validate_primary_failure_outcome[V, P, R, Z, I](
     return True
 
 
-def _validate_successful_primary_outcome[V, P, R, Z, I](
-    value: AttemptResult[V, P, R, Z, I],
-    *,
-    parent: ParentEvaluation,
-    reports: _AttemptReports[V, P, R, Z, I],
-    error_context: str,
-) -> None:
-    """Derive final outcome after completely successful primary validation."""
-    validation, performance, residual, visualization, influence = reports
-
-    # Successful primary predictions require a complete validation report.
-    if validation.status is not ReportStatus.COMPLETE:
-        raise ValueError(
-            f"{error_context}\n"
-            "  field: validation.status\n"
-            "  expected: complete after successful primary validation\n"
-            f"  got: {validation.status.value}"
-        )
-
-    # Only requested report branches contribute to downstream-error state.
-    downstream_statuses: tuple[ReportStatus, ...] = (
-        performance.status,
-        residual.status,
-        visualization.status,
-    )
-    if parent.evaluation.influence_requested:
-        downstream_statuses += (influence.status,)
-
-    downstream_error = any(status in (ReportStatus.FAILED, ReportStatus.BLOCKED) for status in downstream_statuses)
-    expected_outcome = EvaluationOutcome.COMPLETED_WITH_ERRORS if downstream_error else EvaluationOutcome.COMPLETED
-
-    if value.outcome is not expected_outcome:
-        raise ValueError(
-            f"{error_context}\n"
-            "  field: outcome\n"
-            f"  expected: {expected_outcome.value}\n"
-            f"  got: {value.outcome.value}"
-        )
-
-
 def validate_attempt_result[V, P, R, Z, I](
     value: AttemptResult[V, P, R, Z, I],
     *,
@@ -1158,7 +1196,7 @@ def validate_attempt_result[V, P, R, Z, I](
     value : AttemptResult[V, P, R, Z, I]
         Complete scientific result envelope to validate.
     parent : ParentEvaluation
-        Fixed parent task supplying the unit, task kind, class vocabulary,
+        Fixed parent task supplying models, task kind, class vocabulary,
         and partition association.
     schedule : PartitionSchedule
         Authoritative realized folds and sample memberships used by the
@@ -1172,7 +1210,7 @@ def validate_attempt_result[V, P, R, Z, I](
     ValueError
         If identities or associations conflict, predictions do not match the
         task or schedule, failure provenance does not resolve, report and
-        failure states conflict, or the attempt outcome is inconsistent.
+        failure states conflict, or the result is incomplete for its stage.
 
     Notes
     -----
@@ -1186,66 +1224,26 @@ def validate_attempt_result[V, P, R, Z, I](
     Report-only or sample-influence failures after successful primary
     validation produce ``completed_with_errors``.
 
+    Every schedule target must match the parent's task and class vocabulary,
+    including masked samples and reconstruction-failure results.
+
     This validator resolves envelope relationships only. It does not inspect
     concrete report payloads, execute models, regenerate folds, retry work,
     persist results, or render reports.
 
     Node usage scope: Shared - Used by both root and worker nodes.
     """
-    # Validate the outer result type without expanding unresolved payload
-    # variables through nested generic report fields.
+    # Validate the outer result without traversing generic report payloads.
     if not isinstance(value, AttemptResult):
-        validate_declared_types(
-            value,
-            expected_type=AttemptResult,
-        )
+        validate_declared_types(value, expected_type=AttemptResult)
 
-    # Validate concrete envelope fields whose types do not depend on report
-    # payload parameters. Report payloads remain owned by report validators.
-    validate_declared_types(
-        value.outcome,
-        expected_type=EvaluationOutcome,
-        field="value.outcome",
-    )
-    validate_declared_types(
-        value.predictions,
-        expected_type=tuple[PredictionBatch, ...],
-        field="value.predictions",
-    )
-    for field, report in (
-        ("validation", value.validation),
-        ("performance", value.performance),
-        ("residual", value.residual),
-        ("visualization", value.visualization),
-        ("influence", value.influence),
-    ):
-        validate_declared_types(
-            report,
-            expected_type=ReportOutcome | None,
-            field=f"value.{field}",
-        )
+    # Validate fixed context and all targets before any failure-only return.
+    error_context = _validate_attempt_context(value, parent=parent, schedule=schedule)
 
-    # Validate the authoritative schedule and attempt routing context.
-    validate_partition_schedule(schedule)
-    validate_attempt_inputs(value.inputs, parent=parent)
+    # Validate the prediction container; batch validators own its records.
+    validate_declared_types(value.predictions, expected_type=tuple, field="predictions")
 
-    error_context = (
-        "Invalid attempt result:\n"
-        f"  parent_id: {value.inputs.unit.parent_id}\n"
-        f"  model_id: {value.inputs.unit.model_id}\n"
-        f"  attempt_id: {value.inputs.attempt_id}"
-    )
-
-    # Bind the schedule to the exact partition fixed by the parent.
-    if parent.partition != schedule.reference:
-        raise ValueError(
-            f"{error_context}\n"
-            "  field: schedule.reference\n"
-            f"  expected: {parent.partition!r}\n"
-            f"  got: {schedule.reference!r}"
-        )
-
-    # Validate all scientific failure records before resolving their use.
+    # Validate scientific failures and resolve their attempt and schedule coordinates.
     failures_by_id = _validate_attempt_failures(
         value,
         parent=parent,
@@ -1253,13 +1251,12 @@ def validate_attempt_result[V, P, R, Z, I](
         error_context=error_context,
     )
 
-    # Reconstruction failure is a complete failure-only result.
+    # Require a reconstruction failure to have a complete failure-only envelope.
     if _validate_reconstruction_outcome(value, error_context=error_context):
         return
 
+    # Track references locally while validating every required report slot.
     referenced_failure_ids: set[FailureId] = set()
-
-    # Validate report slots and their report-level failure references.
     reports = _validate_attempt_reports(
         value,
         parent=parent,
@@ -1278,19 +1275,18 @@ def validate_attempt_result[V, P, R, Z, I](
         error_context=error_context,
     )
 
-    # Every retained failure must support a result or its provenance chain.
+    # Require each retained failure to support a result or its provenance chain.
     _validate_failure_coverage(
         failures_by_id=failures_by_id,
         referenced_failure_ids=referenced_failure_ids,
         error_context=error_context,
     )
 
-    # Any post-reconstruction fit/prediction failure affects validation.
+    # Require primary failures to agree with the dependent report states.
     primary_validation_failed = unavailable_prediction or any(
         failure.scope is FailureScope.FIT_PREDICTION for failure in value.failures
     )
     if _validate_primary_failure_outcome(
-        value,
         parent=parent,
         reports=reports,
         primary_validation_failed=primary_validation_failed,
@@ -1298,10 +1294,57 @@ def validate_attempt_result[V, P, R, Z, I](
     ):
         return
 
-    # Otherwise derive success or downstream-error completion from reports.
-    _validate_successful_primary_outcome(
-        value,
-        parent=parent,
-        reports=reports,
-        error_context=error_context,
-    )
+    # Require a complete validation report after successful primary validation.
+    validation = reports[0]
+    if validation.status is not ReportStatus.COMPLETE:
+        raise ValueError(
+            f"{error_context}\n"
+            "  field: validation.status\n"
+            "  expected: complete after successful primary validation\n"
+            f"  got: {validation.status.value}"
+        )
+
+
+def derive_evaluation_outcome[V, P, R, Z, I](
+    value: AttemptResult[V, P, R, Z, I],
+) -> EvaluationOutcome:
+    """Derive the scientific outcome of an already validated complete result.
+
+    Parameters
+    ----------
+    value : AttemptResult[V, P, R, Z, I]
+        Result that has passed validate_attempt_result against its fixed
+        parent and schedule.
+
+    Returns
+    -------
+    EvaluationOutcome
+        Reconstruction failure, primary-validation failure, downstream-report
+        errors, or successful completion, in that precedence order.
+
+    Notes
+    -----
+    Call ``validate_attempt_result`` before deriving an outcome. Only failure
+    records and report statuses determine the outcome; formula-defined NaN,
+    permitted infinity, and non-applicable None inside payloads do not
+    themselves indicate computational failure. The result is not modified.
+    Node usage scope: Shared - Used by both root and worker nodes.
+    """
+    # Give initial reconstruction failure precedence over later stages.
+    if any(
+        failure.scope is FailureScope.FIT_PREDICTION and failure.context.stage == "reconstruction"
+        for failure in value.failures
+    ):
+        return EvaluationOutcome.RECONSTRUCTION_FAILED
+
+    # Identify primary-validation failure from its validated failure provenance.
+    if any(failure.scope is FailureScope.FIT_PREDICTION for failure in value.failures):
+        return EvaluationOutcome.VALIDATION_FAILED
+
+    # Identify downstream errors from authoritative report statuses.
+    for report in (value.performance, value.residual, value.visualization, value.influence):
+        if report is not None and report.status in (ReportStatus.FAILED, ReportStatus.BLOCKED):
+            return EvaluationOutcome.COMPLETED_WITH_ERRORS
+
+    # Report scientific completion independently of delivery and root acceptance.
+    return EvaluationOutcome.COMPLETED
