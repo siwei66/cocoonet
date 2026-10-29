@@ -4,7 +4,9 @@
 Read `AGENTS.md` and `roadmap_phase_1.md`, and the corresponding part of `architecture.md`, continue with the first unit of phase 1.
 ```
 
----
+====================================================================
+
+
 
 ## Phase continuing prompt schema:
 
@@ -20,7 +22,11 @@ After finishing, propose a standard one-line git commit message for the changes 
 Then continue with the next unit. Propose only. The requirements are same.
 ```
 
-Ignoring ruff error C901 break:
+====================================================================
+
+
+
+## Ignoring ruff error C901 break
 
 ```text
 Use a local `# noqa: C901` to ignore the C901 error found without changing the approved implementation. The ignorance must be local and limited to the found error of the corresponding function or method.
@@ -34,9 +40,12 @@ Complete proposing the standard one-line git commit message with scope for the i
 Then continue with the next unit. Proposal only. The requirements are same.
 ```
 
+
 Or revise the proposal before approval and continuing with the next unit.
 
----
+====================================================================
+
+
 
 ## Attached requirement schema:
 
@@ -44,6 +53,26 @@ Or revise the proposal before approval and continuing with the next unit.
 - Prepare only the next planned change unit.
 - Show me the exact proposed implementation and corresponding tests, with a concise explanation of the change and any relevant implementation decision.
 - Read only the relevant AGENTS.md rules, the applicable section of roadmap_phase_1.md, and the directly affected code/tests.
+- Do not perform a broad repository audit unless required by a detected dependency.
+- Propose the exact change only.
+- Do not modify files for next unit.
+```
+
+====================================================================
+
+
+
+## After dev docs update:
+
+```text
+Inspect the latest dev docs for the new requirements and the latest roadmaps for the latest plan. And inspect the current implementation progress of the phase 1. Report the progress first.
+
+---
+
+Then continue with the next unit. Propose only. The requirements are same:
+- Prepare only the next planned change unit.
+- Show me the exact proposed implementation and corresponding tests, with a concise explanation of the change and any relevant implementation decision.
+- Read only the relevant AGENTS.md rules, the applicable section of roadmap\_phase\_1.md, and the directly affected code/tests.
 - Do not perform a broad repository audit unless required by a detected dependency.
 - Propose the exact change only.
 - Do not modify files for next unit.

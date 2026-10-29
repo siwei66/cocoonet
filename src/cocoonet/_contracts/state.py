@@ -3,7 +3,8 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
-from cocoonet._contracts.identity import ParentId
+from cocoonet._contracts.execution import AttemptInputs
+from cocoonet._contracts.identity import ArtifactId, ParentId
 
 
 class ExecutionStatus(StrEnum):
@@ -148,3 +149,106 @@ class StopStatus(StrEnum):
     NONE = "none"
     REQUESTED = "requested"
     OBSERVED = "observed"
+
+
+class StopReason(StrEnum):
+    """Identify why an execution attempt receives a cooperative-stop request.
+
+    Attributes
+    ----------
+    PARENT_INTERRUPTED : str
+        The root interrupted the parent task. The fixed parent may later be
+        resumed under the established recovery rules.
+    PARENT_CANCELLED : str
+        The root cancelled the parent task, so its remaining attempt work is
+        no longer required.
+    PARENT_SUPERSEDED : str
+        A later parent replaced the earlier parent, so the earlier attempt
+        cannot contribute to the later parent's result set.
+    DUPLICATE_ACCEPTED : str
+        Another attempt of the same parent/model unit produced the result
+        accepted by the root, so this duplicate is no longer required.
+
+    Notes
+    -----
+    A stop reason records why cooperative stop handling was initiated.
+    ``StopStatus`` separately records whether that request is pending or has
+    been applied.
+
+    Connection loss, reconnection-round exhaustion, worker-process failure,
+    result retention, and cleanup are separate operational facts and are not
+    cooperative-stop reasons.
+
+    A reason does not imply worker-process termination, artifact deletion,
+    dataset cleanup, or public-worker release.
+
+    Node usage scope: Shared - Used by both root and worker nodes.
+    """
+
+    PARENT_INTERRUPTED = "parent_interrupted"
+    PARENT_CANCELLED = "parent_cancelled"
+    PARENT_SUPERSEDED = "parent_superseded"
+    DUPLICATE_ACCEPTED = "duplicate_accepted"
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class StopDisposition:
+    """Associate cooperative-stop handling state with its reason.
+
+    Parameters
+    ----------
+    status : StopStatus
+        Current cooperative-stop handling observation.
+    reason : StopReason | None
+        Cause of a requested or observed stop. A disposition with status
+        ``NONE`` uses ``None``.
+
+    Notes
+    -----
+    This immutable record stores two directly related stop facts. It does not
+    validate their pairing, perform a transition, send or acknowledge a stop,
+    terminate the worker process, or control cleanup. Pairing validity belongs
+    to ``validate_stop_disposition``.
+
+    Node usage scope: Shared - Used by both root and worker nodes.
+    """
+
+    status: StopStatus
+    reason: StopReason | None
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class AttemptProgress:
+    """Record the worker-observed processing state of one execution attempt.
+
+    Parameters
+    ----------
+    inputs : AttemptInputs
+        Fixed attempt, parent task, model unit, and assigned-worker identities.
+    status : AttemptStatus
+        Current worker-observed attempt-processing state.
+    stop : StopDisposition
+        Independent cooperative-stop observation for the attempt.
+    first_started_at : float | None
+        Finite, nonnegative UTC Unix timestamp in seconds when attempt-specific
+        model synchronization or local handoff first began. It is ``None``
+        before processing starts.
+    result_artifact_id : ArtifactId | None
+        Identity of the completed worker-side result artifact, when one has
+        been published for the attempt.
+
+    Notes
+    -----
+    This immutable record preserves attempt progress observations. It does not
+    validate their relationships, perform a transition, acquire a timestamp,
+    publish an artifact, deliver a result, or infer root-side acceptance.
+    Contract validation belongs to ``validate_attempt_progress``.
+
+    Node usage scope: Shared - Used by both root and worker nodes.
+    """
+
+    inputs: AttemptInputs
+    status: AttemptStatus
+    stop: StopDisposition
+    first_started_at: float | None
+    result_artifact_id: ArtifactId | None
