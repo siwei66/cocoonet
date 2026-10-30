@@ -1,0 +1,67 @@
+Proposed verification:
+
+```text
+Next unit proposal: Phase 1 contract completion review
+Roadmap order 12 contains no new production declaration, function, or test. The next unit is therefore verification-only.
+Exact scope
+Review only:
+- src/cocoonet/_contracts/*.py
+- Their corresponding tests/contracts/test_*.py
+- Relevant Phase 1 contracts in AGENTS.md, docs/architecture.md, docs/roadmap.md, and docs/roadmaps/roadmap_phase_1.md
+Verify:
+1. Every Phase 1 declaration and validator in roadmap Sections 3–8 exists.
+2. Schemas, validators, tests, and documented component boundaries agree.
+3. Target validation has one clear owner without contradictory duplicate validation.
+4. Scalar values preserve the required strict types and scientific-value distinctions.
+5. Diagnostics contain bounded values or previews and the required expected/actual context.
+6. Internal helpers have required docstrings and necessary block comments.
+7. Composed validators reuse lower-level validation without redundant persistent state or unnecessary abstractions.
+8. Attempt reservations remain active through applicable pending-delivery handling.
+9. Node-usage scope statements agree with planned consumers.
+10. No superseded declaration such as ValueStatus, DatasetReference, DatasetBinding, or selection_evidence_id remains.
+```
+
+===================================================================================================
+
+
+
+Reply:
+```text
+OK. Then proceed with the proposed verification.
+
+\---
+
+In addition, verify the compliance of phase 1 implementation to the development requirements of `AGENTS.md`, `architecture.md` and `roadmap.md`.
+Deliver sectional checklist of the compliance in addtion.
+
+\---
+
+And check the over-engineering risk in terms of the entire module.
+Deliver a section of over-engineering risk analysis report.
+```
+
+===================================================================================================
+
+
+
+For proposal revision:
+
+```text
+I prefer not to revise the current code implementation. Do not modify any source file.
+
+\---
+
+Propose a revise to the statement of `roadmap_phase_1.md`, making the statement `do not introduce quadratic pairwise searches or caches.` a soft requirements like `avoid quadratic pairwise searches or caches if possible`. And keep the current implementation of `state.py` intact.
+
+\---
+
+Then re-propose revisions of the inconsistent statements of `roadmap_phase_1.md`. Make minimal necessary changes.
+
+\---
+
+You do not have to update historical implementation wording of every single unit in the `roadmap_phase_1.md` as implemented. You just need to update the overall status of phase 1 as implemented.
+
+\---
+
+Propose only, do not modify any file. Propose with line number for me to locate the proposed revision.
+```

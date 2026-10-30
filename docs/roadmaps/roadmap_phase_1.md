@@ -1,6 +1,6 @@
 # Phase 1: Shared identities, records, and component contracts
 
-Status: proposed for review; implementation is not authorized.
+Status: implemented and verified.
 
 ## 1. Authority, scope, and approval gates
 
@@ -213,7 +213,7 @@ Planned leaf functions:
 | Signature | Responsibility | Direct tests |
 | --- | --- | --- |
 | `validate_identifier(value: str, *, field: str) -> None` | Enforce opaque nonempty string representation; no encoding inference. | Empty/non-string rejection; preserve spelling; unrelated ID types may have equal text without sharing scope. |
-| `validate_label(value: str, *, field: str) -> None` | Enforce the standardized text label domain from Section 3.2; any separate model-label domain requires its own explicit definition. | Text acceptance; non-text/custom object rejection; no conversion. |
+| `validate_label(value: ScalarLabel, *, field: str) -> None` | Enforce the standardized text label domain from Section 3.2; any separate model-label domain requires its own explicit definition. | Python and NumPy text acceptance; non-text/custom object rejection; no conversion. |
 
 ## 4. Data, configuration, and fixed execution records
 
@@ -364,8 +364,9 @@ When an execution record contains a `PartitionReference`, its validator validate
 load the partition artifact or verify dataset contents. Validators receiving both a parent and a
 schedule require `parent.partition == schedule.reference`.
 
-Collection association checks use ID-indexed lookup and sets where possible; do not introduce quadratic pairwise
-searches or caches. Runtime label comparisons follow Section 3.2. No identity generator is implemented in Phase 1.
+Prefer ID-indexed lookup and sets for collection association checks when they keep the validation logic direct; avoid
+quadratic pairwise searches or caches where practical. Runtime label comparisons follow Section 3.2. No identity
+generator is implemented in Phase 1.
 
 ## 5. Traceable failures and value semantics
 
@@ -753,8 +754,8 @@ in retries must explicitly convert to this total; no default retry count or dela
 
 Root coordination owns one `ReceptionRecord` per `(parent_id, model_id)` pair, covering local and online attempts equally:
 
-- Before selection, the selected attempt is absent, receipt is not received, persistence is
-  not persisted, result artifact is absent, and accepted is false.
+- Before selection, the selected attempt is absent, receipt is `not_received`, persistence is
+  `not_started`, the result artifact is absent, and accepted is false.
 - A selection names an attempt with the same parent_id and model_id. The future storage component durably persists
   `selected_attempt_id` as the authoritative selection state before production reception proceeds. Selecting by
   receiving order belongs to later coordination.
