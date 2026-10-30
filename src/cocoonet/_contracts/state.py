@@ -12,7 +12,15 @@ from cocoonet._contracts.failure import (
     validate_failure_record,
     validate_trace_context,
 )
-from cocoonet._contracts.identity import ArtifactId, AttemptId, OperationId, ParentId, WorkerId, validate_identifier
+from cocoonet._contracts.identity import (
+    ArtifactId,
+    AttemptId,
+    ModelId,
+    OperationId,
+    ParentId,
+    WorkerId,
+    validate_identifier,
+)
 from cocoonet._type_validation import validate_declared_types
 
 
@@ -1259,3 +1267,374 @@ class PersistenceStatus(StrEnum):
     NOT_STARTED = "not_started"
     INCOMPLETE = "incomplete"
     COMPLETE = "complete"
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ReceptionRecord:
+    """Record root-side selection, receipt, persistence, and acceptance.
+
+    Parameters
+    ----------
+    parent_id : ParentId
+        Identity of the fixed parent task containing the logical unit.
+    model_id : ModelId
+        Identity of the model defining the logical unit within the parent.
+    selected_attempt_id : AttemptId | None
+        Attempt selected for result reception, or ``None`` before selection.
+    receipt : ReceiptStatus
+        Progress of receiving the selected result file.
+    persistence : PersistenceStatus
+        Progress of persisting the selected result file in root storage.
+    result_artifact_id : ArtifactId | None
+        Identity of the root-side result artifact, when persistent writing has
+        begun.
+    accepted : bool
+        Whether the completely received and persisted result has been accepted
+        as the logical unit's result.
+
+    Notes
+    -----
+    Root coordination owns one record per ``(parent_id, model_id)`` pair.
+    Selection is independent of scientific success or failure and remains fixed
+    if delivery later fails. Complete persistence with ``accepted=False`` is
+    representable during crash reconciliation.
+
+    Durable publication of this record makes ``selected_attempt_id`` the
+    authoritative selection state. A result-artifact identity does not
+    independently prove durable completion. This immutable record stores
+    observations only. Construction does not validate associations, file
+    completeness, durable publication, or acceptance prerequisites. It does
+    not select an attempt, receive or persist bytes, inspect a result,
+    acknowledge persistence, stop duplicates, or accept a logical result.
+
+    Node usage scope: Root only - Used exclusively by the root node.
+    """
+
+    parent_id: ParentId
+    model_id: ModelId
+    selected_attempt_id: AttemptId | None
+    receipt: ReceiptStatus
+    persistence: PersistenceStatus
+    result_artifact_id: ArtifactId | None
+    accepted: bool
+
+
+def _validate_reception_attempts(
+    attempts: tuple[AttemptInputs, ...],
+) -> None:
+    """Validate candidate attempt records used for reception selection."""
+    # Validate the collection before inspecting individual routing records.
+    validate_declared_types(
+        attempts,
+        expected_type=tuple,
+        field="attempts",
+    )
+
+    # Validate direct attempt identities without requiring parent configuration.
+    for index, attempt in enumerate(attempts):
+        field = f"attempts[{index}]"
+        if not isinstance(attempt, AttemptInputs):
+            validate_declared_types(
+                attempt,
+                expected_type=AttemptInputs,
+                field=field,
+            )
+        for name, identifier in (
+            ("attempt_id", attempt.attempt_id),
+            ("parent_id", attempt.parent_id),
+            ("model_id", attempt.model_id),
+            ("worker_id", attempt.worker_id),
+        ):
+            validate_identifier(
+                identifier,
+                field=f"{field}.{name}",
+            )
+
+
+def _validate_reception_selection(
+    value: ReceptionRecord,
+    *,
+    attempts: tuple[AttemptInputs, ...],
+) -> None:
+    """Validate selected-attempt identity and logical-unit routing."""
+    if value.selected_attempt_id is None:
+        return
+
+    # Resolve the selected identity from the supplied attempt observations.
+    matching_attempts = tuple(attempt for attempt in attempts if attempt.attempt_id == value.selected_attempt_id)
+    if not matching_attempts:
+        raise ValueError(
+            "Invalid reception record:\n"
+            f"  parent_id: {value.parent_id!r}\n"
+            f"  model_id: {value.model_id!r}\n"
+            "  expected: selected_attempt_id to identify an attempt in attempts\n"
+            f"  got: unknown identity {value.selected_attempt_id!r}"
+        )
+
+    # Every matching observation must route to this logical parent/model unit.
+    for attempt in matching_attempts:
+        if attempt.parent_id != value.parent_id:
+            raise ValueError(
+                "Invalid reception record:\n"
+                f"  selected_attempt_id: {value.selected_attempt_id!r}\n"
+                f"  expected: attempt.parent_id to equal {value.parent_id!r}\n"
+                f"  got: {attempt.parent_id!r}"
+            )
+        if attempt.model_id != value.model_id:
+            raise ValueError(
+                "Invalid reception record:\n"
+                f"  selected_attempt_id: {value.selected_attempt_id!r}\n"
+                f"  expected: attempt.model_id to equal {value.model_id!r}\n"
+                f"  got: {attempt.model_id!r}"
+            )
+
+
+def _validate_reception_progress(value: ReceptionRecord) -> None:
+    """Validate receipt, persistence, artifact, and acceptance relationships."""
+    # An unselected logical unit must remain in its complete initial state.
+    if value.selected_attempt_id is None:
+        if (
+            value.receipt is not ReceiptStatus.NOT_RECEIVED
+            or value.persistence is not PersistenceStatus.NOT_STARTED
+            or value.result_artifact_id is not None
+            or value.accepted
+        ):
+            raise ValueError(
+                "Invalid reception record:\n"
+                f"  parent_id: {value.parent_id!r}\n"
+                f"  model_id: {value.model_id!r}\n"
+                "  expected: an unselected record to have receipt=not_received, "
+                "persistence=not_started, no result artifact, and accepted=False\n"
+                f"  got: receipt={value.receipt.value}, "
+                f"persistence={value.persistence.value}, "
+                f"result_artifact_id={value.result_artifact_id!r}, "
+                f"accepted={value.accepted!r}"
+            )
+        return
+
+    # Persistent writing requires receipt to have begun.
+    if value.persistence is not PersistenceStatus.NOT_STARTED and value.receipt is ReceiptStatus.NOT_RECEIVED:
+        raise ValueError(
+            "Invalid reception record:\n"
+            f"  selected_attempt_id: {value.selected_attempt_id!r}\n"
+            "  expected: receipt to have begun before persistence\n"
+            f"  got: receipt={value.receipt.value}, "
+            f"persistence={value.persistence.value}"
+        )
+
+    # The root-side artifact exists exactly when persistent writing has begun.
+    if value.persistence is PersistenceStatus.NOT_STARTED:
+        if value.result_artifact_id is not None:
+            raise ValueError(
+                "Invalid reception record:\n"
+                f"  selected_attempt_id: {value.selected_attempt_id!r}\n"
+                "  expected: result_artifact_id to be None before persistence starts\n"
+                f"  got: {value.result_artifact_id!r}"
+            )
+    elif value.result_artifact_id is None:
+        raise ValueError(
+            "Invalid reception record:\n"
+            f"  selected_attempt_id: {value.selected_attempt_id!r}\n"
+            "  expected: result_artifact_id once persistence has begun\n"
+            "  got: None"
+        )
+
+    # Complete persistence requires the complete selected file.
+    if value.persistence is PersistenceStatus.COMPLETE and value.receipt is not ReceiptStatus.COMPLETE:
+        raise ValueError(
+            "Invalid reception record:\n"
+            f"  selected_attempt_id: {value.selected_attempt_id!r}\n"
+            "  expected: receipt=complete before persistence=complete\n"
+            f"  got: receipt={value.receipt.value}"
+        )
+
+    # Acceptance requires complete receipt and complete durable persistence.
+    if value.accepted and (
+        value.receipt is not ReceiptStatus.COMPLETE
+        or value.persistence is not PersistenceStatus.COMPLETE
+        or value.result_artifact_id is None
+    ):
+        raise ValueError(
+            "Invalid reception record:\n"
+            f"  selected_attempt_id: {value.selected_attempt_id!r}\n"
+            "  expected: complete receipt, complete persistence, and a result "
+            "artifact before acceptance\n"
+            f"  got: receipt={value.receipt.value}, "
+            f"persistence={value.persistence.value}, "
+            f"result_artifact_id={value.result_artifact_id!r}"
+        )
+
+
+def _validate_reception_record_with_validated_attempts(
+    value: ReceptionRecord,
+    *,
+    attempts: tuple[AttemptInputs, ...],
+) -> None:
+    """Validate one reception record after shared attempt validation."""
+    # Validate the outer record before accessing its observations.
+    if not isinstance(value, ReceptionRecord):
+        validate_declared_types(value, expected_type=ReceptionRecord)
+
+    # Validate logical-unit and optional artifact identities in every state.
+    validate_identifier(value.parent_id, field="parent_id")
+    validate_identifier(value.model_id, field="model_id")
+    for field, identifier in (
+        ("selected_attempt_id", value.selected_attempt_id),
+        ("result_artifact_id", value.result_artifact_id),
+    ):
+        if identifier is not None:
+            validate_identifier(identifier, field=field)
+
+    # Validate declared state vocabularies and the exact acceptance flag type.
+    validate_declared_types(
+        value.receipt,
+        expected_type=ReceiptStatus,
+        field="receipt",
+    )
+    validate_declared_types(
+        value.persistence,
+        expected_type=PersistenceStatus,
+        field="persistence",
+    )
+    validate_declared_types(
+        value.accepted,
+        expected_type=bool,
+        field="accepted",
+    )
+
+    # Validate selection and parent/model routing agreement.
+    _validate_reception_selection(value, attempts=attempts)
+
+    # Validate receipt, persistence, artifact, and acceptance prerequisites.
+    _validate_reception_progress(value)
+
+
+def validate_reception_record(
+    value: ReceptionRecord,
+    *,
+    attempts: tuple[AttemptInputs, ...],
+) -> None:
+    """Validate one root-side result-reception observation.
+
+    Parameters
+    ----------
+    value : ReceptionRecord
+        Candidate logical-unit selection, receipt, persistence, and acceptance
+        observations.
+    attempts : tuple[AttemptInputs, ...]
+        Existing attempt-routing records against which selection is resolved.
+
+    Raises
+    ------
+    TypeError
+        If the record, attempt collection, or a field has an incorrect runtime
+        type.
+    ValueError
+        If an identity, selection association, receipt/persistence relationship,
+        artifact prerequisite, or acceptance prerequisite is invalid.
+
+    Notes
+    -----
+    Validation resolves selection through direct attempt identity and
+    parent/model agreement. It does not require parent evaluation configuration
+    and does not enforce collection-wide attempt uniqueness; that belongs to
+    ``validate_reception_set``.
+
+    Phase 2 durably publishes ``selected_attempt_id`` before production
+    reception proceeds. This pure validator checks the resulting structure but
+    cannot prove durable publication.
+
+    Complete persistence with ``accepted=False`` remains valid for crash
+    reconciliation. This function does not select attempts, inspect scientific
+    outcomes, read or write files, acknowledge persistence, promote duplicates,
+    or perform acceptance.
+
+    Node usage scope: Root only - Used exclusively by the root node.
+    """
+    # Validate available attempt routing before consuming the collection.
+    _validate_reception_attempts(attempts)
+
+    # Validate this record using the already checked routing collection.
+    _validate_reception_record_with_validated_attempts(
+        value,
+        attempts=attempts,
+    )
+
+
+def validate_reception_set(
+    values: tuple[ReceptionRecord, ...],
+    *,
+    attempts: tuple[AttemptInputs, ...],
+) -> None:
+    """Validate a complete root-side result-reception collection.
+
+    Parameters
+    ----------
+    values : tuple[ReceptionRecord, ...]
+        Reception observations whose parent/model logical-unit identities must
+        be unique.
+    attempts : tuple[AttemptInputs, ...]
+        Attempt-routing records whose attempt identities must be unique and
+        against which selected attempts are resolved.
+
+    Raises
+    ------
+    TypeError
+        If a collection, record, attempt, or field has an incorrect runtime
+        type.
+    ValueError
+        If an attempt identity or parent/model logical-unit pair is duplicated,
+        or an individual reception record is invalid.
+
+    Notes
+    -----
+    Shared attempt routing is validated once before individual records.
+    Temporary sets enforce collection-wide identity uniqueness without becoming
+    persisted state. Empty collections are valid.
+
+    This pure validator does not select attempts, inspect or persist files,
+    enforce historical immutability, coordinate concurrent writers, reconcile
+    a restart, stop duplicate attempts, or accept results.
+
+    Node usage scope: Root only - Used exclusively by the root node.
+    """
+    # Validate both tuple containers before traversing their elements.
+    validate_declared_types(
+        values,
+        expected_type=tuple,
+        field="values",
+    )
+    _validate_reception_attempts(attempts)
+
+    # Require one unambiguous routing record per attempt identity.
+    seen_attempt_ids: set[AttemptId] = set()
+    for index, attempt in enumerate(attempts):
+        if attempt.attempt_id in seen_attempt_ids:
+            raise ValueError(
+                "Invalid reception set:\n"
+                f"  field: attempts[{index}].attempt_id\n"
+                "  expected: each attempt identity to be unique\n"
+                f"  got: duplicate identity {attempt.attempt_id!r}"
+            )
+        seen_attempt_ids.add(attempt.attempt_id)
+
+    # Validate each record once and require one record per logical unit.
+    seen_units: set[tuple[ParentId, ModelId]] = set()
+    for index, value in enumerate(values):
+        try:
+            _validate_reception_record_with_validated_attempts(
+                value,
+                attempts=attempts,
+            )
+        except (TypeError, ValueError) as error:
+            raise type(error)(f"values[{index}] is invalid: {error}") from error
+
+        unit = (value.parent_id, value.model_id)
+        if unit in seen_units:
+            raise ValueError(
+                "Invalid reception set:\n"
+                f"  field: values[{index}]\n"
+                "  expected: each parent_id/model_id pair to be unique\n"
+                f"  got: duplicate pair {unit!r}"
+            )
+        seen_units.add(unit)

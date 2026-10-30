@@ -441,7 +441,7 @@ attempt begins with that model handoff and continues through model loading/recon
 publication, and delivery.
 
 Implement root selection and acceptance using the stable attempt records even though this milestone needs only the
-local normal path. Persist pending selection evidence, receive/handoff the selected complete file, durably persist it,
+local normal path. Persist the selected attempt as authoritative pending selection state, receive/handoff the selected complete file, durably persist it,
 then accept and acknowledge it. A scientific failure-only outcome is eligible on the same basis as success; incomplete
 writes are not completion. Root deserialization/content processing stays outside active reception. Worker completion
 alone does not establish availability or result acceptance.
@@ -571,7 +571,7 @@ Only after selected-file persistence and acceptance, stop remaining duplicates w
 Unselected files do not enter the resend lifecycle. Different units remain independent.
 
 Before proceeding, mixed execution, simultaneous ready results, duplicate cancellation, reconnects, and root restart
-must all use the existing identities, selection evidence, and remaining budgets. This phase adds scheduling policy and
+must all use the existing identities, persisted selection state, and remaining budgets. This phase adds scheduling policy and
 multi-attempt integration, not new scientific semantics or fold/sample-level distributed tasks. Public-pool allocation
 and worker data/resource management remain separate later capabilities.
 

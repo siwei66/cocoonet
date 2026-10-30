@@ -40,6 +40,7 @@ from cocoonet._contracts.state import (
     ParentProgress,
     PersistenceStatus,
     ReceiptStatus,
+    ReceptionRecord,
     StopDisposition,
     StopReason,
     StopStatus,
@@ -49,11 +50,17 @@ from cocoonet._contracts.state import (
     validate_attempt_progress,
     validate_bounded_operation,
     validate_parent_progress,
+    validate_reception_record,
+    validate_reception_set,
     validate_stop_disposition,
     validate_worker_observation,
 )
 
 _DEFAULT_OPERATION_ID = OperationId("operation-a")
+_DEFAULT_RECEPTION_PARENT_ID = ParentId("parent-a")
+_DEFAULT_RECEPTION_MODEL_ID = ModelId("model-a")
+_DEFAULT_RECEPTION_ATTEMPT_ID = AttemptId("attempt-a")
+_DEFAULT_RESULT_ARTIFACT_ID = ArtifactId("result-a")
 
 
 def _valid_parent_evaluation() -> ParentEvaluation:
@@ -176,6 +183,43 @@ def _bounded_operation(
         attempts_made=attempts_made,
         status=status,
         last_failure=last_failure,
+    )
+
+
+def _reception_attempt(
+    *,
+    attempt_id: AttemptId = _DEFAULT_RECEPTION_ATTEMPT_ID,
+    parent_id: ParentId = _DEFAULT_RECEPTION_PARENT_ID,
+    model_id: ModelId = _DEFAULT_RECEPTION_MODEL_ID,
+) -> AttemptInputs:
+    """Build an attempt-routing record for reception-validator tests."""
+    return AttemptInputs(
+        attempt_id=attempt_id,
+        parent_id=parent_id,
+        model_id=model_id,
+        worker_id=WorkerId("worker-a"),
+    )
+
+
+def _reception_record(
+    *,
+    parent_id: ParentId = _DEFAULT_RECEPTION_PARENT_ID,
+    model_id: ModelId = _DEFAULT_RECEPTION_MODEL_ID,
+    selected_attempt_id: AttemptId | None = None,
+    receipt: ReceiptStatus = ReceiptStatus.NOT_RECEIVED,
+    persistence: PersistenceStatus = PersistenceStatus.NOT_STARTED,
+    result_artifact_id: ArtifactId | None = None,
+    accepted: bool = False,
+) -> ReceptionRecord:
+    """Build a reception-record candidate with explicit root observations."""
+    return ReceptionRecord(
+        parent_id=parent_id,
+        model_id=model_id,
+        selected_attempt_id=selected_attempt_id,
+        receipt=receipt,
+        persistence=persistence,
+        result_artifact_id=result_artifact_id,
+        accepted=accepted,
     )
 
 
@@ -1662,3 +1706,381 @@ def test_persistence_status_has_exact_string_vocabulary() -> None:
     assert PersistenceStatus.NOT_STARTED == "not_started"
     assert PersistenceStatus.INCOMPLETE == "incomplete"
     assert PersistenceStatus.COMPLETE == "complete"
+
+
+def test_reception_record_preserves_root_result_observations() -> None:
+    """Preserve logical-unit selection, transfer, storage, and acceptance."""
+    record = ReceptionRecord(
+        parent_id=ParentId("parent-a"),
+        model_id=ModelId("model-a"),
+        selected_attempt_id=AttemptId("attempt-a"),
+        receipt=ReceiptStatus.COMPLETE,
+        persistence=PersistenceStatus.COMPLETE,
+        result_artifact_id=ArtifactId("result-a"),
+        accepted=True,
+    )
+    same = ReceptionRecord(
+        parent_id=ParentId("parent-a"),
+        model_id=ModelId("model-a"),
+        selected_attempt_id=AttemptId("attempt-a"),
+        receipt=ReceiptStatus.COMPLETE,
+        persistence=PersistenceStatus.COMPLETE,
+        result_artifact_id=ArtifactId("result-a"),
+        accepted=True,
+    )
+
+    assert record.parent_id == ParentId("parent-a")
+    assert record.model_id == ModelId("model-a")
+    assert record.selected_attempt_id == AttemptId("attempt-a")
+    assert record.receipt is ReceiptStatus.COMPLETE
+    assert record.persistence is PersistenceStatus.COMPLETE
+    assert record.result_artifact_id == ArtifactId("result-a")
+    assert record.accepted is True
+    assert record == same
+
+
+def test_reception_record_rejects_field_mutation() -> None:
+    """Prevent reassignment of root result-reception observations."""
+    record = ReceptionRecord(
+        parent_id=ParentId("parent-a"),
+        model_id=ModelId("model-a"),
+        selected_attempt_id=None,
+        receipt=ReceiptStatus.NOT_RECEIVED,
+        persistence=PersistenceStatus.NOT_STARTED,
+        result_artifact_id=None,
+        accepted=False,
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        record.__setattr__(
+            "accepted",
+            True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("receipt", "persistence", "result_artifact_id", "accepted"),
+    (
+        (ReceiptStatus.NOT_RECEIVED, PersistenceStatus.NOT_STARTED, None, False),
+        (ReceiptStatus.INCOMPLETE, PersistenceStatus.NOT_STARTED, None, False),
+        (
+            ReceiptStatus.INCOMPLETE,
+            PersistenceStatus.INCOMPLETE,
+            _DEFAULT_RESULT_ARTIFACT_ID,
+            False,
+        ),
+        (
+            ReceiptStatus.COMPLETE,
+            PersistenceStatus.INCOMPLETE,
+            _DEFAULT_RESULT_ARTIFACT_ID,
+            False,
+        ),
+        (
+            ReceiptStatus.COMPLETE,
+            PersistenceStatus.COMPLETE,
+            _DEFAULT_RESULT_ARTIFACT_ID,
+            False,
+        ),
+        (
+            ReceiptStatus.COMPLETE,
+            PersistenceStatus.COMPLETE,
+            _DEFAULT_RESULT_ARTIFACT_ID,
+            True,
+        ),
+    ),
+)
+def test_validate_reception_record_accepts_selected_progress(
+    receipt: ReceiptStatus,
+    persistence: PersistenceStatus,
+    result_artifact_id: ArtifactId | None,
+    accepted: bool,
+) -> None:
+    """Accept valid selected receipt, persistence, and acceptance observations."""
+    record = _reception_record(
+        selected_attempt_id=_DEFAULT_RECEPTION_ATTEMPT_ID,
+        receipt=receipt,
+        persistence=persistence,
+        result_artifact_id=result_artifact_id,
+        accepted=accepted,
+    )
+
+    validate_reception_record(
+        record,
+        attempts=(_reception_attempt(),),
+    )
+
+    assert record.receipt is receipt
+    assert record.persistence is persistence
+    assert record.accepted is accepted
+
+
+def test_validate_reception_record_accepts_unselected_initial_state() -> None:
+    """Accept the complete initial state before result selection."""
+    record = _reception_record()
+
+    validate_reception_record(record, attempts=())
+
+    assert record.selected_attempt_id is None
+    assert record.accepted is False
+
+
+@pytest.mark.parametrize(
+    ("field", "record"),
+    (
+        ("parent_id", _reception_record(parent_id=ParentId(""))),
+        ("model_id", _reception_record(model_id=ModelId(""))),
+    ),
+)
+def test_validate_reception_record_rejects_empty_logical_unit_identity(
+    field: str,
+    record: ReceptionRecord,
+) -> None:
+    """Reject an invalid parent or model identity before selection."""
+    with pytest.raises(ValueError) as error:
+        validate_reception_record(record, attempts=())
+
+    message = str(error.value)
+    assert field in message
+    assert "nonempty" in message
+
+
+def test_validate_reception_record_rejects_unknown_selected_attempt() -> None:
+    """Reject a selected attempt identity absent from supplied attempts."""
+    record = _reception_record(
+        selected_attempt_id=AttemptId("attempt-unknown"),
+    )
+
+    with pytest.raises(ValueError) as error:
+        validate_reception_record(
+            record,
+            attempts=(_reception_attempt(),),
+        )
+
+    message = str(error.value)
+    assert "selected_attempt_id to identify an attempt in attempts" in message
+    assert "attempt-unknown" in message
+
+
+@pytest.mark.parametrize(
+    ("attempt", "expected"),
+    (
+        (
+            _reception_attempt(parent_id=ParentId("parent-b")),
+            "attempt.parent_id",
+        ),
+        (
+            _reception_attempt(model_id=ModelId("model-b")),
+            "attempt.model_id",
+        ),
+    ),
+)
+def test_validate_reception_record_rejects_selected_attempt_routing_mismatch(
+    attempt: AttemptInputs,
+    expected: str,
+) -> None:
+    """Reject a selected attempt assigned to another logical unit."""
+    record = _reception_record(
+        selected_attempt_id=_DEFAULT_RECEPTION_ATTEMPT_ID,
+    )
+
+    with pytest.raises(ValueError) as error:
+        validate_reception_record(
+            record,
+            attempts=(attempt,),
+        )
+
+    message = str(error.value)
+    assert expected in message
+    assert "expected:" in message
+    assert "got:" in message
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    (
+        (
+            _reception_record(
+                selected_attempt_id=_DEFAULT_RECEPTION_ATTEMPT_ID,
+                persistence=PersistenceStatus.INCOMPLETE,
+                result_artifact_id=_DEFAULT_RESULT_ARTIFACT_ID,
+            ),
+            "receipt to have begun before persistence",
+        ),
+        (
+            _reception_record(
+                selected_attempt_id=_DEFAULT_RECEPTION_ATTEMPT_ID,
+                receipt=ReceiptStatus.INCOMPLETE,
+                persistence=PersistenceStatus.NOT_STARTED,
+                result_artifact_id=_DEFAULT_RESULT_ARTIFACT_ID,
+            ),
+            "result_artifact_id to be None before persistence starts",
+        ),
+        (
+            _reception_record(
+                selected_attempt_id=_DEFAULT_RECEPTION_ATTEMPT_ID,
+                receipt=ReceiptStatus.INCOMPLETE,
+                persistence=PersistenceStatus.INCOMPLETE,
+            ),
+            "result_artifact_id once persistence has begun",
+        ),
+        (
+            _reception_record(
+                selected_attempt_id=_DEFAULT_RECEPTION_ATTEMPT_ID,
+                receipt=ReceiptStatus.INCOMPLETE,
+                persistence=PersistenceStatus.COMPLETE,
+                result_artifact_id=_DEFAULT_RESULT_ARTIFACT_ID,
+            ),
+            "receipt=complete before persistence=complete",
+        ),
+        (
+            _reception_record(
+                selected_attempt_id=_DEFAULT_RECEPTION_ATTEMPT_ID,
+                receipt=ReceiptStatus.COMPLETE,
+                persistence=PersistenceStatus.INCOMPLETE,
+                result_artifact_id=_DEFAULT_RESULT_ARTIFACT_ID,
+                accepted=True,
+            ),
+            "complete receipt, complete persistence",
+        ),
+        (
+            _reception_record(receipt=ReceiptStatus.INCOMPLETE),
+            "an unselected record",
+        ),
+    ),
+)
+def test_validate_reception_record_rejects_invalid_progress_relationship(
+    record: ReceptionRecord,
+    expected: str,
+) -> None:
+    """Reject inconsistent selection, receipt, persistence, or acceptance."""
+    with pytest.raises(ValueError) as error:
+        validate_reception_record(
+            record,
+            attempts=(_reception_attempt(),),
+        )
+
+    message = str(error.value)
+    assert expected in message
+    assert "expected:" in message
+    assert "got:" in message
+
+
+def test_validate_reception_record_rejects_nonboolean_acceptance() -> None:
+    """Reject an integer where acceptance requires an exact boolean."""
+    record = _reception_record(
+        accepted=cast(bool, 1),
+    )
+
+    with pytest.raises(TypeError) as error:
+        validate_reception_record(record, attempts=())
+
+    message = str(error.value)
+    assert "accepted" in message
+    assert "builtins.bool" in message
+    assert "builtins.int" in message
+
+
+def test_validate_reception_record_rejects_wrong_outer_record() -> None:
+    """Reject a value that is not a ReceptionRecord."""
+    with pytest.raises(TypeError) as error:
+        validate_reception_record(
+            cast(ReceptionRecord, None),
+            attempts=(),
+        )
+
+    message = str(error.value)
+    assert "ReceptionRecord" in message
+    assert "NoneType" in message
+    assert "None" in message
+
+
+def test_validate_reception_set_accepts_empty_collections() -> None:
+    """Accept an empty reception set with no attempt observations."""
+    validate_reception_set((), attempts=())
+
+
+def test_validate_reception_set_accepts_scoped_parent_model_identities() -> None:
+    """Allow model reuse across parents and multiple models within one parent."""
+    values = (
+        _reception_record(
+            parent_id=ParentId("parent-a"),
+            model_id=ModelId("model-shared"),
+        ),
+        _reception_record(
+            parent_id=ParentId("parent-b"),
+            model_id=ModelId("model-shared"),
+        ),
+        _reception_record(
+            parent_id=ParentId("parent-a"),
+            model_id=ModelId("model-b"),
+        ),
+    )
+
+    validate_reception_set(values, attempts=())
+
+    assert len(values) == 3
+
+
+def test_validate_reception_set_rejects_duplicate_logical_unit() -> None:
+    """Reject two reception records for the same parent/model pair."""
+    values = (
+        _reception_record(),
+        _reception_record(),
+    )
+
+    with pytest.raises(ValueError) as error:
+        validate_reception_set(values, attempts=())
+
+    message = str(error.value)
+    assert "field: values[1]" in message
+    assert "parent_id/model_id pair to be unique" in message
+    assert "parent-a" in message
+    assert "model-a" in message
+
+
+def test_validate_reception_set_rejects_duplicate_attempt_identity() -> None:
+    """Reject ambiguous routing records sharing one attempt identity."""
+    attempts = (
+        _reception_attempt(),
+        _reception_attempt(model_id=ModelId("model-b")),
+    )
+
+    with pytest.raises(ValueError) as error:
+        validate_reception_set((), attempts=attempts)
+
+    message = str(error.value)
+    assert "field: attempts[1].attempt_id" in message
+    assert "each attempt identity to be unique" in message
+    assert "attempt-a" in message
+
+
+def test_validate_reception_set_reports_invalid_record_index() -> None:
+    """Identify the collection position of an invalid reception record."""
+    values = (
+        _reception_record(),
+        _reception_record(
+            parent_id=ParentId("parent-b"),
+            accepted=True,
+        ),
+    )
+
+    with pytest.raises(ValueError) as error:
+        validate_reception_set(values, attempts=())
+
+    message = str(error.value)
+    assert message.startswith("values[1] is invalid:")
+    assert "an unselected record" in message
+
+
+def test_validate_reception_set_rejects_wrong_values_collection() -> None:
+    """Reject a non-tuple reception-record collection."""
+    with pytest.raises(TypeError) as error:
+        validate_reception_set(
+            cast(tuple[ReceptionRecord, ...], None),
+            attempts=(),
+        )
+
+    message = str(error.value)
+    assert "values" in message
+    assert "builtins.tuple" in message
+    assert "NoneType" in message

@@ -664,7 +664,7 @@ to their later phases.
 | `BoundedOperation` | `operation_id: OperationId`, `kind: OperationKind`, `context: TraceContext`, `attempt_limit: int`, `attempts_made: int`, `status: OperationStatus`, `last_failure: FailureRecord | None` |
 | `ReceiptStatus` | `not_received`, `incomplete`, `complete` |
 | `PersistenceStatus` | `not_started`, `incomplete`, `complete` |
-| `ReceptionRecord` | `parent_id: ParentId`, `model_id: ModelId`, `selected_attempt_id: AttemptId | None`, `selection_evidence_id: ArtifactId | None`, `receipt: ReceiptStatus`, `persistence: PersistenceStatus`, `result_artifact_id: ArtifactId | None`, `accepted: bool` |
+| `ReceptionRecord` | `parent_id: ParentId`, `model_id: ModelId`, `selected_attempt_id: AttemptId | None`, `receipt: ReceiptStatus`, `persistence: PersistenceStatus`, `result_artifact_id: ArtifactId | None`, `accepted: bool` |
 
 `first_started_at` is a finite, nonnegative UTC Unix timestamp in seconds describing an observed execution start;
 it is not used as a timer here. The coordinator later derives a unit's first execution start from its attempts for
@@ -753,16 +753,15 @@ in retries must explicitly convert to this total; no default retry count or dela
 
 Root coordination owns one `ReceptionRecord` per `(parent_id, model_id)` pair, covering local and online attempts equally:
 
-- Before selection, both selected attempt and selection evidence are absent, receipt is not received, persistence is
+- Before selection, the selected attempt is absent, receipt is not received, persistence is
   not persisted, result artifact is absent, and accepted is false.
-- A selection names an attempt with the same parent_id and model_id and evidence that the future storage
-  component has durably published. The artifact handle alone is not proof of durability; Phase 2 establishes
-  and verifies that evidence. Production reception must not proceed without it. Selecting by receiving order
-  belongs to later coordination.
+- A selection names an attempt with the same parent_id and model_id. The future storage component durably persists
+  `selected_attempt_id` as the authoritative selection state before production reception proceeds. Selecting by
+  receiving order belongs to later coordination.
 - Incomplete receipt may coexist with incomplete persistence because bytes may be written as received. Complete
   persistence requires complete receipt and a result artifact. A result artifact may describe an incomplete write;
   presence alone is not completion. Incomplete/complete persistence requires an artifact reference.
-- Acceptance requires selected attempt, durable selection evidence, complete receipt, complete persistence, and the
+- Acceptance requires a durably persisted selected attempt, complete receipt, complete persistence, and the
   corresponding result artifact. Complete persistence with `accepted=False` is representable for the crash/reconcile
   window. An acceptance validator checks structure; it never opens a file or verifies durability.
 - A selected attempt remains selected even if delivery fails or is exhausted. Do not promote a competitor, erase
@@ -779,7 +778,7 @@ Root coordination owns one `ReceptionRecord` per `(parent_id, model_id)` pair, c
 | `validate_attempt_progress(value: AttemptProgress, *, parent: ParentEvaluation) -> None` | Check attempt context, status/start/artifact/stop consistency. | Allocated/running/result-ready; stop while running; stopped before start; terminal handling stop; invalid timestamp; no result created. |
 | `validate_worker_observation(value: WorkerObservation) -> None` | Check usability prerequisites, known/unknown positive capacity, unique valid reserved-attempt IDs, and unique parent readiness. | Available worker with zero, some, or all slots occupied; unavailable worker retaining multiple attempts; unknown capacity; invalid/bool capacity; duplicate attempt IDs; reservations exceeding a prospectively lowered limit; no scheduling or mutation. |
 | `validate_bounded_operation(value: BoundedOperation) -> None` | Check count bounds, status, last-error context, and operation kind. | Zero/past-limit counts; bool rejected; success after retries; failed/exhausted; cancelled; distinct connection round identity; no budget reset or reevaluation. |
-| `validate_reception_record(value: ReceptionRecord, *, attempts: tuple[AttemptInputs, ...]) -> None` | Validate parent/model identifiers, selected-attempt identity and parent/model agreement, and receipt/persistence/acceptance prerequisites. | Invalid parent/model IDs even before selection; unknown selected attempt; mismatched parent or model; partial file; complete persistence before acceptance; accepted failure outcome uses same facts; absent evidence; no file I/O. |
+| `validate_reception_record(value: ReceptionRecord, *, attempts: tuple[AttemptInputs, ...]) -> None` | Validate parent/model identifiers, selected-attempt identity and parent/model agreement, and receipt/persistence/acceptance prerequisites. | Invalid parent/model IDs even before selection; unknown selected attempt; mismatched parent or model; partial file; complete persistence before acceptance; accepted failure outcome uses same facts; absent result artifact; no file I/O. |
 | `validate_reception_set(values: tuple[ReceptionRecord, ...], *, attempts: tuple[AttemptInputs, ...]) -> None` | Check unique parent/model pairs using a local tuple set and unique attempt IDs, then validate each record. | Reject duplicate parent/model pairs and duplicate attempt IDs; allow the same model ID under different parents and different models under one parent. |
 
 Runtime enforcement against concurrent writes, historical selection replacement, or acceptance replacement cannot be
@@ -833,7 +832,7 @@ method signatures, IPC, or messages. Later component implementations call the ap
 | Validation/report components | Saved schedule, sample metadata, aligned predictions and valid prerequisites | Typed report payloads and `ReportOutcome`; preserve labels/classes, finite values, permitted infinities, `NaN`, `None`, and failures without redundant value statuses or independent file persistence. | 7–10 |
 | Attempt workflow/packaging | Report outcomes and computational failure records for one attempt | `AttemptResult`; one complete file later, with a failure-only reconstruction outcome or a validation-failure envelope that preserves completed fold results. No report-specific delivery state. | 7–12 |
 | Worker report persistence | Complete result envelope | Published worker artifact resolved by `ArtifactId`; preserve attempt identity. | 2, 12 |
-| Root reception/persistence | Selected existing artifact and its unit/attempt identity | Durable selection/result evidence and acceptance/acknowledgement after complete persistence. No active-loop report loading. | 2, 13–18 |
+| Root reception/persistence | Selected existing artifact and its unit/attempt identity | Persisted selection state, durable result evidence, and acceptance/acknowledgement after complete persistence. No active-loop report loading. | 2, 13–18 |
 | Delivery | Selected existing completed result, operation progress | Updated bounded-operation observations; resends never reconstruct/recompute results. | 14, 17 |
 | Failure/log owner | Actual exception or detected failure plus precise context | `FailureRecord`, later structured log; no application error implies worker termination. | 2 and each producer |
 | Compatibility boundary | Plain root/worker metadata | Compatibility decision before normal operation; no model/result payload loading. | 13, 16 |
@@ -985,7 +984,7 @@ specifies observations and associations; later phases implement their owners and
 
 | Decision | Earliest owning phase / boundary |
 | --- | --- |
-| Filesystem equality/containment, symlinks, overwrite safety, artifact layout, dill loading/publication, durable selection evidence and logs | Phase 2, before any file-changing consumer. |
+| Filesystem equality/containment, symlinks, overwrite safety, artifact layout, dill loading/publication, durable reception-selection state and logs | Phase 2, before any file-changing consumer. |
 | Public computation API, configuration containers/edits, settings payload schema, fixed-input ownership implementation, copy/exclusion mechanics, bulk commit behavior | Phase 3; recovery-specific mechanics Phase 15. |
 | Dataset identity generation/content validation, sample-ID restoration, raw-input parsing and standardization, floating-point representation selection, mixed inline/file support, tensor shape encoding, splitter APIs and strategy coverage/empty-population decisions | Phase 4, before dataset consumers. Standardized scalar admissibility and contextual target compatibility are Phase 1 responsibilities. |
 | Isolation enforcement and model/control execution boundary | Phase 5, before executable loading or user code. |
