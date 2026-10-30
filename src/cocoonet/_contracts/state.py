@@ -5,7 +5,14 @@ from enum import StrEnum
 from math import isfinite
 
 from cocoonet._contracts.execution import AttemptInputs, ParentEvaluation, validate_attempt_inputs
-from cocoonet._contracts.identity import ArtifactId, ParentId, validate_identifier
+from cocoonet._contracts.failure import (
+    FailureRecord,
+    FailureScope,
+    TraceContext,
+    validate_failure_record,
+    validate_trace_context,
+)
+from cocoonet._contracts.identity import ArtifactId, AttemptId, OperationId, ParentId, WorkerId, validate_identifier
 from cocoonet._type_validation import validate_declared_types
 
 
@@ -654,3 +661,538 @@ class ParentContextReadiness:
     dataset_ready: bool
     evaluation_ready: bool
     partition_ready: bool
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class WorkerObservation:
+    """Record the operational observations used to assess one worker.
+
+    Parameters
+    ----------
+    worker_id : WorkerId
+        Identity of the configured worker being observed.
+    availability : WorkerAvailability
+        Whether the worker currently satisfies the prerequisites for allocation
+        consideration.
+    process_status : WorkerProcessStatus
+        Observed operating state of the worker process.
+    ownership : OwnershipStatus
+        Observed assignment of the worker to the root.
+    compatibility : CompatibilityStatus
+        Observed compatibility of the worker environment.
+    parent_readiness : tuple[ParentContextReadiness, ...]
+        Parent-scoped dataset, evaluation, and partition readiness observations.
+    attempt_capacity : int | None
+        Effective number of complete attempt slots, or ``None`` when capacity
+        is unknown.
+    active_attempt_ids : tuple[AttemptId, ...]
+        Identities of attempts whose slot reservations remain active.
+
+    Notes
+    -----
+    Availability, process state, ownership, compatibility, parent readiness,
+    capacity, and reservations remain independent observations. An available
+    worker may have every slot occupied, while an unavailable worker may retain
+    active attempt reservations.
+
+    Active reservations include applicable pending-delivery handling until the
+    owning lifecycle releases the slot. Complete attempt progress remains in
+    ``AttemptProgress`` rather than being duplicated here.
+
+    This immutable record stores observations only. It does not probe a worker,
+    calculate availability or free capacity, synchronize parent context,
+    allocate attempts, release reservations, or perform state transitions.
+    Construction does not validate fields or derive one field from another.
+
+    Node usage scope: Shared - Used by both root and worker nodes.
+    """
+
+    worker_id: WorkerId
+    availability: WorkerAvailability
+    process_status: WorkerProcessStatus
+    ownership: OwnershipStatus
+    compatibility: CompatibilityStatus
+    parent_readiness: tuple[ParentContextReadiness, ...]
+    attempt_capacity: int | None
+    active_attempt_ids: tuple[AttemptId, ...]
+
+
+def _validate_parent_context_readiness(
+    value: ParentContextReadiness,
+    *,
+    field: str,
+) -> None:
+    """Validate one parent-scoped worker-readiness observation."""
+    # Validate the record before inspecting its parent identity or flags.
+    if not isinstance(value, ParentContextReadiness):
+        validate_declared_types(
+            value,
+            expected_type=ParentContextReadiness,
+            field=field,
+        )
+
+    validate_identifier(
+        value.parent_id,
+        field=f"{field}.parent_id",
+    )
+
+    # Each readiness fact is independently and explicitly boolean.
+    for name, ready in (
+        ("dataset_ready", value.dataset_ready),
+        ("evaluation_ready", value.evaluation_ready),
+        ("partition_ready", value.partition_ready),
+    ):
+        validate_declared_types(
+            ready,
+            expected_type=bool,
+            field=f"{field}.{name}",
+        )
+
+
+def _validate_worker_capacity_and_reservations(
+    value: WorkerObservation,
+) -> None:
+    """Validate effective capacity and active attempt reservations."""
+    # Unknown capacity is representable; every known capacity is positive.
+    if value.attempt_capacity is not None:
+        validate_declared_types(
+            value.attempt_capacity,
+            expected_type=int,
+            field="attempt_capacity",
+        )
+        if value.attempt_capacity <= 0:
+            raise ValueError(
+                "Invalid worker observation:\n"
+                "  field: attempt_capacity\n"
+                "  expected: a positive integer or None\n"
+                f"  got: {value.attempt_capacity!r}"
+            )
+
+    # Reservations are unique attempt identities, independent of their states.
+    validate_declared_types(
+        value.active_attempt_ids,
+        expected_type=tuple,
+        field="active_attempt_ids",
+    )
+    seen_attempt_ids: set[AttemptId] = set()
+    for index, attempt_id in enumerate(value.active_attempt_ids):
+        field = f"active_attempt_ids[{index}]"
+        validate_identifier(attempt_id, field=field)
+        if attempt_id in seen_attempt_ids:
+            raise ValueError(
+                "Invalid worker observation:\n"
+                f"  field: {field}\n"
+                "  expected: each active attempt identity to be unique\n"
+                f"  got: duplicate identity {attempt_id!r}"
+            )
+        seen_attempt_ids.add(attempt_id)
+
+
+def validate_worker_observation(value: WorkerObservation) -> None:
+    """Validate one worker's operational and readiness observations.
+
+    Parameters
+    ----------
+    value : WorkerObservation
+        Worker identity, usability, process, ownership, compatibility,
+        readiness, capacity, and reservation observations.
+
+    Raises
+    ------
+    TypeError
+        If the record or a field has an incorrect runtime type.
+    ValueError
+        If an identity, capacity, uniqueness constraint, or availability
+        prerequisite is invalid.
+
+    Notes
+    -----
+    Availability asserts worker-level usability prerequisites but does not
+    imply a free slot or readiness for a particular parent. Reservations may
+    equal or exceed a known capacity after a prospective capacity reduction;
+    this validator preserves them and does not allocate or cancel work.
+
+    This function does not probe a worker, calculate capacity, synchronize
+    parent context, derive free slots, schedule attempts, mutate reservations,
+    or perform lifecycle transitions.
+
+    Node usage scope: Shared - Used by both root and worker nodes.
+    """
+    # Validate the outer record before accessing its fields.
+    if not isinstance(value, WorkerObservation):
+        validate_declared_types(value, expected_type=WorkerObservation)
+
+    # Validate the worker identity and independent worker-level observations.
+    validate_identifier(value.worker_id, field="worker_id")
+    validate_declared_types(
+        value.availability,
+        expected_type=WorkerAvailability,
+        field="availability",
+    )
+    validate_declared_types(
+        value.process_status,
+        expected_type=WorkerProcessStatus,
+        field="process_status",
+    )
+    validate_declared_types(
+        value.ownership,
+        expected_type=OwnershipStatus,
+        field="ownership",
+    )
+    validate_declared_types(
+        value.compatibility,
+        expected_type=CompatibilityStatus,
+        field="compatibility",
+    )
+
+    # Validate each parent context and prohibit competing observations.
+    validate_declared_types(
+        value.parent_readiness,
+        expected_type=tuple,
+        field="parent_readiness",
+    )
+    seen_parent_ids: set[ParentId] = set()
+    for index, readiness in enumerate(value.parent_readiness):
+        field = f"parent_readiness[{index}]"
+        _validate_parent_context_readiness(readiness, field=field)
+        if readiness.parent_id in seen_parent_ids:
+            raise ValueError(
+                "Invalid worker observation:\n"
+                f"  field: {field}.parent_id\n"
+                "  expected: each parent readiness identity to be unique\n"
+                f"  got: duplicate identity {readiness.parent_id!r}"
+            )
+        seen_parent_ids.add(readiness.parent_id)
+
+    _validate_worker_capacity_and_reservations(value)
+
+    # Available workers must satisfy every worker-level usability prerequisite.
+    if value.availability is WorkerAvailability.AVAILABLE:
+        prerequisites: tuple[tuple[str, StrEnum, StrEnum], ...] = (
+            ("process_status", value.process_status, WorkerProcessStatus.RUNNING),
+            ("ownership", value.ownership, OwnershipStatus.OWNED_BY_ROOT),
+            ("compatibility", value.compatibility, CompatibilityStatus.COMPATIBLE),
+        )
+        for field, observed, expected in prerequisites:
+            if observed is not expected:
+                raise ValueError(
+                    "Invalid worker observation:\n"
+                    "  availability: available\n"
+                    f"  expected: {field} to be {expected.value}\n"
+                    f"  got: {field} is {observed.value}"
+                )
+
+        if value.attempt_capacity is None:
+            raise ValueError(
+                "Invalid worker observation:\n"
+                "  availability: available\n"
+                "  expected: attempt_capacity to be known\n"
+                "  got: attempt_capacity is None"
+            )
+
+
+class OperationKind(StrEnum):
+    """Identify a bounded infrastructure operation.
+
+    Attributes
+    ----------
+    CONNECTION_ROUND : str
+        One bounded round of worker connection or reconnection attempts.
+    TRANSFER : str
+        Bounded transfer of a dataset, model artifact, or completed result.
+    PERSISTENCE : str
+        Bounded persistence of a prepared artifact or received result.
+
+    Notes
+    -----
+    These kinds cover only infrastructure operations with explicit attempt
+    limits. They do not make model reconstruction, fitting, prediction, report
+    computation, or sample-influence evaluation retryable.
+
+    Each separately scheduled connection round has its own operation identity.
+    Transfer and persistence operate on existing artifacts and do not authorize
+    scientific recomputation.
+
+    Node usage scope: Shared - Used by both root and worker nodes.
+    """
+
+    CONNECTION_ROUND = "connection_round"
+    TRANSFER = "transfer"
+    PERSISTENCE = "persistence"
+
+
+class OperationStatus(StrEnum):
+    """Identify the observed progress of a bounded operation.
+
+    Attributes
+    ----------
+    PENDING : str
+        No operation attempt has begun.
+    RUNNING : str
+        At least one operation attempt has begun and handling remains active.
+    SUCCEEDED : str
+        The operation completed successfully.
+    FAILED : str
+        The latest operation attempt failed.
+    CANCELLED : str
+        Operation handling was cancelled without establishing success.
+
+    Notes
+    -----
+    ``FAILED`` does not independently mean that the attempt limit is exhausted.
+    Exhaustion is derived when a failed operation's attempt count reaches its
+    configured limit. A failed operation below that limit may still be retried
+    by its later policy owner.
+
+    ``SUCCEEDED`` may retain an earlier failure record because a later attempt
+    can succeed. ``CANCELLED`` does not imply scientific failure, result
+    acceptance, or worker-process unavailability.
+
+    This enum records progress only. It does not begin, retry, cancel, or
+    otherwise perform an operation.
+
+    Node usage scope: Shared - Used by both root and worker nodes.
+    """
+
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class BoundedOperation:
+    """Record the progress of one bounded infrastructure operation.
+
+    Parameters
+    ----------
+    operation_id : OperationId
+        Identity of this independently bounded operation.
+    kind : OperationKind
+        Infrastructure operation governed by the attempt limit.
+    context : TraceContext
+        Operational context associated with this operation.
+    attempt_limit : int
+        Total permitted attempts, including the initial attempt.
+    attempts_made : int
+        Number of operation attempts already begun.
+    status : OperationStatus
+        Current observed operation progress.
+    last_failure : FailureRecord | None
+        Most recent failure, or ``None`` when no attempt has failed. A
+        successful operation may retain an earlier failure from a prior
+        attempt.
+
+    Notes
+    -----
+    Exhaustion is derived when ``status`` is ``FAILED`` and
+    ``attempts_made == attempt_limit``. It is not stored as another status or
+    flag.
+
+    This immutable record preserves supplied observations only. Construction
+    does not validate count bounds, status consistency, operation context, or
+    failure provenance. It does not schedule, begin, retry, cancel, or reset an
+    operation, and it does not perform scientific recomputation.
+
+    Node usage scope: Shared - Used by both root and worker nodes.
+    """
+
+    operation_id: OperationId
+    kind: OperationKind
+    context: TraceContext
+    attempt_limit: int
+    attempts_made: int
+    status: OperationStatus
+    last_failure: FailureRecord | None
+
+
+def _validate_bounded_operation_counts(value: BoundedOperation) -> None:
+    """Validate a bounded operation's total limit and begun-attempt count."""
+    # Validate exact integer types before applying numeric bounds.
+    validate_declared_types(
+        value.attempt_limit,
+        expected_type=int,
+        field="attempt_limit",
+    )
+    validate_declared_types(
+        value.attempts_made,
+        expected_type=int,
+        field="attempts_made",
+    )
+
+    # The limit includes the initial attempt and therefore cannot be zero.
+    if value.attempt_limit < 1:
+        raise ValueError(
+            "Invalid bounded operation:\n"
+            "  field: attempt_limit\n"
+            "  expected: an integer greater than or equal to 1\n"
+            f"  got: {value.attempt_limit!r}"
+        )
+
+    # Begun attempts cannot be negative or exceed the fixed total limit.
+    if not 0 <= value.attempts_made <= value.attempt_limit:
+        raise ValueError(
+            "Invalid bounded operation:\n"
+            "  field: attempts_made\n"
+            f"  expected: an integer from 0 through {value.attempt_limit}\n"
+            f"  got: {value.attempts_made!r}"
+        )
+
+
+def _validate_bounded_operation_failure(value: BoundedOperation) -> None:
+    """Validate an operation's optional last failure and its provenance."""
+    if value.last_failure is None:
+        return
+
+    # Validate the complete failure record before comparing its provenance.
+    try:
+        validate_failure_record(value.last_failure)
+    except (TypeError, ValueError) as error:
+        raise type(error)(f"last_failure is invalid: {error}") from error
+
+    # The retained failure must describe the same complete operation context.
+    if value.last_failure.context != value.context:
+        raise ValueError(
+            "Invalid bounded operation:\n"
+            f"  operation_id: {value.operation_id!r}\n"
+            "  expected: last_failure.context to equal context\n"
+            "  got: last_failure.context differs from context"
+        )
+
+    # Each operation kind permits only its architecturally assigned scopes.
+    permitted_scopes: dict[OperationKind, tuple[FailureScope, ...]] = {
+        OperationKind.CONNECTION_ROUND: (FailureScope.WORKER_MANAGEMENT,),
+        OperationKind.TRANSFER: (
+            FailureScope.DATA_SYNC,
+            FailureScope.RESULT_TRANSFER,
+        ),
+        OperationKind.PERSISTENCE: (
+            FailureScope.DATA_PREPARATION,
+            FailureScope.RESULT_PERSISTENCE,
+        ),
+    }
+    if value.last_failure.scope not in permitted_scopes[value.kind]:
+        expected = ", ".join(scope.value for scope in permitted_scopes[value.kind])
+        raise ValueError(
+            "Invalid bounded operation:\n"
+            f"  operation_id: {value.operation_id!r}\n"
+            f"  kind: {value.kind.value}\n"
+            f"  expected: last_failure.scope to be one of {expected}\n"
+            f"  got: {value.last_failure.scope.value}"
+        )
+
+
+def _validate_bounded_operation_status(value: BoundedOperation) -> None:
+    """Validate operation status against counts and retained failure state."""
+    # Pending is the pristine state before any attempt or failure.
+    if value.status is OperationStatus.PENDING:
+        if value.attempts_made != 0:
+            raise ValueError(
+                "Invalid bounded operation:\n"
+                "  status: pending\n"
+                "  expected: attempts_made to be 0\n"
+                f"  got: {value.attempts_made}"
+            )
+        if value.last_failure is not None:
+            raise ValueError(
+                "Invalid bounded operation:\n"
+                "  status: pending\n"
+                "  expected: last_failure to be None\n"
+                f"  got: failure {value.last_failure.failure_id!r}"
+            )
+        return
+
+    # Active, successful, and failed states require a begun attempt.
+    if (
+        value.status
+        in (
+            OperationStatus.RUNNING,
+            OperationStatus.SUCCEEDED,
+            OperationStatus.FAILED,
+        )
+        and value.attempts_made == 0
+    ):
+        raise ValueError(
+            "Invalid bounded operation:\n"
+            f"  status: {value.status.value}\n"
+            "  expected: attempts_made to be at least 1\n"
+            "  got: 0"
+        )
+
+    # A failed state must retain the failure that explains it.
+    if value.status is OperationStatus.FAILED and value.last_failure is None:
+        raise ValueError(
+            "Invalid bounded operation:\n"
+            "  status: failed\n"
+            "  expected: last_failure to contain the latest failure\n"
+            "  got: None"
+        )
+
+
+def validate_bounded_operation(value: BoundedOperation) -> None:
+    """Validate one bounded infrastructure-operation observation.
+
+    Parameters
+    ----------
+    value : BoundedOperation
+        Operation identity, kind, context, limit, progress, status, and
+        optional latest failure.
+
+    Raises
+    ------
+    TypeError
+        If the record or a field has an incorrect runtime type.
+    ValueError
+        If an identity, count, status relationship, context association, or
+        failure provenance is invalid.
+
+    Notes
+    -----
+    ``attempt_limit`` is the total number of allowed attempts, including the
+    initial attempt. Exhaustion is represented by ``FAILED`` with
+    ``attempts_made == attempt_limit`` and is not stored separately.
+
+    Successful and running operations may preserve a prior failure. Cancelled
+    operations may have zero or more begun attempts. Validation does not reset
+    a budget, schedule a retry, create a new connection round, transfer or
+    persist an artifact, or repeat scientific computation.
+
+    Node usage scope: Shared - Used by both root and worker nodes.
+    """
+    # Validate the outer record and direct vocabulary fields before inspection.
+    if not isinstance(value, BoundedOperation):
+        validate_declared_types(value, expected_type=BoundedOperation)
+    validate_identifier(value.operation_id, field="operation_id")
+    validate_declared_types(
+        value.kind,
+        expected_type=OperationKind,
+        field="kind",
+    )
+    validate_declared_types(
+        value.status,
+        expected_type=OperationStatus,
+        field="status",
+    )
+
+    # Validate and align the operation's trace context with its identity.
+    try:
+        validate_trace_context(value.context)
+    except (TypeError, ValueError) as error:
+        raise type(error)(f"context is invalid: {error}") from error
+    if value.context.operation_id != value.operation_id:
+        raise ValueError(
+            "Invalid bounded operation:\n"
+            f"  operation_id: {value.operation_id!r}\n"
+            "  expected: context.operation_id to equal operation_id\n"
+            f"  got: {value.context.operation_id!r}"
+        )
+
+    # Validate independent counts before relationships that consume them.
+    _validate_bounded_operation_counts(value)
+
+    # Validate optional failure provenance before status requirements.
+    _validate_bounded_operation_failure(value)
+
+    # Validate the final status/count/failure relationship.
+    _validate_bounded_operation_status(value)
