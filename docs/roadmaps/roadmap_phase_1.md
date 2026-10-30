@@ -657,8 +657,8 @@ to their later phases.
 | `WorkerProcessStatus` | `unknown`, `running`, `unavailable` |
 | `OwnershipStatus` | `unknown`, `owned_by_root`, `not_owned_by_root` |
 | `CompatibilityStatus` | `unchecked`, `compatible`, `incompatible` |
-| `ParentReadiness` | `parent_id: ParentId`, `dataset_ready: bool`, `evaluation_ready: bool`, `partition_ready: bool` |
-| `WorkerObservation` | `worker_id: WorkerId`, `availability: WorkerAvailability`, `process_status: WorkerProcessStatus`, `ownership: OwnershipStatus`, `compatibility: CompatibilityStatus`, `parent_readiness: tuple[ParentReadiness, ...]`, `attempt_capacity: int | None`, `active_attempt_ids: tuple[AttemptId, ...]` |
+| `ParentContextReadiness` | `parent_id: ParentId`, `dataset_ready: bool`, `evaluation_ready: bool`, `partition_ready: bool` |
+| `WorkerObservation` | `worker_id: WorkerId`, `availability: WorkerAvailability`, `process_status: WorkerProcessStatus`, `ownership: OwnershipStatus`, `compatibility: CompatibilityStatus`, `parent_readiness: tuple[ParentContextReadiness, ...]`, `attempt_capacity: int | None`, `active_attempt_ids: tuple[AttemptId, ...]` |
 | `OperationKind` | `connection_round`, `transfer`, `persistence` |
 | `OperationStatus` | `pending`, `running`, `succeeded`, `failed`, `cancelled` |
 | `BoundedOperation` | `operation_id: OperationId`, `kind: OperationKind`, `context: TraceContext`, `attempt_limit: int`, `attempts_made: int`, `status: OperationStatus`, `last_failure: FailureRecord | None` |
@@ -873,7 +873,7 @@ approved unit. Generated dataclass methods do not imply planned custom methods.
 | 5 | `RegressionPredictions`; `ClassificationPredictions`; `PredictionBatch` | `validate_regression_predictions`; `validate_classification_predictions` | `tests/contracts/test_prediction.py` |
 | 6 | `ReportStatus`; `ReportOutcome`; `EvaluationOutcome`; `AttemptResult` | `validate_report_outcome`; `validate_attempt_result`; `derive_evaluation_outcome` | `tests/contracts/test_result.py` |
 | 7 | Execution/attempt/stop enums; `ParentProgress`; `StopDisposition`; `AttemptProgress` | `validate_parent_progress`; `validate_stop_disposition`; `validate_attempt_progress` | `tests/contracts/test_state.py` |
-| 8 | Worker/ownership/compatibility enums; `ParentReadiness`; `WorkerObservation` | `validate_worker_observation` | `tests/contracts/test_state.py` |
+| 8 | Worker/ownership/compatibility enums; `ParentContextReadiness`; `WorkerObservation` | `validate_worker_observation` | `tests/contracts/test_state.py` |
 | 9 | Operation enums; `BoundedOperation` | `validate_bounded_operation` | `tests/contracts/test_state.py` |
 | 10 | Receipt/persistence enums; `ReceptionRecord` | `validate_reception_record`; `validate_reception_set` | `tests/contracts/test_state.py` |
 | 11 | `CompatibilityMetadata`; declared supported-series constant | `validate_compatibility_metadata`; `require_compatible` | `tests/contracts/test_compatibility.py` |
