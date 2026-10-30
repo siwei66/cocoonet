@@ -1,0 +1,40 @@
+Read the complete root `AGENTS.md`, `architecture.md`, and `roadmap.md` carefully.
+
+Plan **Phase 1 only** according to the Phase 1 scope defined in `roadmap.md`.
+
+Create:
+
+`docs/roadmaps/roadmap_phase_1.md`
+
+The phase roadmap must translate Phase 1 into an implementation-ready plan while following all development and approval rules in `AGENTS.md`.
+
+Define, where applicable:
+
+- Phase 1 goal, scope, and out-of-scope items;
+- entry and completion criteria;
+- relevant architecture contracts and invariants;
+- required data models, fields, types, and invariants;
+- public APIs and signatures;
+- computation formulas and numerical behavior;
+- planned classes, functions, and methods with concise responsibilities;
+- directly corresponding tests;
+- dependency-safe implementation order;
+- validation requirements;
+- decisions explicitly deferred to later phases.
+
+Plan implementation at function-/method-level granularity so later development can proceed mostly forward without unnecessary refactoring or jumping between subsystems.
+
+Resolve all ambiguities and contracts required to implement Phase 1. If a required Phase 1 design decision cannot be resolved from `AGENTS.md`, `architecture.md`, and `roadmap.md`, do not guess: report it as a blocking ambiguity.
+
+Do not prematurely design later phases. Decisions needed only later should be explicitly deferred.
+
+Do not implement any source code or tests.
+
+Do not modify `AGENTS.md`, `architecture.md`, or `roadmap.md`. Modify only `docs/roadmaps/roadmap_phase_1.md`.
+
+After creating the phase roadmap:
+
+1. summarize its implementation order;
+2. report any remaining blocking ambiguity;
+3. report any inconsistency found among `AGENTS.md`, `architecture.md`, and the Phase 1 scope;
+4. stop and wait for my approval before any Phase 1 implementation begins.
