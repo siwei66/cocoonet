@@ -1196,3 +1196,66 @@ def validate_bounded_operation(value: BoundedOperation) -> None:
 
     # Validate the final status/count/failure relationship.
     _validate_bounded_operation_status(value)
+
+
+class ReceiptStatus(StrEnum):
+    """Identify root-side receipt progress for a selected result file.
+
+    Attributes
+    ----------
+    NOT_RECEIVED : str
+        Receipt of the selected result file has not begun.
+    INCOMPLETE : str
+        Receipt has begun, but the complete selected result file has not been
+        received.
+    COMPLETE : str
+        The complete selected result file has been received.
+
+    Notes
+    -----
+    Receipt progress is independent of persistence and acceptance. Complete
+    receipt does not establish that the file was durably stored or accepted,
+    while incomplete receipt may coexist with an incomplete persistent write.
+
+    This enum records root-side reception progress only. It does not select an
+    attempt, receive bytes, inspect a result, persist a file, acknowledge
+    persistence, or accept a logical result.
+
+    Node usage scope: Root only - Used exclusively by the root node.
+    """
+
+    NOT_RECEIVED = "not_received"
+    INCOMPLETE = "incomplete"
+    COMPLETE = "complete"
+
+
+class PersistenceStatus(StrEnum):
+    """Identify root-side persistence progress for a selected result file.
+
+    Attributes
+    ----------
+    NOT_STARTED : str
+        Persistent writing of the selected result file has not begun.
+    INCOMPLETE : str
+        Persistent writing has begun, but the complete selected result file has
+        not been durably stored.
+    COMPLETE : str
+        The complete selected result file has been durably stored.
+
+    Notes
+    -----
+    Persistence progress is independent of receipt and acceptance. Incomplete
+    persistence may coexist with incomplete receipt as bytes are written, but
+    complete persistence requires complete receipt. Complete persistence does
+    not independently accept the logical result.
+
+    This enum records root-side persistence progress only. It does not receive
+    bytes, inspect a result, write a file, verify durable storage, acknowledge
+    persistence, or accept a logical result.
+
+    Node usage scope: Root only - Used exclusively by the root node.
+    """
+
+    NOT_STARTED = "not_started"
+    INCOMPLETE = "incomplete"
+    COMPLETE = "complete"

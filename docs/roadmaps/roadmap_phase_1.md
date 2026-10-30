@@ -663,7 +663,7 @@ to their later phases.
 | `OperationStatus` | `pending`, `running`, `succeeded`, `failed`, `cancelled` |
 | `BoundedOperation` | `operation_id: OperationId`, `kind: OperationKind`, `context: TraceContext`, `attempt_limit: int`, `attempts_made: int`, `status: OperationStatus`, `last_failure: FailureRecord | None` |
 | `ReceiptStatus` | `not_received`, `incomplete`, `complete` |
-| `PersistenceStatus` | `not_persisted`, `incomplete`, `complete` |
+| `PersistenceStatus` | `not_started`, `incomplete`, `complete` |
 | `ReceptionRecord` | `parent_id: ParentId`, `model_id: ModelId`, `selected_attempt_id: AttemptId | None`, `selection_evidence_id: ArtifactId | None`, `receipt: ReceiptStatus`, `persistence: PersistenceStatus`, `result_artifact_id: ArtifactId | None`, `accepted: bool` |
 
 `first_started_at` is a finite, nonnegative UTC Unix timestamp in seconds describing an observed execution start;

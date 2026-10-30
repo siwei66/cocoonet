@@ -38,6 +38,8 @@ from cocoonet._contracts.state import (
     OwnershipStatus,
     ParentContextReadiness,
     ParentProgress,
+    PersistenceStatus,
+    ReceiptStatus,
     StopDisposition,
     StopReason,
     StopStatus,
@@ -1636,3 +1638,27 @@ def test_validate_bounded_operation_rejects_wrong_outer_record() -> None:
     assert "BoundedOperation" in message
     assert "NoneType" in message
     assert "None" in message
+
+
+def test_receipt_status_has_exact_string_vocabulary() -> None:
+    """Expose only the planned root-side result-receipt states."""
+    assert tuple(ReceiptStatus) == (
+        ReceiptStatus.NOT_RECEIVED,
+        ReceiptStatus.INCOMPLETE,
+        ReceiptStatus.COMPLETE,
+    )
+    assert ReceiptStatus.NOT_RECEIVED == "not_received"
+    assert ReceiptStatus.INCOMPLETE == "incomplete"
+    assert ReceiptStatus.COMPLETE == "complete"
+
+
+def test_persistence_status_has_exact_string_vocabulary() -> None:
+    """Expose only the planned root-side result-persistence states."""
+    assert tuple(PersistenceStatus) == (
+        PersistenceStatus.NOT_STARTED,
+        PersistenceStatus.INCOMPLETE,
+        PersistenceStatus.COMPLETE,
+    )
+    assert PersistenceStatus.NOT_STARTED == "not_started"
+    assert PersistenceStatus.INCOMPLETE == "incomplete"
+    assert PersistenceStatus.COMPLETE == "complete"
