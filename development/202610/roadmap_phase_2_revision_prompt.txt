@@ -1,0 +1,135 @@
+Please answer or solve the following issues one by one:
+
+---
+
+ISSUE 1:
+
+For `Filesystem anchors such as / or C:\ are always rejected. `: Also reject Python installation directory, python package installation directory like .../site-packages/, and the repository root of cocoonet, so that initialization risk when overwrite=True is minimized.
+
+Please note that default of overwrite must be False.
+
+Propose revising the dev docs for this update, making minimal necessary changes.
+
+---
+
+ISSUE 2:
+
+For worker node, you could define an internal file storage layout like:
+```text
+<root_dir>/
+  cocoonet/
+    task_<task_id>/
+      attempt_<attempt_id>/
+        results/
+        logs/
+```
+This is an example, please do not view this as ground truth and inspect the dev docs and design an approporiate consistent layout. All files and dirs must be clear, human-friendly and public.
+
+---
+
+ISSUE 3:
+
+However, for root node, the files and directories for the generated and received results must be all public instead of internal and private, and they must not duplicate to minimize storage usage and write operation.
+
+The same rule also applies for worker node result layout, all files and dirs must be clear, human-friendly and public.
+
+An example of the layout could be:
+```text
+<user-defined_cocoonet_work_dir_for_a_task>/
+  attempt_<attempt_id>/
+    meta.txt
+    data_reference.csv
+    partition_schedule.csv
+    execution_configuration.csv
+    execution_state/
+    attempt_results/
+    result_summary/
+    logs/
+```
+Please do not view this exemplar layout as ground truth and verify its consistency with the fundamental demand of the dev docs before application.
+Report any ambiguity or inconsistency.
+
+Other requirements:
+- Prefer human-readable formats like csv and txt for small files like single logs, schedules, configurations etc.
+- For dictionary-like information, store keys as the first column and values as second column.
+- For 2-dimensional tables, store identifiers as the first columns and other attributes as the later columns.
+- For texts, store as text files, you can determine whether to use `.log` thematic extension or `.txt` common extension.
+
+You should follow the dev instruction from `AGENTS.md` and revise the dev docs first and then apply the corresponding changes to the codes to make them consistent. So please propose necessary revisions to the `AGENTS.md`, `architecture.md` and root `roadmap.md` first and solve any inconsistencies before revising the `roadmap_phase_2.md`.
+
+---
+
+ISSUE 4:
+
+For the following design:
+
+```text
+Each artifact has an opaque ArtifactId. IDs are never inserted directly into filesystem paths. Filenames are derived
+```
+
+I think this is over-engineering for cocoonet, please make filenames directly, clear and human-reading-friendly like:
+```text
+validation_results
+classification_performance
+regression_performance
+sample_influences
+residual_analysis
+
+```
+The identifiers can be stored directly in the files, and the validation could use those identifiers instead of relying on filenames. This is a simpler and more human-interpretable design than hashed ID in the filenames, and will not weaken validation.
+
+---
+
+ISSUE 5:
+
+Issue 5 is not a real issue but additional clarification of the public APIs to execute the cocoonet model evaluation pipeline for the users.
+
+I make the additional clarifications for the interpretation of working process of cocoonet. They are designed in the later phases, but I clarify them here so that you can understand the demand for the persistency steps clearly without misinterpretation.
+
+The expected public API for cocoonet root node usage is:
+```text
+# Evaluation experiment configuration
+experiment_data = data_template(save_path, input_type='path')  # save_path is optional
+
+# After filling the template
+experiment = Experiment(data_entry=experiment_data, input_type='path', validation_method='5-fold')
+# Or
+experiment = Experiment(data_entry_path=save_path, input_type='path', validation_method='5-fold')
+
+# Or if the input_type is data values themselves
+experiment_data = data_template(save_path, input_type='value')
+# Then
+experiment = Experiment(data_entry=experiment_data, input_type='value', validation_method='5-fold')
+# Or
+experiment = Experiment(data_entry_path=save_path, input_type='value', validation_method='5-fold')
+
+
+# Evaluation pipeline
+evaluation = Evaluation(experiment)
+evaluation.add_model(model, model_label, hyperparameters, training_parameters)
+# Or
+evaluation.add_model(model_path, model_label, hyperparameters, training_parameters)
+
+# Or
+evaluation = Evaluation(
+    on=experiment,
+    model_with_params=[
+        {model_label: ..., model: ..., model_path: ..., hyperparameters: ..., training_parameters: ...},  # Provide either model or model path only
+        ...
+    ]
+)
+
+evaluation.ls_model(id, label, class_name, has_hyperparameter, has_training_parameter, exact_match=False, verbose=True)
+evaluation.rm_model(id, label, class_name, has_hyperparameter, has_training_parameter, exact_match=False, verbose=True)
+
+evaluation.add_worker(...)
+evaluation.ls_worker(...)
+evaluation.rm_worker(...)
+
+# Execute on the root node dir work_dir as the working directory for this parent task
+evaluation.run(work_dir, n_parallel=-1, resume=True, preflight_coverage=0.01, progress=True) # -1 means use maximum evaluation pipeline level parallelization on the worker nodes
+```
+
+As described above, data persistency is executed in most cases automatically without explicit public APIs to save the files, because cocoonet is a file-based pipeline itself.
+
+Please report any blocking ambiguity or inconsistency with dev docs if you find.
