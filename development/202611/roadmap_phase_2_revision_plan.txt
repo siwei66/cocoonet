@@ -1,0 +1,449 @@
+I treated the attachment as design advice, while the current request authorized analysis only. I reviewed it against the governing docs, the Phase 1 roadmap/contracts, and the proposed Phase 2 roadmap. No file was modified.
+
+## Issue 1 — Protected initialization directories
+
+### Analysis
+
+The advice is sound, but rejecting only the exact Python or repository directory is not sufficient. Selecting an ancestor with `overwrite=True` could delete that protected directory as part of clearing the selected root.
+
+The current contracts already require explicit `overwrite=True`, while the Phase 2 roadmap already specifies `overwrite: bool = False` and rejects filesystem anchors ([Phase 2 roadmap](E:/swectral_new/cocoonet/docs/roadmaps/roadmap_phase_2.md:168)). The default is not yet stated consistently in the governing documents ([architecture](E:/swectral_new/cocoonet/docs/architecture.md:223), [AGENTS.md](E:/swectral_new/cocoonet/AGENTS.md:12)).
+
+### Verification and recommended interpretation
+
+I recommend defining protected locations from canonical physical paths:
+
+- Every filesystem anchor.
+- `sys.prefix`, `sys.base_prefix`, `sys.exec_prefix`, and `sys.base_exec_prefix`.
+- Standard-library and package-installation directories reported by `sysconfig`.
+- System and user `site-packages` directories reported by `site`.
+- The installed `cocoonet` package directory.
+- The Cocoonet source repository root when it can be identified from a source checkout.
+
+Reject a candidate when:
+
+- it equals a protected location;
+- it is an ancestor whose clearing would remove a protected location;
+- it lies inside a Python runtime or package-installation directory.
+
+A dedicated output subdirectory inside the Cocoonet repository can remain allowed, but the repository root itself and its ancestors must be rejected. This permits normal development work directories without allowing the repository to be cleared.
+
+All comparisons should use the Phase 2 canonical physical-path resolution so symlink aliases cannot bypass the protection.
+
+### Proposed revisions by file
+
+**`AGENTS.md`**
+
+Add only the high-level invariant:
+
+- `overwrite` defaults to `False`;
+- filesystem anchors and protected Python/Cocoonet installation or repository locations cannot be managed roots;
+- protection is checked before any mutation.
+
+Do not put runtime-discovery implementation details in this file.
+
+**`docs/architecture.md`**
+
+Revise Section 2.3 to:
+
+- state `overwrite=False` as the public default;
+- define the protected-location categories;
+- specify the equality/ancestor/runtime-descendant rules;
+- require canonical physical-path comparison before ownership checks or filesystem mutation.
+
+**`docs/roadmap.md`**
+
+Extend Phase 2 scope and exit criteria with protected-root discovery, validation, and tests.
+
+**`docs/roadmaps/roadmap_phase_1.md`**
+
+No change. Phase 1 contains no filesystem preparation behavior.
+
+**`docs/roadmaps/roadmap_phase_2.md`**
+
+Revise Sections 3, 5, 7, 8, and 10 to add:
+
+- a pure protected-location discovery function;
+- a pure managed-root safety validator;
+- invocation before ownership validation is followed by any clearing;
+- tests for virtual environments, system/user site-packages, installed package paths, repository root, ancestors, symlink aliases, and ordinary safe directories;
+- explicit `overwrite=False` throughout.
+
+## Issue 2 — Worker storage layout
+
+### Analysis
+
+A worker layout is needed. The current Phase 2 roadmap defines only one root-oriented `.cocoonet` layout and places both root and worker logs there ([Phase 2 roadmap](E:/swectral_new/cocoonet/docs/roadmaps/roadmap_phase_2.md:215)). That does not adequately represent independent online workers or the separate root-local worker process.
+
+The attachment’s `task_<task_id>` terminology should not be adopted. Cocoonet already distinguishes parent tasks, unit/model tasks, and execution attempts. A generic task ID would weaken that hierarchy.
+
+### Verified design
+
+The worker layout should separate reusable datasets from parent-specific execution context and attempt-specific results:
+
+```text
+<worker_storage_root>/
+  cocoonet/
+    datasets/
+      dataset_<dataset_id>/
+        data_reference.csv
+        synchronized_data/
+    parents/
+      parent_<parent_id>/
+        execution_configuration.dill
+        partition_schedule.dill
+        attempts/
+          attempt_<attempt_id>/
+            attempt_result.dill
+    logs/
+      worker_running.jsonl
+      worker_error.jsonl
+```
+
+Important qualifications:
+
+- `partition_schedule.dill` on a worker is an execution-input copy, not another authoritative partition. The single authoritative copy remains on the root.
+- The worker generates exactly one `attempt_result.dill` per completed attempt, consistent with the one-result-file contract ([architecture](E:/swectral_new/cocoonet/docs/architecture.md:1427)).
+- Logs are shared structured streams containing parent/model/attempt identifiers, avoiding many redundant log files.
+- A root-local worker uses this worker layout independently from coordinator storage.
+- Later phases may add model-input or synchronization files only after defining their schemas; Phase 2 should not invent those files now.
+- “Public” on a worker should mean documented and operator-inspectable—not remotely browsable by users. Exposing a public worker’s filesystem would conflict with its security boundary.
+
+### Proposed revisions by file
+
+**`AGENTS.md`**
+
+Add a high-level requirement that root and worker managed storage are distinct, documented, human-identifiable layouts. Avoid exact path trees here.
+
+**`docs/architecture.md`**
+
+Revise Sections 2.4, 6.1, 6.2, and 6.4 to define:
+
+- separate coordinator and worker storage ownership;
+- reusable dataset, parent, and attempt scopes;
+- the worker copy versus authoritative root partition distinction;
+- operator inspectability without remote filesystem exposure.
+
+**`docs/roadmap.md`**
+
+Assign responsibilities explicitly:
+
+- Phase 2: worker layout/path/publication foundations;
+- Phase 12: generation of `attempt_result.dill`;
+- Phase 17: synchronized dataset and parent-context population;
+- Phase 19: private-worker cleanup;
+- Phase 20: mandatory public-worker cleanup.
+
+**`docs/roadmaps/roadmap_phase_1.md`**
+
+No change. Its parent/attempt identities already support this hierarchy.
+
+**`docs/roadmaps/roadmap_phase_2.md`**
+
+Replace the single `StorageLayout` concept with distinct `RootStorageLayout` and `WorkerStorageLayout` records and purpose-specific path functions. Phase 2 should create/open only the directories needed by its persistence primitives; later-phase files should be documented but not prematurely created.
+
+## Issue 3 — Public, human-identifiable root storage
+
+### Analysis
+
+The goal is valid: root results and operational files should not be hidden behind opaque filenames in a private `.cocoonet` directory.
+
+The attachment’s example cannot be adopted literally because it places shared files under every attempt. That would duplicate:
+
+- `data_reference.csv`;
+- the authoritative partition schedule;
+- committed execution configuration;
+- execution state.
+
+It also introduces `result_summary/`, which risks maintaining a second summary independently from the authoritative attempt result. Existing architecture explicitly discourages duplicate report identities and independently maintained summaries ([architecture](E:/swectral_new/cocoonet/docs/architecture.md:1444)).
+
+Some files must remain dill:
+
+- the authoritative partition must be one dill file;
+- execution configuration/state contain typed nested records;
+- an attempt’s reports must be packaged into one serialized result file.
+
+Consequently, “public” should mean visible, documented, clearly named, and directly locatable—not that every authoritative payload is plain text.
+
+### Recommended root layout
+
+```text
+<root_dir>/
+  cocoonet_metadata.csv
+  data_reference.csv
+  partitions/
+    partition_<partition_id>.dill
+  execution_configuration.dill
+  execution_state.dill
+  attempt_results/
+    attempt_<attempt_id>/
+      attempt_result.dill
+  logs/
+    root_running.jsonl
+    root_error.jsonl
+```
+
+Incomplete publication uses an adjacent `.partial` path.
+
+Format rules:
+
+- `cocoonet_metadata.csv`: two columns, `key,value`.
+- `data_reference.csv`: identifiers first, followed by metadata, targets, and source/feature fields.
+- Partition, configuration, state, and attempt results: dill containers because they are typed Cocoonet payloads.
+- Logs: JSON Lines because they are append-only structured record streams with nested context and tracebacks.
+- Human-readable report exports may later use CSV or text, but they should be created only when requested and marked as derived, non-authoritative output.
+- Do not automatically create `result_summary/` or a second representation of every report.
+- Temporary worker/root duplication during delivery is unavoidable: the worker must retain its result until root persistence is confirmed. Retention policy may delete the worker copy afterward.
+
+### Proposed revisions by file
+
+**`AGENTS.md`**
+
+Add the governing distinction:
+
+- managed root artifacts are user-visible and clearly named;
+- authoritative scientific payloads may remain serialized;
+- no automatic duplicate report or summary representation;
+- users may inspect but must not mutate files required for recovery.
+
+**`docs/architecture.md`**
+
+Revise Sections 2.3, 6.1–6.3, and 7.2 to define:
+
+- user-visible versus user-owned;
+- the normalized root layout;
+- which formats are authoritative;
+- when CSV/text is appropriate;
+- the prohibition on duplicated authoritative or independently maintained summary data.
+
+**`docs/roadmap.md`**
+
+Revise Phase 2 to require visible semantic storage. Revise Phase 8 or Phase 21 to own optional human-readable report exports. Keep Phase 12’s one-dill-result-per-attempt requirement.
+
+**`docs/roadmaps/roadmap_phase_1.md`**
+
+No schema change is required. The one-attempt-result envelope already supports a single authoritative file.
+
+**`docs/roadmaps/roadmap_phase_2.md`**
+
+This requires a substantial revision:
+
+- replace `.cocoonet/` with the visible layout;
+- replace `root.json` with a two-column metadata CSV if that preference is approved;
+- separate root and worker layouts;
+- remove automatic duplicate metadata/result sidecars;
+- update all path functions, tests, completion criteria, and implementation order.
+
+## Issue 4 — Opaque hashed artifact filenames
+
+### Analysis
+
+I agree that the SHA-256 filename mapping is unnecessary for Cocoonet’s known artifact categories. It makes inspection and recovery harder for humans and introduces a generic artifact abstraction where purpose-specific locations are sufficient.
+
+However, the proposed filenames such as `validation_results` and `classification_performance` cannot be separate authoritative result files. They are report categories inside the one attempt-result envelope. Separate files would contradict the established one-file-per-attempt rule ([AGENTS.md](E:/swectral_new/cocoonet/AGENTS.md:831)).
+
+### Recommended resolution
+
+Remove:
+
+- hash-derived artifact filenames;
+- the generic `artifact_paths()` dispatch;
+- generic path construction based only on `ArtifactReference`;
+- UUID generation solely to produce storage filenames.
+
+Retain `ArtifactId` as the Phase 1 logical handle because execution and reception state already refer to worker-side and root-side result artifacts.
+
+Use semantic paths:
+
+- partition: `partitions/partition_<partition-id>.dill`;
+- configuration: `execution_configuration.dill`;
+- state: `execution_state.dill`;
+- result: `attempt_results/attempt_<attempt-id>/attempt_result.dill`.
+
+The exact IDs remain in the container metadata and payload and are validated after opening the designated semantic path. The filename is not trusted as identity evidence.
+
+Parent/partition/attempt directory tokens still need path safety. Raw opaque strings must not be concatenated into paths. Use a documented reversible path-component encoding that leaves ordinary Cocoonet-generated safe ASCII IDs readable, while escaping separators, reserved names, and unsupported characters. This is safer and more inspectable than hashing.
+
+Names such as:
+
+```text
+validation_results.csv
+classification_performance.csv
+regression_performance.csv
+sample_influences.csv
+residual_analysis.csv
+```
+
+should be reserved for optional later human-readable exports, not Phase 2 authoritative artifacts.
+
+### Proposed revisions by file
+
+**`AGENTS.md`**
+
+No detailed filename algorithm belongs here. At most add that authoritative results remain one file per attempt and human-readable exports are derived.
+
+**`docs/architecture.md`**
+
+Record the decision in Sections 6.2, 7.2, and 10:
+
+- semantic designated paths;
+- identifiers validated from file metadata;
+- no hash-derived filenames;
+- report-category filenames reserved for derived exports.
+
+**`docs/roadmap.md`**
+
+Revise Phase 2 to request purpose-specific persistence functions rather than a generic artifact repository. Revise Phase 8/21 to own optional exports.
+
+**`docs/roadmaps/roadmap_phase_1.md`**
+
+No change to `ArtifactId`. It already says the identifier is a logical handle and does not define a filename ([Phase 1 roadmap](E:/swectral_new/cocoonet/docs/roadmaps/roadmap_phase_1.md:183)).
+
+**`docs/roadmaps/roadmap_phase_2.md`**
+
+Remove or redesign:
+
+- `ArtifactReference`;
+- `new_artifact_id()` as a path-generation facility;
+- SHA-256 path computation;
+- generic `artifact_paths()`.
+
+Replace them with purpose-specific path and persistence functions while retaining common container-writing helpers.
+
+## Issue 5 — Proposed public workflow API
+
+### Analysis
+
+The overall separation between experiment description and evaluation control is reasonable, and automatic persistence is consistent with Cocoonet being file-backed. The exact API cannot yet be adopted because several parts conflict with or remain ambiguous against the current lifecycle.
+
+### Verified consistencies
+
+- `Experiment` can represent prospective dataset and evaluation settings.
+- `Evaluation` can represent the reusable root-side computation/controller.
+- Singular and bulk model/worker management is already required.
+- Supplying either a model object or model path is conceptually compatible with later model preparation, subject to topology and trust restrictions.
+- Persistence should normally occur automatically at the defined workflow boundaries.
+
+### Blocking inconsistencies and ambiguities
+
+1. **Working-directory timing**
+
+   The current contract requires the root directory before dataset preparation. `add_dataset()` writes `data_reference.csv` and the authoritative partition before start. Supplying `work_dir` only to `run()` is therefore too late.
+
+   Recommended resolution: supply the work directory to `Evaluation` construction or an explicit `initialize(work_dir, overwrite=False)` call before experiment/dataset registration.
+
+2. **`run()` versus initialization, start, resume, and recovery**
+
+   `resume=True` conflates:
+
+   - unchanged-parent resume;
+   - process-restart recovery;
+   - fresh initialization;
+   - starting a first parent.
+
+   These have different safety and clearing rules. `run()` may be a convenience alias only after those transitions are explicitly defined; it must not silently initialize, overwrite, or adopt existing storage.
+
+3. **`data_template()` meaning**
+
+   `input_type="path"` could mean either:
+
+   - the template itself is supplied by path; or
+   - sample X values are file-backed paths.
+
+   Existing terminology distinguishes inline features, inline tensors, and file-backed samples. The API should use those terms.
+
+   A generated user input template is also a dataset source and must remain outside the Cocoonet-managed root.
+
+4. **Template return and save behavior**
+
+   It is unclear whether `data_template()` returns a DataFrame, a path, another object, or both, and what happens when `save_path` is omitted.
+
+5. **`validation_method="5-fold"`**
+
+   This does not encode stratification, grouping, masks, shuffle/random state, train-test configuration, LOO, or LOGO. A string shorthand may exist, but it must resolve to a typed root-side split configuration before `add_dataset()` persists the schedule.
+
+6. **Model object/path and parameter precedence**
+
+   The API must define:
+
+   - exact mutual exclusivity of `model` and `model_path`;
+   - model-family and task-kind determination;
+   - whether `hyperparameters` configure the supplied model or merely describe it;
+   - precedence when supplied parameters differ from the object’s state;
+   - private/local versus public-worker admissibility;
+   - when deserialization occurs.
+
+7. **`ls_model()` and `rm_model()`**
+
+   Filter combination, exact/substring matching, return types, zero/multiple matches, removal cardinality, and bulk atomicity are unresolved. Positional filter arguments should likely be keyword-only.
+
+8. **`n_parallel=-1`**
+
+   It must not override per-worker `n_attempt`, CPU reservation, model `n_jobs`, or GPU capacity. If retained, it should be a global scheduler cap where `-1` means all currently eligible effective attempt slots.
+
+9. **`preflight_coverage=0.01`**
+
+   This is the largest unresolved scientific ambiguity. The docs do not define:
+
+   - which samples or folds are used;
+   - deterministic versus random selection;
+   - whether fitting occurs;
+   - whether preflight results affect model admission;
+   - whether failures consume an attempt;
+   - whether preflight introduces leakage or favorable-run selection.
+
+   It should not enter a public signature until these questions are resolved.
+
+10. **`progress=True`**
+
+    This is presentation behavior and must remain separate from durable execution state and logs.
+
+### Proposed revisions by file
+
+**`AGENTS.md`**
+
+Do not add the exact proposed signatures. Add only:
+
+- persistence is automatic at `add_dataset()`, execution-configuration commitment, checkpoint, result, and logging boundaries;
+- public convenience APIs may not hide initialization, overwrite, recovery, or consolidation transitions.
+
+**`docs/architecture.md`**
+
+After the ambiguities above are resolved, add a public workflow subsection defining:
+
+- responsibilities of `Experiment` and `Evaluation`;
+- work-directory ownership and initialization timing;
+- exact run/start/resume/recovery semantics;
+- data-template meaning;
+- model-source exclusivity;
+- scheduler-cap semantics.
+
+**`docs/roadmap.md`**
+
+Allocate the API work by owning phase:
+
+- Phase 3: `Evaluation`, initialization, model/worker registry and list/remove semantics;
+- Phase 4: `data_template`, `Experiment`, input forms, validation configuration, and explicit dataset preparation;
+- Phases 5–6: model object/path and parameter behavior;
+- Phase 11: `n_parallel`;
+- Phase 13: `run()`/`start()` orchestration;
+- Phase 15: recovery/resume;
+- Phase 21: finalized examples and public documentation.
+
+**`docs/roadmaps/roadmap_phase_1.md`**
+
+No change. `class_name`, parameter-presence filters, and public containers are later configuration concerns.
+
+**`docs/roadmaps/roadmap_phase_2.md`**
+
+Do not add these public APIs. Phase 2 should state only that its private storage operations support later automatic persistence and do not determine the public workflow.
+
+## Recommended documentation revision order
+
+1. Revise `AGENTS.md` only for new governing invariants.
+2. Revise `docs/architecture.md` to settle public visibility, root/worker ownership, layout, semantic paths, and API lifecycle.
+3. Revise `docs/roadmap.md` to assign the new work to the correct phases.
+4. Leave the Phase 1 roadmap/contracts unchanged unless a later decision changes identity semantics.
+5. Rewrite the affected portions of `docs/roadmaps/roadmap_phase_2.md`.
+6. Obtain approval before any Phase 2 implementation.
+
+The principal blockers before revising Phase 2 are the precise meaning of “public” worker storage and the work-directory/run lifecycle. The `preflight_coverage` contract is also blocking for the later public execution API, but it does not block Phase 2 storage design.

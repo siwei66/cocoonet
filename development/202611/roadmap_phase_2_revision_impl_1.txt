@@ -1,0 +1,319 @@
+No file has been modified. The proposal below covers only new governing invariants for [AGENTS.md](E:/swectral_new/cocoonet/AGENTS.md).
+
+## Issue 1 — Protected root directories and overwrite default
+
+### Analysis
+
+The existing opening workflow establishes overwrite and dataset-source ownership rules, but it does not:
+
+- state that `overwrite` defaults to `False`;
+- protect Python installation/package directories;
+- protect the Cocoonet installation and repository;
+- prevent choosing an ancestor whose clearing would delete a protected location.
+
+These are appropriate governing safety invariants. Runtime discovery functions and platform-specific mechanics should remain in architecture and the Phase 2 roadmap.
+
+A dedicated work directory inside the repository should remain permitted. Rejecting every repository descendant would interfere with ordinary development and testing without materially improving safety.
+
+### Exact revision
+
+Under `**Reusable Computation and User Workflow:**`, replace the first bullet beginning with:
+
+> A computation instance is reusable root-side configuration...
+
+with:
+
+```markdown
+- A computation instance is reusable root-side configuration, not a parent evaluation task. Construction requires a
+  user-provided working directory, and `overwrite` defaults to `False`. Prepare a missing directory or accept an empty
+  one; reject a nonempty directory unless the user explicitly supplies `overwrite=True`. With that explicit opt-in,
+  clear its contents and prepare it for fresh execution. Successful construction/initialization sets
+  `state = initialized`. Initialization is distinct from recovery. The root working directory is Cocoonet-managed
+  persistent storage; configured user-owned dataset source paths must remain outside it. Validate this ownership
+  boundary and every protected-root restriction before preparing or clearing the directory.
+```
+
+Immediately after that replacement and before the existing dataset-source ownership bullet, insert:
+
+```markdown
+- Reject an unsafe managed root before creating, changing, or deleting any persistent file. Protected locations include
+  filesystem anchors; active Python installation roots; Python standard-library and package-installation directories,
+  including system and user `site-packages`; the installed Cocoonet package directory; and the Cocoonet source
+  repository root when it can be identified. Reject a proposed root that equals a protected location or is an ancestor
+  whose clearing would remove one. Also reject a proposed root located inside a Python installation, standard-library,
+  or package-installation directory. A dedicated child working directory inside the Cocoonet source repository remains
+  eligible when it is not itself another protected location. Apply these checks to canonical physical locations so
+  symlink, junction, spelling, and case aliases cannot bypass them.
+```
+
+### Revision summary
+
+This revision:
+
+- establishes `overwrite=False` as the default;
+- protects Python, package, Cocoonet installation, and repository locations;
+- protects those locations from deletion through an ancestor root;
+- permits a dedicated work directory below the repository;  # MY ADVICE: No, though not problematic, this is not a good practice, keep design simple and reject the entire repo dir as a whole.
+- requires rejection before any filesystem mutation.
+
+### Ambiguity
+
+The attachment did not specify whether every directory below the Cocoonet repository should be rejected. This proposal allows dedicated child work directories and rejects the repository root and dangerous ancestors. Approval of this interpretation is needed.
+
+MY ANSWER: Use simplest logic and reject the entire repo dir. Keep design clean.
+
+## Issue 2 — Separate worker storage ownership
+
+### Analysis
+
+The current execution-boundary section distinguishes the coordinator and root-local worker processes but does not explicitly distinguish their persistent storage scopes.
+
+The governing document should establish:
+
+- coordinator and worker storage are separate;
+- workers organize retained data using the existing dataset/parent/attempt hierarchy;
+- the root-local worker follows the worker-side rule;
+- worker partition files are execution copies, never competing authoritative schedules.
+
+The exact directory tree remains architecture-level detail.
+
+### Exact revision
+
+Under `**Local and Online Execution Boundaries:**`, insert the following bullets after the existing root-local-worker bullet ending with:
+
+> process separation alone does not replace those restrictions.
+
+```markdown
+- Root coordinator storage and each worker's managed storage are distinct ownership scopes, even when the worker runs
+  on the root machine. The root-local worker uses the worker-side storage boundary rather than treating the
+  coordinator's working directory as its unrestricted execution directory. Local sharing or copying may be selected
+  later, but it must preserve the same ownership, identity, persistence, and cleanup rules.
+- Organize worker-managed persistent data according to its existing scope: reusable dataset representations by
+  `dataset_id`, parent-specific execution context by `parent_id`, and result files by their producing `attempt_id`.
+  Do not introduce a generic task identity that collapses parent tasks, unit/model tasks, and execution attempts.
+  A partition schedule present on a worker is an execution-input copy; the root-side partition file remains the single
+  authoritative durable schedule.
+```
+
+### Revision summary
+
+This revision establishes:
+
+- distinct root and worker storage boundaries;
+- the root-local worker as a real worker-side storage consumer;
+- dataset, parent, and attempt as the correct storage scopes;
+- continued authority of the root partition artifact.
+
+### Ambiguity
+
+No blocking ambiguity remains at the governing-invariant level. Exact worker directory names, preparation APIs, and cleanup mechanics belong in later documentation steps.
+
+## Issue 3 — Visible, human-identifiable managed storage
+
+### Analysis
+
+“Public” has two possible meanings:
+
+1. documented and inspectable managed storage;
+2. unrestricted public or remote filesystem access.
+
+Only the first is compatible with Cocoonet’s security and public-worker isolation requirements.
+
+Human-identifiable storage also does not mean every authoritative payload can become CSV or text. The governing contract requires dill for the authoritative partition and standardized result payloads. CSV/text preferences should apply where the information is naturally tabular or textual and can preserve its semantics.
+
+The attachment’s attempt-level example duplicates shared dataset, partition, configuration, and state files. That must be prohibited.
+
+### Exact revision
+
+After `**Dataset Identity, Synchronization, and User Isolation:**` and before `**Worker Ownership and External Discovery:**`, insert this new subsection:
+
+```markdown
+**Managed Storage Visibility and Authoritative Artifacts:**
+
+- Root-managed storage is user-visible within the user-selected working directory. Use documented, stable, semantic
+  directory and file names that identify an artifact's responsibility. User-visible means discoverable and
+  inspectable; it does not transfer ownership of Cocoonet recovery files to the user or permit mutation while the
+  persisted execution may be resumed or recovered.
+- Worker-managed storage follows the same clear, semantic naming principle and must be inspectable by the applicable
+  worker owner or operator. This requirement does not expose a private or public worker's filesystem to a remote user,
+  weaken user isolation, or create a general remote file-access interface.
+- Prefer UTF-8 text or CSV for small metadata that is naturally textual or tabular and can preserve its complete
+  semantics. For dictionary-like CSV data, place the key in the first column and its value in the second. For
+  two-dimensional tables, place identity and association columns before other attributes. Use an explicit structured
+  text format for logs so identifiers, context, failures, and tracebacks remain unambiguous.
+- Continue to use `dill` for Cocoonet serialized payloads governed by the serialization contract, including the single
+  authoritative partition and standardized attempt-result payloads. Human-readable storage preferences do not
+  authorize a parallel authoritative CSV/text serialization, loss of type information, or collapse of `NaN`, `None`,
+  infinities, identities, associations, or failure provenance.
+- Store each shared fact once per owning scope. Do not copy the root dataset reference, authoritative partition,
+  committed execution configuration, or execution state into every attempt directory. Do not maintain an independent
+  result summary when it can be derived from the authoritative attempt result. Required worker execution-input copies
+  and the temporary worker/root result copies required until persistence acknowledgement are not competing
+  authoritative artifacts.
+- Human-readable report exports are derived outputs, not replacements for the one authoritative result file per
+  attempt. Do not generate duplicate exports automatically unless their owning later-phase contract explicitly
+  requires them and defines their consistency with the authoritative result.
+```
+
+### Revision summary
+
+This subsection defines:
+
+- visible and inspectable root storage;
+- operator-inspectable worker storage without remote exposure;
+- appropriate CSV/text conventions;
+- continued authoritative dill serialization;
+- no per-attempt duplication of shared artifacts;
+- derived report exports as non-authoritative.
+
+### Ambiguities
+
+Two interpretations require approval:
+
+- “Public” is defined as documented and inspectable, not remotely accessible.
+
+MY ANSWER: Public means not private in terms of the module and must be accessible and visible for the local user, instead of remotely visible or accessible, use the approporiate term for this instruction and avoid this ambiguity. 
+
+- Human-readable formats are preferred only where they preserve the complete contract; they do not replace required dill payloads.
+
+MY ANSWER: Yes, but follow my exact instruction in development, do not add top instruction to fix exact formats, that's too detail. I prefer a simple requirement for preferring human-readable persistence. Besides, this human-readability requirement applies only for persistence, not for data transmission, data transmission follow the file size minimization rule i.e. convert to proper formats that minimize the size to transfer.
+
+## Issue 4 — Semantic paths instead of hash-derived filenames
+
+### Analysis
+
+Hash-derived filenames are unnecessary for the known Phase 2 artifact categories. Semantic names and scoped parent/partition/attempt locations are easier to inspect.
+
+Nevertheless:
+
+- filenames cannot be trusted as identity evidence;
+- arbitrary opaque identifiers cannot be inserted into paths without path-safety handling;
+- report categories cannot become separate authoritative files because Cocoonet requires one result file per attempt.
+
+The exact path-component encoding belongs in the architecture and Phase 2 roadmap, not `AGENTS.md`.
+
+### Exact revision
+
+In the new `**Managed Storage Visibility and Authoritative Artifacts:**` subsection proposed for Issue 3, insert the following bullets after the second bullet:
+
+```markdown
+- Use purpose-specific semantic names for managed artifacts. Do not use a hash of an opaque identifier solely to make
+  an otherwise known partition, configuration, state, result, or log filename. Hashes required later for integrity,
+  change detection, or another explicitly documented purpose remain separate from filesystem naming.
+- A filename or directory name is not authoritative identity evidence. Persist the exact applicable identifiers and
+  associations inside the artifact and validate them when the artifact is loaded or accepted. If an identifier is
+  represented in a path component, use a documented filesystem-safe representation; never concatenate an unchecked
+  opaque identifier into a path.
+```
+
+In the existing first bullet under `**Report Receipt, Persistence, and Acceptance:**`, append this sentence to the end:
+
+```markdown
+  Validation results, classification or regression performance, residual analysis, visualization data, and sample
+  influence remain report sections within that one authoritative attempt result; human-readable files bearing those
+  report names, if later supported, are derived exports rather than independently persisted attempt outcomes.
+```
+
+### Revision summary
+
+This revision:
+
+- rejects opaque hash naming when a semantic path suffices;
+- preserves hashes for real integrity/change-detection purposes;
+- makes in-file identity and association validation authoritative;
+- requires safe handling of identifiers used in paths;
+- preserves one result file per attempt;
+- reserves report-specific filenames for derived exports.
+
+### Ambiguity
+
+The exact filesystem-safe representation of an identifier remains intentionally unresolved in `AGENTS.md`. It must be settled in the architecture and Phase 2 roadmap. This is not permission to use raw unchecked identifiers.
+
+MY ANSWER: Approved. Keep `AGENTS.md` clean and concise.
+
+## Issue 5 — Future public workflow and automatic persistence
+
+### Analysis
+
+The proposed `Experiment`, `Evaluation`, `data_template()`, and `run()` signatures contain unresolved lifecycle and scientific questions. Exact public APIs therefore should not be added to `AGENTS.md`.
+
+One new governing invariant is appropriate: Cocoonet’s normal persistence is automatic at the operation that owns it, while a convenience API may not hide or merge initialization, dataset preparation, commitment, recovery, or overwrite semantics.
+
+This complements the existing `add_dataset()` and `start()` boundaries without prematurely choosing future names.
+
+### Exact revision
+
+Under `**Reusable Computation and User Workflow:**`, insert the following bullet immediately after the existing `start()` bullet:
+
+```markdown
+- Cocoonet is a file-backed evaluation pipeline; ordinary use does not require a general public `save()` operation.
+  Persistence occurs automatically at the operation that owns each artifact: dataset registration prepares its managed
+  dataset reference and partition artifacts, start commits the fixed execution configuration, and the execution
+  workflow persists state, logs, and results at their defined durability boundaries. A future convenience or facade
+  API may orchestrate these operations, but it must not silently combine fresh initialization with recovery, defer
+  required dataset/partition preparation until execution, bypass explicit overwrite consent, change an existing
+  parent's configuration, or treat transient in-memory state as durable completion.
+```
+
+No `Experiment`, `Evaluation`, `data_template()`, `run()`, `resume`, `n_parallel`, or `preflight_coverage` signature should be added to `AGENTS.md` in this step.
+
+### Revision summary
+
+This revision establishes:
+
+- no general manual save requirement;  # MY ADVICE: this is a too detailed instruction and not necessary in `AGENTS.md`, this could be part of roadmap.
+- automatic persistence at the operation that owns each artifact;
+- future convenience APIs must preserve lifecycle and durability boundaries;
+- exact future API design remains deferred.
+
+### Ambiguities
+
+The following remain unresolved and must not be decided in `AGENTS.md`:
+
+- whether the working directory is supplied to construction or explicit initialization;
+
+MY ANSWER: For root node, work dir must be supplied when initialize a evaluation instance for a parent task. For worker node, it can use default e.g. in .cocoonet in the system default workdir, or specified when initialize and start a worker node locally on the worker node machine, but the worker work dir must not be controlled by the root node remotely.
+
+- whether `run()` is an alias for `start()` or a broader facade;
+
+MY ANSWER: Currently `start` method is not planned. Besides, I don't think this interpretation or plan should be in `AGENTS.md`, it's much too detailed and does not influence the design at all.
+
+- separation of unchanged-parent resume from crash recovery;
+
+MY ANSWER: Crash and interruption follow the same state in file, and continue in the same way, do not create two distinct mechanism for the resume. The only difference is that after crash, users need to re-create the evaluation instance, instead of direct run again after interruptions, but they follow the same process in resume: the persistent state is loaded, the existing reports are verified and the rest tasks is sent for completion.
+
+- `data_template()` return and storage behavior;
+
+MY ANSWER: In the data dir or defined by the user. But this is too detailed and should not be specified in `AGENTS.md`, and should not even be mentioned before the exact phased roadmap step.
+
+- `input_type` terminology;
+
+MY ANSWER: Ignored, and do not mention you ignored it, this desgin does not even belongs to phase 2.
+
+- model-object versus model-path precedence;
+
+MY ANSWER: No precedence, duplicated specification simply leads to error. Do not even mention it, this desgin is too detailed to be put in `AGENTS.md` and does not even belongs to phase 2.
+
+- global `n_parallel` semantics;
+
+MY ANSWER: explained, n_process for evaluation pipeline level multiprocessing i.e. parallel processing. Keep it for interpretation only, and it is too detailed to be put in `AGENTS.md` and does not belong to this phase.
+
+- the scientific meaning and consequences of `preflight_coverage`.
+
+MY ANSWER: It means the trial run using real data and subset of the models with specified coverage locally in the root node to verify and ensure the evaluation processes before sending the task to worker nodes. Ignored now. This is too detailed and does not belong to this phase, it should use the same persistence mechanism as the real run on the workers.
+
+## Overall AGENTS.md revision summary
+
+The proposed change set is limited to governing invariants:
+
+1. Replace one existing initialization bullet.
+2. Add one protected-root safety bullet.
+3. Add one automatic-persistence/public-facade bullet.
+4. Add two worker-storage ownership bullets.
+5. Add one `Managed Storage Visibility and Authoritative Artifacts` subsection.
+6. Extend the existing one-result-file rule with the derived-export distinction.
+
+It deliberately does not define directory trees, file codecs, helper functions, storage classes, or exact public APIs. Those remain for the subsequent architecture and roadmap steps after this proposal is approved.
+
+MY OVERALL ADVICE: Make your instructions in `AGENTS.md` concise and not to be too restrictive in details. The detailed desgin belongs to `archtecture.md` and `roadmap.md` and phase roadmaps. Please verify the `AGENTS.md` and keep the general requirements of the revisions only. And do not modify the existing requirements.
+If a revision is inconsistent with the existing requirements, please stop and report, instead of modifying the existing instructions in the `AGENTS.md`.

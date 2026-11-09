@@ -1,0 +1,18 @@
+Following your `Recommended documentation revision order`, propose your exact revisions here in your answer.
+
+---
+
+Now proceed with the proposal of the first step `Revise AGENTS.md only for new governing invariants`.
+Propose the revisions of `AGENTS.md`.
+
+---
+
+Requirements:
+- Propose the revisions of this step only, do not proceed with later steps
+- Do not modify any file, wait approval
+- Propose revisions section by section for each of the above issue
+- Give your analysis first for your revision for a issue
+- Then propose your exact revision for the issue
+- Then summarize your revision
+- Avoid over-engineering, follow the development philosophy of the module
+- Report any ambiguity if exists

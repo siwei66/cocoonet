@@ -10,11 +10,17 @@ workers use synchronized datasets. Scientific auditability, transparency, and re
 **Reusable Computation and User Workflow:**
 
 - A computation instance is reusable root-side configuration, not a parent evaluation task. Construction requires a
-  user-provided working directory. Prepare a missing directory or accept an empty one; reject a nonempty directory
+  user-provided working directory; `overwrite` defaults to `False`. Prepare a missing directory or accept an empty one;
+  reject a nonempty directory
   with `overwrite=False`. With explicit `overwrite=True`, clear its contents and prepare it for fresh execution.
   Successful construction/initialization sets `state = initialized`. Initialization is distinct from recovery.
   The root working directory is Cocoonet-managed persistent storage; configured user-owned dataset source paths must
   remain outside it. Validate this ownership boundary before preparing or clearing the directory.
+- Reject an unsafe managed root before creating, changing, or deleting any persistent file. Protected locations include
+  filesystem anchors, Python installation and package-installation directories, the installed Cocoonet package
+  directory, and the complete Cocoonet source repository tree. Reject a proposed root that equals, contains, or is
+  contained within a protected location. Apply the check to canonical physical locations so path aliases cannot bypass
+  it.
 - Reject a dataset source path equal to or contained within the root working directory. Enforce this configuration
   invariant in both directions: validate dataset addition/path changes against the current root, and validate root
   initialization/change/reassignment against every existing configured dataset source path, including paths retained
@@ -630,6 +636,11 @@ Before planning or implementing a phase, process project guidance in this order:
   boundary; do not create WSS loopback or fake network behavior. User model code must not execute in the root
   coordinator process. The local worker shares the evaluation implementation and technically enforced model
   restrictions with online workers; process separation alone does not replace those restrictions.
+- Root coordinator storage and each worker's managed storage are distinct ownership scopes, including for the
+  root-local worker. A worker uses a default or explicitly configured work directory selected locally on that worker;
+  the root cannot remotely select, reassign, or clear an online worker's work directory. Worker-managed persistence
+  must preserve the existing dataset, parent, and attempt scopes, and any worker partition schedule remains an
+  execution-input copy of the single authoritative root-side schedule.
 - Local execution requires no remote-only network authentication, heartbeat/reconnect, network dataset synchronization,
   or network result delivery. Framework-managed local data/model/result access must preserve dataset identity,
   authoritative saved partitions, parent/unit/attempt associations, failure scopes, and standardized result files.
@@ -703,6 +714,26 @@ Before planning or implementing a phase, process project guidance in this order:
   Apply the worker-side cleanup rules below before serving another user; do not allow prior work to recreate data.
 - `dataset_id` encoding, synchronization verification, disconnect detection, and cleanup verification belong in the
   corresponding architecture/lifecycle specification; they must preserve these invariants.
+
+**Locally Visible Managed Persistence:**
+
+- Root-managed persistent files and directories must be clearly named and locally filesystem-visible and accessible to
+  the root user within the selected working directory; do not hide them in module-private storage. Worker-managed
+  persistent files and directories follow the same principle for the local worker owner or operator. This requirement
+  creates no remote filesystem-access interface and does not weaken private- or public-worker isolation.
+- Use purpose-specific, human-identifiable names for managed artifacts. Do not hash an opaque identifier solely to
+  produce a filename or directory name. Persist and validate the exact applicable identifiers and associations inside
+  the artifact rather than treating its path as authoritative identity evidence. Any identifier represented in a path
+  must use a defined filesystem-safe representation. Hashes required for integrity, change detection, or another
+  documented purpose remain permitted.
+- Prefer human-readable persistent representations when they preserve the complete required values, identities,
+  associations, and failure information. Continue to use the required Cocoonet serialization where a human-readable
+  representation would lose or alter those semantics. This preference applies to persistence, not transmission;
+  transfer preparation continues to use the applicable size-minimizing formats and thresholds.
+- Store each shared fact once per owning scope. Do not duplicate root dataset references, authoritative partitions,
+  committed execution configuration, execution state, or independently derivable result summaries across attempt
+  storage. Required worker execution-input copies and the temporary worker/root copies needed for acknowledged result
+  delivery are not competing authoritative artifacts.
 
 **Worker Ownership and External Discovery:**
 
@@ -833,7 +864,9 @@ Before planning or implementing a phase, process project guidance in this order:
   rules. A complete outcome may contain partial computational failures; do not create separate transfer or persistence
   states for individual reports. Initial reconstruction failure produces the failure-only file specified above.
   Primary-validation failure produces a complete result file containing preserved fold results, unavailable
-  predictions, failed or blocked reports, and failure provenance.
+  predictions, failed or blocked reports, and failure provenance. Validation, performance, residual, visualization,
+  and influence outputs remain sections of that one authoritative attempt result. Any later human-readable report
+  files are derived exports, not separate attempt outcomes.
 - Result files are expected to be small. Write received serialized files to local disk promptly using asynchronous
   I/O. The initial design does not require bounded-memory streaming or a backpressure mechanism. Do not deserialize
   them in the active network event loop; root-side content processing occurs separately from the receive path.
