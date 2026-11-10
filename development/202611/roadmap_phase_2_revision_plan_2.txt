@@ -1,0 +1,566 @@
+No file has been modified. This proposal covers only [docs/architecture.md](E:/swectral_new/cocoonet/docs/architecture.md) and remains consistent with the newly approved `AGENTS.md` invariants.
+
+## Issue 1 — Protected roots and overwrite behavior
+
+### Analysis
+
+Architecture Section 2.3 currently defines dataset-source ownership and overwrite behavior but not:
+
+- `overwrite=False` as the default;
+- protected Python/Cocoonet locations;
+- canonical physical-path comparison;
+- rejection of roots overlapping the entire Cocoonet repository tree.
+
+These rules belong in the root initialization subsection. Exact helper signatures remain Phase 2 roadmap concerns.
+
+### Exact revision
+
+Under `#### Root directory and initialization`, replace:
+
+```markdown
+Construction requires a user-provided root working directory and an `overwrite` choice. The root working directory
+is Cocoonet-managed persistent storage. User-provided dataset source paths are user-owned and must remain outside it.
+```
+
+with:
+
+```markdown
+Construction or explicit fresh initialization requires a user-provided root working directory. `overwrite` defaults
+to `False`. The root working directory is Cocoonet-managed persistent storage. User-provided dataset source paths are
+user-owned and must remain outside it.
+```
+
+After that paragraph, insert:
+
+```markdown
+Before directory preparation, validate the proposed root against protected filesystem locations. Protected locations
+are filesystem anchors; active Python installation roots; Python standard-library and package-installation
+directories, including system and user package locations; the installed Cocoonet package directory; and the complete
+Cocoonet source repository tree when running from a source checkout.
+
+Reject the proposed root when its canonical physical location equals, contains, or is contained within a protected
+location. Consequently, neither the Cocoonet repository nor one of its descendants may be used as a managed root, and
+an ancestor whose clearing would remove the repository is also invalid. Apply the same overlap rule to Python and
+package-installation locations. A protected-root conflict fails before directory creation, clearing, metadata writing,
+or any other persistent mutation.
+```
+
+Replace:
+
+```markdown
+Equality and containment concern filesystem locations; the concrete path-validation mechanism remains deferred.
+```
+
+with:
+
+```markdown
+Equality and containment concern canonical physical filesystem locations. Resolve absolute paths, existing symbolic
+links or junctions, and existing ancestors before comparison, then apply the platform's path-case behavior. A missing
+final path component remains valid for a proposed new root. Resolution failure, malformed paths, or unresolvable link
+cycles fail explicitly. The exact helper API remains an implementation decision.
+```
+
+Change the table heading:
+
+```markdown
+| Selected directory | Constructor behavior |
+```
+
+to:
+
+```markdown
+| Selected directory after all ownership and protected-root checks | Fresh-initialization behavior |
+```
+
+In Section 10.1, replace the paragraph beginning:
+
+> The root-directory overwrite question is resolved...
+
+with:
+
+```markdown
+Root-directory preparation is governed by two independent pre-mutation guards. First, configured user dataset source
+paths cannot equal or lie within the managed root; validate both dataset-path and root-directory changes. Second, the
+managed root cannot equal, contain, or be contained within a protected filesystem, Python, Cocoonet installation, or
+Cocoonet repository location. Reject either conflict before modifying persistent files. Managed-root overwrite needs
+no dataset-path exclusions after those checks succeed. Dataset removal remains reference-only, and existing
+partition/recovery protections continue to apply.
+```
+
+### Revision summary
+
+This revision settles:
+
+- `overwrite=False`;
+- protected path categories;
+- whole-repository exclusion;
+- symmetric protected-location overlap;
+- canonical physical comparison;
+- validation before all filesystem mutation.
+
+### Ambiguity
+
+None remains at the architecture level. The exact protected-location discovery functions belong in the Phase 2 roadmap.
+
+## Issue 2 — Root and worker storage ownership and worker layout
+
+### Analysis
+
+The architecture must distinguish:
+
+- the root coordinator’s user-selected working directory;
+- the root-local worker’s separate worker storage;
+- each online worker’s locally selected storage;
+- root authority over scientific state versus worker ownership of execution copies.
+
+The root cannot remotely choose or clear an online worker’s work directory. A default worker directory may be supplied by the worker implementation, but the exact platform-specific default is not needed for Phase 2 storage architecture.
+
+### Exact revision
+
+In Section 2.4, after the paragraph beginning:
+
+> The root-local worker is a separate locally managed worker process...
+
+insert:
+
+```markdown
+The root coordinator and every worker use distinct managed-storage ownership scopes. This applies to the root-local
+worker even when both scopes reside on the same machine. A worker work directory is selected through worker-local
+initialization, either from a worker-local default or an explicit local path. The root protocol may address logical
+datasets, parents, attempts, and artifacts, but it cannot select, reassign, or clear an online worker's physical work
+directory.
+
+The root-local boundary may share or copy applicable artifacts when later implementation documents that behavior, but
+it must not give model execution unrestricted access to the coordinator working directory. Sharing or copying does
+not create a new dataset, partition, parent, attempt, or authoritative artifact.
+```
+
+As part of the expanded Section 6.1 proposed under Issue 3, place the following worker layout after the root layout:
+
+```markdown
+A worker uses this semantic layout within its locally selected work directory:
+
+```text
+<worker_work_dir>/
+  cocoonet/
+    worker_metadata.csv  # MY ADVICES: also use cocoonet_metadata.csv as root node, because the attempts of a parent task must share the same configuration for comparability.
+    datasets/
+      dataset_<safe_dataset_id>/
+        data_reference.csv
+        sources/
+    parents/
+      parent_<safe_parent_id>/
+        execution_configuration.dill  # MY ADVICES: use csv with one key column and one value column instead.
+        partition_schedule.dill  # MY ADVICES: use partition_schedules.csv with column names as partition ids and row names as sample ids instead, value 1 as selected for one sample in one partition and 0 as not selected.
+        attempts/
+          attempt_<safe_attempt_id>/
+            attempt_result.dill  # MY ADVICES: persist validation result and each report / plot separately as required: validation_result.csv / classification_performance.csv for classification or regression_performance.csv for regression / residual_analysis.csv / sample_influence.csv / roc_curve.dill for classification or (scatter_plot.dill and residual_plot.dill) for regression. You should pack and compress them for transferring to root node and uncompress and unpack them on worker node later. The files on worker nodes must also be human-readable as root node for optimized auditability.
+    logs/
+      worker_running.log
+      worker_error.log
+```
+
+`datasets/` contains worker-local synchronized or locally prepared dataset representations. Its
+`data_reference.csv` resolves through worker-local paths. `parents/` contains the fixed context supplied for execution,
+not another root-side parent or authoritative partition. The worker's `partition_schedule.dill` is an execution-input
+copy of the root's single authoritative schedule. Each attempt directory contains only attempt-scoped artifacts; it
+does not copy the dataset reference, partition, or parent configuration.
+
+# MY ADVICES: The schedule and other configuration sequence can all be represent as key + value or 2-dimensional tabular format, so using CSV file is feasible with much better auditability.
+
+```
+
+Update the existing Section 6.1 sentence:
+
+```markdown
+The exact selection API, storage layout, readiness verification, and deletion implementation remain deferred...
+```
+
+to:
+
+```markdown
+The exact cleanup-selection API, readiness verification, and deletion implementation remain deferred and must
+preserve the fixed managed layout, source-file ownership, all-target inactivity before cleanup, and readiness
+invalidation after successful deletion.
+```
+
+Replace:
+
+```markdown
+The key encoding, synchronization verification, and filename-reference layout are implementation details...
+```
+
+with:
+
+```markdown
+Synchronization verification and physical source-file placement within the designated worker dataset directory remain
+implementation details. They must preserve the logical source references, row/sample associations, and readiness
+invariant. Identifier path-component encoding follows the separately deferred rule below.
+```
+
+### Revision summary
+
+This revision settles:
+
+- separate root and worker physical storage;
+- worker-local selection of worker work directories;
+- prohibition on remote root control of worker paths;
+- dataset/parent/attempt hierarchy;
+- worker partition copies as non-authoritative;
+- no per-attempt duplication of shared context.
+
+### Ambiguity
+
+The exact default worker work directory remains deferred to the worker initialization phase. It must be locally selected and locally accessible; that deferral does not affect the fixed internal layout.
+
+# MY ANSWER: The worker work dir can be:
+- either specified locally when administrator start a worker node on the worker node machine,
+- or default to the environment <default working directory> like `/home/<username>` of Linux or `C:\Users\<username>` of Windows or `/Users/<username>` of MacOS.
+
+## Issue 3 — Locally visible root layout and persistence formats
+
+### Analysis
+
+The current `.cocoonet` private layout exists only in the Phase 2 roadmap, not architecture. Architecture should now establish a locally visible root layout before the Phase 2 roadmap is revised.
+
+The layout must:
+
+- expose clear semantic names;
+- store shared artifacts once;
+- retain one authoritative partition dill file per realized schedule;
+- retain one authoritative result file per attempt;
+- distinguish persistence formats from transfer formats;
+- avoid automatic duplicate summaries.
+
+### Exact revision
+
+Rename Section 6.1:
+
+```markdown
+### 6.1 Dataset synchronization and reuse
+```
+
+to:
+
+```markdown
+### 6.1 Locally visible managed storage, dataset synchronization, and reuse
+```
+
+Immediately under the renamed heading, insert:
+
+```markdown
+Root-managed persistence is directly visible in the user-selected root working directory. It is managed by Cocoonet
+but is not hidden in a module-private control directory. Use this base layout:
+
+```text
+<root_dir>/
+  cocoonet_metadata.csv
+  data_reference.csv
+  partitions/
+    partition_<safe_partition_id>/  # MY ADVICES: use partition_schedules.csv with column names as partition ids and row names as sample ids instead, value 1 as selected for one sample in one partition and 0 as not selected.
+      partition_schedule.dill
+  execution_configuration.dill  # MY ADVICES: use csv with one key column and one value column instead.
+  execution_state.dill  # MY ADVICES: use csv with one key column and one value column instead.
+  attempt_results/
+    attempt_<safe_attempt_id>/
+      attempt_result.dill  # MY ADVICES: same as worker node, persist validation result and each report / plot separately as required: validation_result.csv / classification_performance.csv for classification or regression_performance.csv for regression / residual_analysis.csv / sample_influence.csv / roc_curve.dill for classification or (scatter_plot.dill and residual_plot.dill) for regression. You should pack and compress them for transferring to root node and uncompress and unpack them on worker node later. The files on worker nodes must also be human-readable as root node for optimized auditability.
+  logs/
+    root_running.log
+    root_error.log
+```
+
+Entries are created only when their owning operation requires them. `data_reference.csv` is created by dataset
+preparation. A partition directory represents one realized schedule and contains its single authoritative dill file.
+`execution_configuration.dill` is committed at the execution-entry boundary. `execution_state.dill` is the replaceable
+durable execution checkpoint. A root attempt directory is created only for the selected result being persisted; it
+does not contain copies of shared dataset, partition, configuration, or state files.
+
+`cocoonet_metadata.csv` is a small two-column `key,value` file containing the storage-format version, complete
+Cocoonet version, Python version, Python release level, and root node role. The corresponding worker metadata file has
+the same structure and records the worker role. These files contain compatibility and storage metadata only, not
+scientific payloads or execution state.
+
+Root and worker running/error logs are UTF-8 structured text files. Each appended record is one complete JSON object
+on one line, preserving identifiers, context, failures, and tracebacks without making logs authoritative execution
+state. The `.log` extension communicates their operational purpose; the record schema remains explicit and validated.
+
+Partition, execution-configuration, execution-state, and attempt-result payloads remain Cocoonet dill artifacts
+because their typed nested values and exact scientific semantics cannot be replaced reliably by a parallel CSV or
+text representation. Do not create metadata sidecars or automatic result summaries that duplicate facts already
+stored in an authoritative artifact.
+
+# MY ADVICES: Save report data type in the cocoonet_metadata.csv for both root node and worker node (worker_metadata.csv is renamed to cocoonet_metadata.csv). If there is any scientific semantics that need specific notation in the future, you can still create a new key in the meta file to persist the info instead of forcing the usage of dill, which sacrifices the convenience of human auditability. This scientific module must prioritize user auditability and avoid black box processing.
+
+Human-readable persistence is preferred when it preserves the complete contract. This rule does not alter transfer
+preparation: online dataset and model-data representations continue to use the formats, compression, and sharding
+rules selected to minimize transfer size. A transfer representation is not automatically another authoritative
+persistent representation.
+```
+
+After this block, insert the worker-layout block from Issue 2, followed by the existing paragraph:
+
+> Establish readiness of the exact representation identified by `dataset_id`...
+
+In Section 6.2, replace:
+
+```markdown
+Prefer directly inspectable payloads with explicit associations. Avoid duplicate report identities and independently
+maintained summaries; derive summaries from authoritative facts, or validate their consistency when stored.
+```
+
+with:
+
+```markdown
+Prefer directly inspectable payloads with explicit associations. Avoid duplicate report identities and independently
+maintained summaries. Human-readable report exports, when explicitly supported by a later public API, are derived from
+the authoritative attempt result and are not independent execution outcomes. Tabular exports place identity and
+association columns before report attributes; dictionary-like exports use key and value columns. Exporters must
+validate or derive their contents rather than maintain a second mutable source of scientific truth.
+```
+
+### Revision summary
+
+This revision establishes:
+
+- a visible semantic root layout;
+- a corresponding worker layout;
+- key/value metadata CSV;
+- structured UTF-8 `.log` files;
+- dill for typed authoritative payloads;
+- no metadata sidecars or automatic duplicate summaries;
+- persistence versus transfer-format separation.
+
+### Ambiguity
+
+No layout ambiguity remains. Later phases may add their own clearly named managed directories, such as dataset transfer preparation or model-data artifacts, only after documenting them. They must not relocate or reinterpret the fixed base paths above.
+
+## Issue 4 — Semantic paths and authoritative in-file identities
+
+### Analysis
+
+The architecture should remove hash-derived filename design space while retaining:
+
+- safe path components;
+- exact identities inside artifacts;
+- metadata validation before dill loading;
+- hashes for integrity or change detection when genuinely needed.
+
+The approved deferral covers only the exact filesystem-safe encoding, not the semantic path structure.
+
+### Exact revision
+
+After the root and worker layouts in revised Section 6.1, insert:
+
+```markdown
+Names such as `partition_schedule.dill`, `execution_configuration.dill`, `execution_state.dill`, and
+`attempt_result.dill` identify artifact responsibilities directly. Do not derive these names from hashes of opaque
+identifiers. Directory components shown as `<safe_*_id>` are filesystem-safe representations of the applicable exact
+identity. Their encoding remains deferred, but it must not permit traversal, separator injection, reserved-name
+collisions, or silent identity collisions.
+
+Paths locate designated artifacts but do not prove their identity. Each dill artifact contains a bounded,
+non-executable metadata header before its dill payload. The header records the storage-format version, payload schema,
+compatibility metadata, artifact identity, artifact kind, and the applicable dataset, partition, parent, model,
+attempt, or worker associations. A loader validates that metadata against the requested operation and designated path
+before deserializing the payload. The exact identity remains in the artifact even when a filesystem-safe spelling is
+used in a directory name.
+
+Incomplete publication uses an adjacent semantic `.partial` path. A partial file never counts as a complete artifact.
+Immutable partition, configuration, and attempt-result artifacts are not overwritten. Execution state is replaceable
+only through durable same-directory publication that leaves the previous complete state usable until replacement
+succeeds.
+```
+
+In Section 6.2, after its opening result-file description, add:
+
+```markdown
+Validation, classification or regression performance, residual analysis, visualization data, and optional influence
+remain report sections inside `attempt_result.dill`; they are not separate authoritative result files. If a later
+export API creates files such as `validation_results.csv` or `residual_analysis.csv`, those files are derived
+user-facing views and have no independent reception, persistence, acceptance, or recovery state.
+```
+
+MY ADVICES: No, persist these numeric report directly in csv instead of later deriving, and persist plots separately in dill in worker nodes and in dill and png in root nodes. Exact plotting detail policies remain a deferred decision in later phases.
+
+In Section 7.2, insert after the first serialization bullet:
+
+```markdown
+- Each persisted dill artifact uses one Cocoonet container with a bounded non-executable metadata header followed by
+  one dill payload. Read and validate the header, compatibility, identity, kind, schema, and applicable associations
+  before invoking dill deserialization. The header is part of the same artifact, not a duplicated metadata sidecar.
+```
+
+In Section 6.3, replace:
+
+```markdown
+Exact retry counts/timing, integrity checks, file publication mechanisms, naming, and acknowledgement encoding belong
+in the protocol/implementation design.
+```
+
+with:
+
+```markdown
+Exact retry counts/timing, integrity checks, low-level file-publication mechanics, filesystem-safe identifier
+encoding, and acknowledgement encoding belong in the protocol/implementation design. The semantic paths and
+complete-versus-partial distinction in Section 6.1 are fixed.
+```
+
+In Section 10, replace:
+
+```markdown
+Only the in-file structure, filename/directory layout, transfer representation,
+and mechanism ensuring durable completion remain implementation design...
+```
+
+with:
+
+```markdown
+Only the detailed payload schemas, exact filesystem-safe identifier encoding, transfer representation, container
+framing, and low-level mechanism ensuring durable completion remain implementation design; Section 6.1 fixes the
+semantic root and worker paths.
+```
+
+In Section 10.1, replace the first deferred item:
+
+```markdown
+- Exact APIs and in-file containers, default partition paths, durable-write/publication mechanisms, validation and
+  sample-identity restoration, and recovery-state encoding.
+```
+
+with:
+
+```markdown
+- Exact public APIs, dill-container framing, filesystem-safe identifier encoding, durable-write/publication
+  mechanisms, sample-identity restoration, and recovery-state encoding. The semantic managed paths are fixed by
+  Section 6.1.
+```
+
+### Revision summary
+
+This revision settles:
+
+- semantic root and worker paths;
+- no identifier hashes used solely as filenames;
+- exact identity validation from artifact metadata;
+- no duplicate metadata sidecars;
+- complete versus partial evidence;
+- report sections versus derived report exports.
+
+### Ambiguity
+
+The filesystem-safe identifier representation remains deferred, as approved. No other naming ambiguity remains.
+
+## Issue 5 — Root lifecycle and shared resume/reconciliation
+
+### Analysis
+
+The architecture can settle lifecycle behavior independently of the eventual public method name:
+
+- the root work directory must be bound before dataset preparation;
+- execution entry cannot silently select or replace it;
+- explicit interruption and unexpected root termination use one persisted-state reconciliation procedure;
+- a post-crash user recreates the root-side instance against existing storage;
+- a same-process interruption can reuse the existing instance;
+- explicit interruption remains a distinct recorded event because it unlocks prospective edits and initiates cooperative stopping.
+
+The public name remains blocked: current `AGENTS.md` requires `start()`, while the advice says no `start` method is planned. Architecture cannot silently replace that governing requirement.
+
+# MY ADVICE: propose revision of removal of exact method name in `AGENTS.md` and allow later planning of method names first.
+
+### Exact revision
+
+Under Section 2.3, after the directory-preparation table and overwrite paragraph, insert:
+
+```markdown
+Bind the root working directory during construction or explicit initialization, before dataset registration or
+partition preparation. The execution-entry operation does not select, reassign, or freshly prepare a working
+directory. Opening an existing persisted execution is also distinct from fresh initialization: it validates and opens
+the existing managed layout without clearing, replacing, or repairing it implicitly.
+```
+
+Under `#### Copying, reuse, and recovery`, replace the paragraph beginning:
+
+> Unchanged model evaluation configuration has resume semantics...
+
+with:
+
+```markdown
+Unchanged model evaluation configuration has resume semantics, including after worker changes, explicit root
+interruption, or unexpected root-process termination. These cases use one persisted-state reconciliation procedure:
+open the existing managed directory without fresh initialization, load the committed parent configuration and durable
+execution state, load the referenced authoritative partition, verify complete persisted attempt results, reconcile
+applicable worker observations, and dispatch only unfinished eligible work.
+
+After explicit interruption, the existing in-memory computation instance may invoke that procedure. After unexpected
+root-process termination, the user recreates the root-side computation instance against the existing working directory
+and the same procedure reconstructs it from durable state. Do not create separate persistence schemas or competing
+resume algorithms for those entry paths.
+
+The trigger remains observable. Explicit interruption records the applicable interrupted/stop dispositions and permits
+prospective configuration edits under the established rules. Unexpected process termination cannot retroactively
+record an interruption event that did not occur; recovery begins from the last successfully persisted observations.
+Both paths preserve the same parent identity, scientific configuration, partition association, accepted results,
+selection evidence, and remaining retry budgets.
+
+Fresh initialization for changed model evaluation configuration prepares a fresh-execution filesystem boundary; it is
+not resume or recovery. Exact public constructor, execution-entry, and reconstruction signatures remain deferred.
+Copies referring to the same persisted execution remain subject to the same coordinator ownership, task identity, and
+at-most-one acceptance invariants; copying does not authorize uncoordinated controllers of the same state.
+```
+
+In Section 10.1, after the opening resolved-clarifications paragraph, insert:
+
+```markdown
+Resume after explicit interruption and reconstruction after unexpected root-process termination share one durable
+loading, verification, reconciliation, and continuation procedure. They do not create separate scientific executions
+or persistence formats. Explicit interruption and unexpected termination remain distinct observed events because only
+explicit interruption records its stop/unlocking consequences. The eventual public method names do not alter this
+lifecycle.
+```
+
+Do not add `Experiment`, `Evaluation`, `data_template()`, `n_process`, or preflight signatures in this architecture revision.
+
+### Revision summary
+
+This revision settles:
+
+- root-directory binding before dataset preparation;
+- separation of fresh initialization from opening persisted storage;
+- one shared resume/reconciliation mechanism;
+- same-instance versus recreated-instance entry;
+- preservation of interruption as a distinct event;
+- no separate crash-recovery persistence design.
+
+### Ambiguity and inconsistency
+
+One blocking naming inconsistency remains:
+
+- `AGENTS.md` currently requires and names `start()`.
+- The supplied advice says a `start` method is not planned.
+
+This architecture revision should preserve the current `start()` terminology where it already appears and describe new rules using the neutral term “execution-entry operation.” Renaming the public operation to `run()` requires a separately authorized `AGENTS.md` revision before architecture can consistently adopt that name.
+
+# MY ADVICE: propose removal of exact method name specification in `AGENTS.md` and allow later planning of method names first. The later planning step can use any method name for this functionality. Do not fix the name in `AGENTS.md`, which is too detailed for `AGENTS.md` instructions.
+
+The statement that crash and explicit interruption have “the same state in file” cannot be applied literally. An unexpected crash cannot durably write a new interruption state after it occurs, while explicit interruption already has defined stop and configuration-unlocking effects. The compatible resolution is one shared reconciliation mechanism operating from the last durable state while preserving distinct recorded triggers.
+
+## Overall architecture revision summary
+
+The proposed `docs/architecture.md` update would:
+
+1. Define protected-root discovery categories and overlap behavior.
+2. Establish `overwrite=False` and canonical physical-path comparison.
+3. Separate root and worker storage ownership.
+4. Prevent remote root control of worker work directories.
+5. Fix visible semantic root and worker layouts.
+6. Define persistence-format responsibilities without changing transfer optimization.
+7. Remove hash-derived artifact filenames.
+8. Make in-artifact identifiers authoritative.
+9. Preserve one result file per attempt and treat report files as derived exports.
+10. Define one resume/reconciliation procedure for interruption and root restart.
+11. Leave exact safe identifier encoding deferred.
+12. Leave the `start()` versus `run()` naming conflict explicitly unresolved.
+
+No changes to `docs/roadmap.md`, any phase roadmap, source code, or tests are proposed in this step.
+
+# MY OVERALL ADVICES: prioritize my advices, verify and report inconsistencies and ambiguities with `AGENTS.md` and existing `architecture.md` when found.
