@@ -1,10 +1,10 @@
-# AGENT.md
+# AGENTS.md
 
 ## Project Overview
 
 Cocoonet evaluates machine learning models using an explicitly configured root-local worker, independent heterogeneous
 online workers, or both. The root (user) node always owns coordination; it does not automatically act as a worker.
-It prepares dataset access, supplies models and evaluation directives, and receives serialized reports. Online
+It prepares dataset access, supplies models and evaluation directives, and receives standardized result bundles. Online
 workers use synchronized datasets. Scientific auditability, transparency, and reproducibility are core requirements.
 
 **Reusable Computation and User Workflow:**
@@ -27,41 +27,38 @@ workers use synchronized datasets. Scientific auditability, transparency, and re
   by a copied instance. A conflicting root configuration fails explicitly without modifying persistent files;
   a conflicting dataset configuration also fails explicitly. An outside path satisfies this ownership check.
   Managed root contents may be cleared under the existing persistence/overwrite rules without dataset-path exclusions.
-- Incomplete configuration is valid before start: dataset setup may be pending and model/worker counts may be zero.
+- Incomplete configuration is valid before run: dataset setup may be pending and model/worker counts may be zero.
   Ordinary configuration edits change in-memory attributes only; they do not create, modify, or delete files.
-  `add_dataset()` is the explicit artifact-preparation exception: it realizes/validates and persists a new split,
-  or loads/validates an existing split. That artifact write does not consolidate execution configuration; only start
-  performs that configuration-persistence transition.
-  The `add_dataset()` artifact-preparation exception also covers generation of the managed
-  `data_reference.csv` and reusable compressed or sharded transfer representations. These writes do not
-  consolidate execution configuration and must not modify original user data or a fixed parent's dataset.
-- `start()` from `initialized` validates prerequisites, persists current execution configuration in the root working
-  directory, establishes a fresh parent, and begins the workflow. Once committed, the instance is `consolidated`.
-  This is the configuration-persistence boundary; execution artifacts, lifecycle state, results, and failures may
-  also be written during the workflow. No unit allocation precedes durable partition persistence.
+  `add_dataset()` is the explicit artifact-preparation exception: it realizes or validates and persists the current
+  partition schedule, managed `data_reference.csv`, and applicable reusable transfer representations. These writes
+  do not consolidate execution configuration or modify original user data or a fixed parent's dataset.
+- `run()` from `initialized` validates prerequisites, persists the fixed execution configuration in
+  `execution_configuration.csv`, establishes a fresh parent, and begins the workflow. Once committed, the instance is
+  `consolidated`. Durable mutable execution observations are persisted in `execution_state.csv`. No unit allocation
+  precedes durable partition persistence.
 - Each parent represents one fixed execution configuration and coherent result set. Units and attempts retain their
   parent's configuration for their lifetime. Later edits are prospective only, never propagated into allocated work.
   Ordinary active execution locks configuration changes. Root interruption permits prospective edits without waiting
   for old workers to reach their stop boundaries; their allocated work retains its fixed configuration.
 - Model evaluation configuration comprises the dataset and realized split, supplied models/model inputs, and
   evaluation settings. A permitted change to it makes a consolidated instance `unconsolidated` and requires a new
-  parent. Start rejects that state, even with an empty directory; explicit `initialize(...)` must prepare a fresh
-  execution directory and restore `initialized` before start commits the new parent. Edits before first start retain
+  parent. Run rejects that state, even with an empty directory; explicit `initialize(...)` must prepare a fresh
+  execution directory and restore `initialized` before run commits the new parent. Edits before first run retain
   initialized state.
 - Worker configuration, including additions, removals, and execution topology, is separate from model evaluation
   configuration. Worker-only changes neither make the instance unconsolidated nor create a parent. With unchanged
-  model evaluation configuration, start resumes the existing parent, with or without worker changes, preserving
+  model evaluation configuration, run resumes the existing parent, with or without worker changes, preserving
   its fixed scientific inputs, progress, results, and retry limits. Worker changes still obey configuration locks,
   readiness, ownership, and cleanup rules.
 - An ordinary copy reproduces attributes, including configuration, working directory, and lifecycle state. Copying
   does not create a parent, choose/clear a directory, reset state, or clone live processes, connections, attempts,
-  or result files. An unchanged consolidated copy refers to the same persisted execution and has resume semantics.
+  or result bundles. An unchanged consolidated copy refers to the same persisted execution and has resume semantics.
   A later model evaluation configuration edit makes either original or copy unconsolidated under the same rule;
   worker-only changes preserve the existing parent and consolidation state.
 - Unchanged consolidated state represents an existing execution: resume/recovery preserves its parent identity and
   persisted state and never clears or freshly initializes its directory. A new parent is created for the first
   evaluation or changed model evaluation configuration after the required initialization; unchanged evaluation does
-  not become a new parent merely because start is called again. Exact recovery APIs and copy mechanisms remain deferred.
+  not become a new parent merely because run is called again. Exact recovery APIs and copy mechanisms remain deferred.
 - A configured instance has one active dataset and authoritative partition. `add_dataset()` prepares both, loading
   and validating an existing `split_path` without splitting; for a new partition, a splitter and its required
   configuration must be supplied.
@@ -75,11 +72,11 @@ workers use synchronized datasets. Scientific auditability, transparency, and re
 ```text
 constructor / initialize(root_dir, ...) -> initialized
 initialized + configuration edits      -> initialized
-initialized + start()                  -> persist configuration -> new parent -> consolidated
+initialized + run()                    -> persist configuration -> new parent -> consolidated
 consolidated + unchanged evaluation    -> same parent / resume, with or without worker changes
 consolidated + permitted evaluation edit -> unconsolidated
-unconsolidated + start()               -> reject
-unconsolidated + initialize(...)       -> initialized -> fresh start permitted
+unconsolidated + run()                 -> reject
+unconsolidated + initialize(...)       -> initialized -> fresh run permitted
 copy(instance)                        -> same attributes, root directory, and lifecycle state
 ```
 
@@ -92,7 +89,7 @@ already-terminal or unnecessary pending handling ends immediately. Late results 
 - Supported model inputs are scikit-learn-like regressors with `fit` and `predict`, scikit-learn-like classifiers with
   `fit`, `predict`, and `predict_proba`, and PyTorch reconstruction and training information with a user-selected
   weight initialization pattern.
-- A parent model evaluation task is one fresh evaluation run created by `start()` from initialized state, containing
+- A parent model evaluation task is one fresh evaluation run created by `run()` from initialized state, containing
   exactly one dataset, one fixed task-wide evaluation configuration, and one or more models. Each model produces one
   unit task distinguished within its parent by its unique user-provided `model_label`. The parent dataset and
   configuration and each unit task's model input remain fixed.
@@ -127,18 +124,17 @@ already-terminal or unnecessary pending handling ends immediately. Late results 
   memberships. Models and workers must not independently regenerate, reshuffle, or alter them. Splitting randomness
   is resolved only during root-side split preparation; separate parent tasks may realize different partitions.
   Preparing or reusing a split must preserve its dataset association and the persistence contract below.
-- Immediately after the complete realized partition set is generated, persist it once in one `dill` file on the
-  root's hard drive, with its exact dataset identity, sample-ID/label mapping, and fold/split associations. Parents
-  reference that artifact through their fixed execution state. The indices identify the saved
-  training and testing `sample_id` memberships. Persistence must succeed before any unit-task allocation begins.
-  This file is the single authoritative durable copy of that partition set; do not split the set across files, duplicate
-  its authoritative storage, or repeatedly persist it during normal execution. Worker copies are execution inputs.
+- Persist each realized schedule once in one authoritative `partition_schedules.csv` file. Preserve its dataset and
+  partition identities, sample-ID/label associations, ordered folds, distinct training and testing memberships, and
+  population order. Persistence must succeed before unit allocation. Do not divide or duplicate its authoritative
+  storage; worker copies are execution inputs.
 - Supply the applicable realized indices with online dataset synchronization, or local artifact preparation, as part
   of parent-context preparation. Workers select training/testing data using those indices; they never invoke the
   splitter. A retained ready dataset may be
   reused without retransmission, but the worker must receive the applicable parent partition context before allocation.
   Every unit task and attempt, including duplicates, uses the same saved memberships. After a root restart following
-  successful persistence, load the existing `dill` file; do not rerun the splitter or create replacement partitions.
+  successful persistence, load and validate the existing CSV file; do not rerun the splitter or create replacement
+  partitions.
   Retaining only the splitting method or seed is insufficient.
 - Worker outputs include fold data, validation results, performance and residual reports, visualization data, and an
   optional sample influence report.
@@ -252,24 +248,25 @@ already-terminal or unnecessary pending handling ends immediately. Late results 
 - A new computation instance with no persisted source state regenerates by default. The later dataset API
   also permits explicit reuse or explicit regeneration. Explicit reuse fails if required prepared files
   are absent.
-- Dataset registration includes root-side split preparation and inspection through `add_dataset()`. Start consumes
+- Dataset registration includes root-side split preparation and inspection through `add_dataset()`. `run()` consumes
   the current validated dataset and partition; it does not invent a missing split or require a separate split call.
 - Required public capabilities are initialization, dataset add/set with split preparation, inspect/remove, and
-  model/worker add/list/inspect/summary/remove, with singular and bulk add/remove; start, break/cancel, recovery,
+  model/worker add/list/inspect/summary/remove, with singular and bulk add/remove; `run`, break/cancel, recovery,
   and configuration modification/copy/reuse under the lifecycle rules. A general root-file clearing API is optional.
   Singular mutations are the primitive semantic
   actions; bulk operations are explicit conveniences. Define their commit/partial-failure behavior before
   implementation; do not silently leave undocumented partial configuration after validation failure. Exact names,
   signatures, return types, aliases, and containers remain deferred.
 - Local-only, online-only, and mixed execution are supported. The root-local worker and online workers are
-  independently optional and must be explicitly configured; root coordination alone is not an execution target.
-- `start()` requires one active dataset, at least one model, and at least one usable execution target. Zero configured
-  workers is allowed before start but must fail explicitly at start, before evaluation. Do not silently evaluate in
-  the coordinator, enable a local worker, create a fake network worker, or wait for a never-configured worker.
-  This is a configuration/startup failure, not model-reconstruction or primary-validation failure. Start does not
-  wait for all configured workers. If none is currently runnable, fail startup explicitly; independent online
-  connection retries continue so a later start may succeed. A disconnected worker stays configured but is unavailable
-  for allocation.
+  independently optional and must be explicitly configured for normal evaluation; root coordination alone is not an
+  execution target.
+- `run()` requires one active dataset, at least one model, and at least one usable explicitly configured execution
+  target for normal evaluation. Do not silently enable a local worker for the main evaluation, create a fake network
+  worker, or wait for a never-configured worker. If none is currently runnable, fail startup explicitly; independent
+  online connection retries continue so a later run may succeed.
+- When preflight is requested, `run()` may initialize a temporary root-local worker process solely to perform a real
+  trial on the configured data and selected model subset. It does not run model code in the coordinator, does not
+  become an implicit target for the full evaluation, and does not guarantee that later evaluation will be failure-free.
 
 **Fold Results:**
 
@@ -465,7 +462,7 @@ minimal indirection and independently maintained state.
 
 - Configuration/startup failures occur before scientific evaluation and remain distinct from initial model
   reconstruction failure, primary-validation failure, ordinary-report failure, influence-removal failure, and
-  worker/infrastructure failure. For example, missing execution targets at start must be reported as a startup
+  worker/infrastructure failure. For example, missing execution targets at run must be reported as a startup
   prerequisite failure, never as a model fit failure. Adding local execution and reusable computations does not
   change the scientific failure boundaries below.
 - The worker process is a long-running execution service expected to operate continuously, potentially for months.
@@ -637,10 +634,14 @@ Before planning or implementing a phase, process project guidance in this order:
   coordinator process. The local worker shares the evaluation implementation and technically enforced model
   restrictions with online workers; process separation alone does not replace those restrictions.
 - Root coordinator storage and each worker's managed storage are distinct ownership scopes, including for the
-  root-local worker. A worker uses a default or explicitly configured work directory selected locally on that worker;
-  the root cannot remotely select, reassign, or clear an online worker's work directory. Worker-managed persistence
-  must preserve the existing dataset, parent, and attempt scopes, and any worker partition schedule remains an
-  execution-input copy of the single authoritative root-side schedule.
+  root-local worker. A worker uses a locally configured base or a managed `cocoonet/` child under the environment
+  user's home directory. The root cannot remotely select or clear an online worker's physical work directory.
+- A worker validates and durably publishes its result bundle before reporting the attempt ready.
+- Online delivery compresses the selected bundle for transfer. The root receives, validates, unpacks, and persists that
+  package before acceptance.
+- A root-local worker on the same machine uses direct bundle copying or handoff. Packaging, compression, transfer,
+  unpacking, and root-side attempt-result validation are skipped. Root acceptance relies on the worker's completed
+  validation and the root's successful durable copy of that bundle.
 - Local execution requires no remote-only network authentication, heartbeat/reconnect, network dataset synchronization,
   or network result delivery. Framework-managed local data/model/result access must preserve dataset identity,
   authoritative saved partitions, parent/unit/attempt associations, failure scopes, and standardized result files.
@@ -717,23 +718,28 @@ Before planning or implementing a phase, process project guidance in this order:
 
 **Locally Visible Managed Persistence:**
 
-- Root-managed persistent files and directories must be clearly named and locally filesystem-visible and accessible to
-  the root user within the selected working directory; do not hide them in module-private storage. Worker-managed
-  persistent files and directories follow the same principle for the local worker owner or operator. This requirement
-  creates no remote filesystem-access interface and does not weaken private- or public-worker isolation.
-- Use purpose-specific, human-identifiable names for managed artifacts. Do not hash an opaque identifier solely to
-  produce a filename or directory name. Persist and validate the exact applicable identifiers and associations inside
-  the artifact rather than treating its path as authoritative identity evidence. Any identifier represented in a path
-  must use a defined filesystem-safe representation. Hashes required for integrity, change detection, or another
-  documented purpose remain permitted.
-- Prefer human-readable persistent representations when they preserve the complete required values, identities,
-  associations, and failure information. Continue to use the required Cocoonet serialization where a human-readable
-  representation would lose or alter those semantics. This preference applies to persistence, not transmission;
-  transfer preparation continues to use the applicable size-minimizing formats and thresholds.
-- Store each shared fact once per owning scope. Do not duplicate root dataset references, authoritative partitions,
-  committed execution configuration, execution state, or independently derivable result summaries across attempt
-  storage. Required worker execution-input copies and the temporary worker/root copies needed for acknowledged result
-  delivery are not competing authoritative artifacts.
+- Root-managed persistent files and directories must remain clearly named, filesystem-visible, and accessible to the
+  root user within the selected working directory; do not hide them in module-private storage. Worker-managed
+  persistence follows the same rule for the local worker owner or operator. This local visibility creates no remote
+  filesystem-access interface and does not weaken private- or public-worker isolation.
+- Use purpose-specific semantic paths. Do not hash an opaque identifier solely to produce a filename or directory name.
+  Paths are not authoritative identity evidence: persist and validate the exact applicable identities and associations
+  inside the artifacts. Any identifier used in a path must use a defined filesystem-safe representation. Hashes used
+  for integrity, change detection, or another documented purpose remain permitted.
+- Use schema-controlled UTF-8 CSV for node metadata, authoritative partition schedules, execution configuration,
+  execution state, attempt metadata and manifests, fold/source associations, validation results, numeric reports,
+  influence results, and failure records.
+- Use dill only for applicable trusted model payloads and standardized visualization data. Visualization dill files
+  contain rendering data, not arbitrary plotting objects, callables, or duplicate numeric reports.
+- Persistence representation and transfer preparation are separate concerns. These CSV and dill requirements do not
+  replace the applicable compressed Parquet preparation or result-package transfer contracts.
+- Store each shared fact once per owning scope. Do not duplicate authoritative dataset references, partition schedules,
+  execution configuration, execution state, or independently derivable result summaries. Required worker execution
+  inputs, result-package staging, and acknowledged worker/root bundle copies are not competing authoritative artifacts.
+- One attempt outcome is one immutable result bundle. Its files have no independent delivery, retry, acceptance, or
+  recovery lifecycle.
+- Online delivery uses one compressed package for the selected bundle. Same-machine root-local handoff uses the
+  worker-validated bundle directly without packaging or root-side result validation.
 
 **Worker Ownership and External Discovery:**
 
@@ -835,21 +841,20 @@ Before planning or implementing a phase, process project guidance in this order:
 - Duplicate allocation is allowed only when no unallocated tasks remain, every remaining task is
   finished or already assigned, and an eligible worker has an otherwise-unused attempt slot.
   Select an unfinished, currently running logical task, starting with its oldest first execution time.
-- A duplicate execution is another attempt at the same logical task, not a new task or logical result entry.
-  For each logical task, the root serializes result reception: when duplicate attempts are ready to return results,
-  select one according to receiving order and receive only that result file at a time. This restriction applies per
-  logical task; receiving results for different logical tasks remains independent.
-- Selection does not depend on whether the model evaluation succeeded or failed. An earlier received failure outcome
-  takes precedence over a later success; expected `NaN` and recorded computational failures do not invalidate an
-  outcome. Coordinator state must enforce at most one accepted result per logical task, including reconnects.
-- Once the selected result file is completely received, successfully persisted, and accepted, the logical task is
-  complete. Then send stop instructions to all remaining duplicate attempts without receiving their result files.
-  Workers check stop instructions before each evaluation loop and stop at those cooperative boundaries; cancellation
-  need not interrupt arbitrary model code immediately. Duplicate attempts ready to return results await the root's
-  reception selection or stop instruction rather than sending unselected result files.
-- Persistence waiting and resends apply only to the result file currently selected for reception. Unreceived results
-  from the other duplicate attempts do not enter the resend process and are not delivery failures. A transfer or
-  persistence failure for the selected file does not promote a later competing result; apply its bounded retry rules.
+- A duplicate execution is another attempt at the same logical task, not another logical result. For each logical task,
+  serialize reception and select one ready attempt according to receiving order. Online reception receives only that
+  bundle's package; root-local handoff uses only that selected bundle. Reception for different logical tasks remains
+  independent.
+- Selection does not depend on scientific success or failure. An earlier selected failure outcome takes precedence
+  over a later success. Expected `NaN` and recorded computational failures do not invalidate an outcome. Coordinator
+  state must enforce at most one accepted bundle per logical task across delivery, reconnection, and recovery.
+- Complete the logical task only after the selected bundle is durably persisted and accepted on the root. Then stop
+  remaining duplicates without receiving or handing off their bundles. Workers check stop instructions at the
+  established cooperative boundaries; ready but unselected duplicates wait for reception selection or a stop
+  instruction.
+- Persistence waiting and retries apply only to the selected bundle. Online retry resends the same package; local retry
+  reuses the same published local bundle. Unselected bundles do not enter delivery retry and are not delivery failures.
+  Failure of the selected delivery does not promote another duplicate.
 - Duplicate execution reduces completion latency; it is not failure recovery. Do not automatically retry or reallocate
   a terminal reconstruction or primary-validation failure, or start another duplicate while an existing completed
   result awaits delivery.
@@ -859,78 +864,70 @@ Before planning or implementing a phase, process project guidance in this order:
 
 **Report Receipt, Persistence, and Acceptance:**
 
-- Produce one evaluation-result file per execution attempt of a unit task containing all its reports, results,
-  and failure information. Preserve successful computations alongside unavailable values and errors under the failure-isolation
-  rules. A complete outcome may contain partial computational failures; do not create separate transfer or persistence
-  states for individual reports. Initial reconstruction failure produces the failure-only file specified above.
-  Primary-validation failure produces a complete result file containing preserved fold results, unavailable
-  predictions, failed or blocked reports, and failure provenance. Validation, performance, residual, visualization,
-  and influence outputs remain sections of that one authoritative attempt result. Any later human-readable report
-  files are derived exports, not separate attempt outcomes.
-- Result files are expected to be small. Write received serialized files to local disk promptly using asynchronous
-  I/O. The initial design does not require bounded-memory streaming or a backpressure mechanism. Do not deserialize
-  them in the active network event loop; root-side content processing occurs separately from the receive path.
-- Accept the selected outcome and mark its logical task finished only after the complete evaluation file has been
-  received and successfully written to root-side persistent storage. Confirm successful persistence to the worker.
-  Bytes received, incomplete writes, and transient in-memory status do not establish completion. Never overwrite an
-  already accepted result with a later duplicate.
-- For the selected result file, network-transfer or root-persistence failure leaves the logical task unfinished.
-  Log the failure and request resending that same existing worker file, subject to its configured retry limit.
-  Do not recompute the evaluation. Report-computation failures recorded inside a complete file neither require
-  retransmission nor prevent normal acceptance. This delivery policy does not apply to unselected duplicate results.
-- After sending the selected file, its worker waits for the root's persistence confirmation or resend request. Until
-  successful root persistence or retry-limit exhaustion, retain that file and do not assign a new task to its worker.
-  At exhaustion, end the delivery operation and its wait as failed, log it under the normal failure rules, and return
-  to ordinary task handling with the worker process still running. It may receive another task when its normal
-  applicable local-control/online-connection, ownership, and readiness conditions hold. The delivery operation's
-  failure is separate from logical
-  result acceptance: it leaves the result unaccepted and does not finish the logical task or authorize recomputation.
-  Continue to apply the configured file-retention and cleanup rules; these conditions do not determine worker lifetime.
-- Configure worker-side retention as deletion after confirmed delivery, retention until all root tasks finish, or no
-  automatic deletion. Mandatory public-worker release cleanup overrides local retention, including pending delivery:
-  no prior user's file may survive reassignment. Outside that release cleanup, do not delete a pending-delivery file
-  prematurely. Cleanup of an undelivered file does not mark its logical task finished.
-- Support deletion of retained result artifacts when a worker transitions to a different parent task as an additional
-  retention mode. This mode is configurable for private and root-local workers and mandatory for public workers,
-  overriding a longer or no-automatic-deletion setting. Before a public worker begins an attempt for a different
-  parent, remove worker-side result artifacts belonging to earlier parents. Any selected delivery still required by
-  the lifecycle must first complete or reach its established terminal operation state. This cleanup does not delete
-  root-persisted results or mark an undelivered logical task finished or accepted.
-- Associate each result file with its parent context, unit task, and producing execution attempt. Preserve sufficient
-  internal identity for recovery and at-most-one acceptance per unit task. Dataset identity is resolved through the
-  parent context rather than forming an independent part of unit-task identity. Recovery must distinguish a complete
-  persisted outcome from an incomplete write; mere existence of a partial file is not completion evidence.
+- Produce one immutable result bundle per execution attempt. It contains applicable schema-controlled CSV reports,
+  metadata, inventory, fold/source associations, influence results, and failures, plus applicable standardized
+  visualization-data dill files. Preserve successful independent results alongside unavailable values and failures.
+- The bundle manifest defines its complete inventory. Individual files have no independent delivery, retry,
+  persistence, acceptance, or recovery state.
+- Reconstruction failure produces a failure-only bundle. Validation, report, and influence failures preserve every
+  independently successful result under the established attempt/report outcomes. A computational failure recorded in
+  a complete bundle does not require retransmission or prevent normal acceptance.
+- Online workers package the selected bundle for compressed delivery. The root validates and unpacks the package before
+  durably publishing the bundle. Package receipt and content processing must not block the active network event loop;
+  do not deserialize visualization dill data there.
+- A root-local worker hands off or copies its already validated bundle directly. The root performs no duplicate
+  attempt-result validation; acceptance follows successful durable root persistence.
+- Accept the selected outcome and mark its logical task complete only after the complete bundle has been durably
+  published in root storage. Confirm acceptance to the worker through the applicable online or local control boundary.
+  Partial packages, staging directories, incomplete bundles, and transient memory do not establish completion. Never
+  overwrite an accepted bundle with a later duplicate.
+- Delivery or persistence failure leaves the logical task unfinished. Retry the same bundle within its remaining
+  budget without reevaluation or per-file retry. Online retry resends the same package; root-local retry reuses the
+  same worker-published bundle.
+- Until acceptance or delivery-retry exhaustion, retain the selected worker bundle and keep its producing attempt slot
+  occupied. Other eligible attempt slots remain usable. Retry exhaustion ends that delivery operation but does not
+  accept or complete the logical task, authorize reevaluation, or terminate the worker.
+- Configure worker bundle retention as deletion after confirmed acceptance, retention until all applicable root tasks
+  finish, or no automatic deletion. Cleanup applies to the complete bundle and any pending online package.
+- Mandatory public-worker release cleanup overrides ordinary retention. Before a public worker serves another user or
+  begins an attempt for a different parent, remove earlier-parent result artifacts after any selected delivery has
+  completed or reached its established terminal operation state. Cleanup never accepts an undelivered result, completes
+  its logical task, or deletes an already persisted root bundle.
+- Root-side rendering persists applicable PNG output from accepted visualization data. Rendering is post-reception
+  processing and does not undo scientific-result acceptance.
+- Preserve parent, model/unit, attempt, worker, and artifact associations for every bundle. Dataset identity resolves
+  through the parent context. Recovery must distinguish a complete accepted bundle from a partial package, staging
+  directory, or incomplete bundle.
 
 **Root Restart and Progress Recovery:**
 
-- Reconstruct progress from the known task set and complete root-persisted evaluation files, then reconcile worker
-  state through the applicable local control or root-initiated online reconnection boundary. Do not rely solely on
-  pre-crash in-memory coordinator state.
-- Before resuming dispatch, restore the parent dataset association and fixed evaluation configuration from committed
-  parent execution state, and load its realized schedule from the referenced authoritative root-side `dill` file,
-  written once during dataset/split preparation before any unit-task allocation. Continuing, resumed, and duplicate
-  attempts must use those original training
-  and testing `sample_id` memberships, including after unexpected root failure. Recovery loads the established
-  schedule; it must not rerun the splitter, replace the partition set, or duplicate its authoritative storage.
-- If a worker is still computing, no accepted result exists, and its parent has not been stopped/cancelled/superseded,
-  restore its assignment and allow it to continue. Otherwise preserve its stop disposition. Apply duplicate-stop
-  rules once another attempt's result has been accepted.
-- If the task's complete accepted file is already persisted on the root, reconstruct the task as finished and confirm
-  delivery as needed; no reevaluation or retransmission is required. The worker can become available to its owning
-  root. Stop any remaining duplicate attempts without receiving their files. This also covers a crash after persistence
-  but before the in-memory completion update or acknowledgement.
-- If the root lacks the file selected for reception and its worker retains the completed result with retries remaining,
-  resume that selected delivery within its remaining limit before assigning the worker another task. Preserve reception
-  selection; do not receive an unselected duplicate's file in place of it.
-- An already exhausted delivery operation remains failed through reconnection or restart; do not silently reset its
-  limit or restart it merely because a retained file exists. Apply normal operation failure handling without inventing
-  an additional recovery procedure for exhaustion.
-- Recovery must preserve the receiving-order selection even if the root crashed before that file was fully persisted.
-  Specify durable evidence for the pending reception selection before implementing recovery; selection alone does not
-  constitute result acceptance or completion of the logical task.
-- Exact message schemas, retry counts/timing, file integrity and publication mechanisms, identifier/filename formats,
-  and acknowledgement encoding belong in later protocol documentation. They must implement these acceptance and
-  recovery semantics rather than redefine them.
+- Reconstruct progress from committed CSV configuration/state, the authoritative `partition_schedules.csv`, and
+  complete root result bundles, then reconcile worker state through local control or root-initiated reconnection. Do
+  not rely solely on pre-termination in-memory coordinator state.
+- Explicit interruption and unexpected root-process termination use the same loading, reconciliation, and continuation
+  implementation. After interruption the existing instance may continue; after termination the user recreates it
+  against the existing working directory. Explicit interruption remains a distinct event with stop and
+  configuration-unlocking consequences; a crash may leave no crash log.
+- Restore the fixed parent configuration and load its authoritative saved memberships before resuming dispatch.
+  Continuing, resumed, and duplicate attempts retain those memberships, accepted results, selected reception, and
+  remaining retry budgets. Never rerun the splitter or replace the persisted partition schedule during recovery.
+- Durably record the selected attempt in `execution_state.csv` before online package receipt or root-local handoff
+  begins. Selection alone does not establish result acceptance or logical-task completion.
+- If a worker is still computing, no accepted bundle exists, and its parent has not been stopped, cancelled, or
+  superseded, restore its assignment and allow it to continue. Otherwise preserve its stop disposition. Stop remaining
+  duplicates after another attempt's bundle is accepted.
+- If a complete accepted bundle already exists in the final root location, reconstruct its logical task as complete and
+  confirm acceptance as needed. Do not reevaluate or retransmit it. This includes termination after durable publication
+  but before the in-memory completion update or worker acknowledgement.
+- Online recovery distinguishes a published bundle from a pending package or staging directory. Root-local recovery
+  trusts a worker-validated bundle durably copied to its final root location and does not revalidate it.
+- If the selected bundle is missing and the worker retains it with retries remaining, resume delivery of that same
+  bundle within its remaining budget. Keep its attempt slot occupied and never substitute an unselected duplicate.
+- An exhausted delivery operation remains exhausted across reconnection and restart. Do not reset its retry budget or
+  restart delivery merely because a retained bundle exists.
+- Exact message schemas, retry timing, package-integrity mechanisms, atomic-publication mechanisms, filesystem-safe
+  identifier encodings, and acknowledgement encoding remain deferred to the corresponding architecture or protocol
+  specification. They must implement these recovery semantics rather than redefine them.
 
 **Reproducibility and Auditability:**
 
@@ -981,7 +978,7 @@ Before planning or implementing a phase, process project guidance in this order:
 
 **Online Connection Rounds and Allocation:**
 
-- Use one asynchronous per-worker connection/reconnection policy before start, during execution, and after disconnect.
+- Use one asynchronous per-worker connection/reconnection policy before run, during execution, and after disconnect.
   Configure a retry period and a sequence of delays within each round. For example, a 60-second period with delays
   `[1, 2, 4]` starts rounds periodically; after an initial failure, additional attempts follow those delays.
   Exhausting a round leaves the worker unavailable until the next scheduled round, without removing its configuration.
@@ -1001,19 +998,22 @@ Before planning or implementing a phase, process project guidance in this order:
 
 **Serialization Ownership and Compatibility:**
 
-- Use `dill` exclusively for Cocoonet serialized payloads; do not introduce a parallel `pickle` serialization path.
-- Dataset inputs are limited to the non-executable table formats defined above. Pickle/dill dataset sources
-  are prohibited. Generated CSV and Parquet dataset artifacts are separate from Cocoonet model, result,
-  partition, and protocol serialization.
+- Use schema-controlled UTF-8 CSV for authoritative tabular and key/value persistence. Do not rely on automatic type or
+  missing-value inference. Preserve finite values, `Inf`, `-Inf`, `NaN`, and unavailable `NA` according to the owning
+  schema.
+- Use dill only for explicitly designated trusted model payloads and standardized visualization-data payloads; do not
+  introduce a direct `pickle` path.
+- Dataset inputs and generated CSV/Parquet transfer artifacts follow their separate input and size-based transfer
+  contracts.
 - For root-local and private workers, the root may create dill model payloads, and those workers may deserialize
   them at the designated execution boundary. Custom models are permitted under the user's trust responsibility.
 - For public workers, the root sends only a declarative model specification and applicable non-executable
   model-data artifacts. Public workers reconstruct supported models locally and never deserialize root-supplied
   Python model objects.
-- Workers construct and serialize standardized evaluation-result files; only the root deserializes them, outside
-  the active receive event loop. Restrict model/result loading to their designated paths, not arbitrary serialized
-  data. Separately, the root loads its authoritative partition `dill` file through the designated dataset/partition
-  preparation or recovery path, validating the dataset association before reuse.
+- Workers construct standardized result bundles. Online workers transfer the selected bundle through one compressed
+  package that the root validates and unpacks. A same-machine root-local worker uses direct local handoff without
+  package creation, root-side result validation, or unpacking. Partition memberships are loaded from the designated
+  `partition_schedules.csv`.
 - Require exactly equal complete Cocoonet version identifiers for root and worker. For online workers, check during
   the connection handshake before normal protocol operation, dataset synchronization, task assignment, or model
   deserialization. Local compatibility checking does not require a network handshake. Matching major/minor versions
