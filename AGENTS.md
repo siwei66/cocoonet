@@ -731,7 +731,10 @@ Before planning or implementing a phase, process project guidance in this order:
   execution state.
 - Use schema-controlled XLSX for result-bundle tables, including attempt metadata and manifests, fold/source
   associations, validation results, numeric reports, influence results, and failure records. Each required result table
-  is a separate `.xlsx` workbook containing exactly one worksheet.
+  is a separate `.xlsx` workbook containing exactly two worksheets. The first worksheet contains the result data. The
+  second contains schema-controlled result metadata needed for identity, association, schema, and integrity validation,
+  including the applicable parent task, model/unit, attempt, dataset/partition, fold, worker, artifact kind, and schema
+  identity where applicable.
 - Use dill only for applicable trusted model payloads and standardized visualization data. Visualization dill files
   contain rendering data, not arbitrary plotting objects, callables, or duplicate numeric reports.
 - Persistence representation and transfer preparation are separate concerns. These CSV, XLSX, and dill requirements
@@ -868,8 +871,8 @@ Before planning or implementing a phase, process project guidance in this order:
 
 **Report Receipt, Persistence, and Acceptance:**
 
-- Produce one immutable result bundle per execution attempt. It contains applicable schema-controlled single-sheet
-  XLSX report tables, metadata, inventory, fold/source associations, influence results, and failures, plus applicable
+- Produce one immutable result bundle per execution attempt. It contains applicable schema-controlled two-sheet XLSX
+  result workbooks, metadata, inventory, fold/source associations, influence results, and failures, plus applicable
   standardized visualization-data dill files. Preserve successful independent results alongside unavailable values
   and failures.
 - The bundle manifest defines its complete inventory. Individual files have no independent delivery, retry,
@@ -1004,8 +1007,9 @@ Before planning or implementing a phase, process project guidance in this order:
 **Serialization Ownership and Compatibility:**
 
 - Use schema-controlled UTF-8 CSV for authoritative non-result tabular and key/value persistence. Use schema-controlled
-  single-sheet XLSX workbooks for result-bundle tables. Do not rely on automatic type or missing-value inference.
-  Preserve finite values, `Inf`, `-Inf`, `NaN`, and unavailable `NA` according to the owning schema.
+  two-sheet XLSX workbooks for result-bundle tables under the result-data and metadata worksheet contract above. Do not
+  rely on automatic type or missing-value inference. Preserve finite values, `Inf`, `-Inf`, `NaN`, and unavailable
+  `NA` according to the owning schema.
 - Use dill only for explicitly designated trusted model payloads and standardized visualization-data payloads; do not
   introduce a direct `pickle` path.
 - Dataset inputs and generated CSV/Parquet transfer artifacts follow their separate input and size-based transfer

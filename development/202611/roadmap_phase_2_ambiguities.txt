@@ -12,11 +12,11 @@ MY ANSWER:
 
 - Online package/archive and compression format
 
-MY ANSWER: as requested in 
+MY ANSWER: ".tar.zst" for packing and compression. I state it in AGENTS.md.
 
 - Package integrity mechanism
 
-
+MY ANSWER: 
 
 - Atomic publication implementation and staging suffix
 
