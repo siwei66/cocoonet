@@ -400,9 +400,10 @@ constraints:
 - Preserve small denominators and the resulting defined values. Do not introduce epsilon, clipping, imputation,
   invented probabilities, fallback values, or NaN-skipping aggregation to manufacture a defined or preferred result.
 - Human-readable reports render finite values numerically and use the exact tokens `Inf`, `-Inf`, `NaN`, and `NA`.
-  Serialization and report exporters must preserve the distinction between `NaN` and `None`. CSV output must write
-  these tokens deliberately rather than relying on library missing-value defaults. Other supported report formats
-  must define a typed or explicit format-specific representation that preserves the same distinctions.
+  Serialization and report exporters must preserve the distinction between `NaN` and `None`. Required XLSX result
+  tables write finite values as numeric cells and these tokens deliberately as text cells rather than relying on
+  spreadsheet-library missing-value defaults. Other supported report formats must define a typed or explicit
+  format-specific representation that preserves the same distinctions.
 - These generated-result rules do not change dataset-input validation. User-provided regression targets and feature
   values continue to reject `NaN`, positive infinity, and negative infinity.
 - Report formula-defined edge cases and risks clearly. Expected `NaN`, permitted infinite values, extreme finite
@@ -637,8 +638,8 @@ Before planning or implementing a phase, process project guidance in this order:
   root-local worker. A worker uses a locally configured base or a managed `cocoonet/` child under the environment
   user's home directory. The root cannot remotely select or clear an online worker's physical work directory.
 - A worker validates and durably publishes its result bundle before reporting the attempt ready.
-- Online delivery compresses the selected bundle for transfer. The root receives, validates, unpacks, and persists that
-  package before acceptance.
+- Online delivery packages and compresses the selected bundle as `.tar.zst`. The root receives, validates, unpacks, and
+  persists that package before acceptance.
 - A root-local worker on the same machine uses direct bundle copying or handoff. Packaging, compression, transfer,
   unpacking, and root-side attempt-result validation are skipped. Root acceptance relies on the worker's completed
   validation and the root's successful durable copy of that bundle.
@@ -726,20 +727,23 @@ Before planning or implementing a phase, process project guidance in this order:
   Paths are not authoritative identity evidence: persist and validate the exact applicable identities and associations
   inside the artifacts. Any identifier used in a path must use a defined filesystem-safe representation. Hashes used
   for integrity, change detection, or another documented purpose remain permitted.
-- Use schema-controlled UTF-8 CSV for node metadata, authoritative partition schedules, execution configuration,
-  execution state, attempt metadata and manifests, fold/source associations, validation results, numeric reports,
-  influence results, and failure records.
+- Use schema-controlled UTF-8 CSV for node metadata, authoritative partition schedules, execution configuration, and
+  execution state.
+- Use schema-controlled XLSX for result-bundle tables, including attempt metadata and manifests, fold/source
+  associations, validation results, numeric reports, influence results, and failure records. Each required result table
+  is a separate `.xlsx` workbook containing exactly one worksheet.
 - Use dill only for applicable trusted model payloads and standardized visualization data. Visualization dill files
   contain rendering data, not arbitrary plotting objects, callables, or duplicate numeric reports.
-- Persistence representation and transfer preparation are separate concerns. These CSV and dill requirements do not
-  replace the applicable compressed Parquet preparation or result-package transfer contracts.
+- Persistence representation and transfer preparation are separate concerns. These CSV, XLSX, and dill requirements
+  do not replace the applicable compressed Parquet preparation or result-package transfer contracts.
 - Store each shared fact once per owning scope. Do not duplicate authoritative dataset references, partition schedules,
   execution configuration, execution state, or independently derivable result summaries. Required worker execution
   inputs, result-package staging, and acknowledged worker/root bundle copies are not competing authoritative artifacts.
 - One attempt outcome is one immutable result bundle. Its files have no independent delivery, retry, acceptance, or
   recovery lifecycle.
-- Online delivery uses one compressed package for the selected bundle. Same-machine root-local handoff uses the
-  worker-validated bundle directly without packaging or root-side result validation.
+- Online delivery uses one `.tar.zst` package for the selected bundle. Compression parameters are user-configurable;
+  their defaults favor the best performance for result bundles of approximately 1 MB or less. Same-machine root-local
+  handoff uses the worker-validated bundle directly without packaging or root-side result validation.
 
 **Worker Ownership and External Discovery:**
 
@@ -843,8 +847,8 @@ Before planning or implementing a phase, process project guidance in this order:
   Select an unfinished, currently running logical task, starting with its oldest first execution time.
 - A duplicate execution is another attempt at the same logical task, not another logical result. For each logical task,
   serialize reception and select one ready attempt according to receiving order. Online reception receives only that
-  bundle's package; root-local handoff uses only that selected bundle. Reception for different logical tasks remains
-  independent.
+  bundle's `.tar.zst` package; root-local handoff uses only that selected bundle. Reception for different logical tasks
+  remains independent.
 - Selection does not depend on scientific success or failure. An earlier selected failure outcome takes precedence
   over a later success. Expected `NaN` and recorded computational failures do not invalidate an outcome. Coordinator
   state must enforce at most one accepted bundle per logical task across delivery, reconnection, and recovery.
@@ -852,9 +856,9 @@ Before planning or implementing a phase, process project guidance in this order:
   remaining duplicates without receiving or handing off their bundles. Workers check stop instructions at the
   established cooperative boundaries; ready but unselected duplicates wait for reception selection or a stop
   instruction.
-- Persistence waiting and retries apply only to the selected bundle. Online retry resends the same package; local retry
-  reuses the same published local bundle. Unselected bundles do not enter delivery retry and are not delivery failures.
-  Failure of the selected delivery does not promote another duplicate.
+- Persistence waiting and retries apply only to the selected bundle. Online retry resends the same `.tar.zst` package;
+  local retry reuses the same published local bundle. Unselected bundles do not enter delivery retry and are not
+  delivery failures. Failure of the selected delivery does not promote another duplicate.
 - Duplicate execution reduces completion latency; it is not failure recovery. Do not automatically retry or reallocate
   a terminal reconstruction or primary-validation failure, or start another duplicate while an existing completed
   result awaits delivery.
@@ -864,17 +868,18 @@ Before planning or implementing a phase, process project guidance in this order:
 
 **Report Receipt, Persistence, and Acceptance:**
 
-- Produce one immutable result bundle per execution attempt. It contains applicable schema-controlled CSV reports,
-  metadata, inventory, fold/source associations, influence results, and failures, plus applicable standardized
-  visualization-data dill files. Preserve successful independent results alongside unavailable values and failures.
+- Produce one immutable result bundle per execution attempt. It contains applicable schema-controlled single-sheet
+  XLSX report tables, metadata, inventory, fold/source associations, influence results, and failures, plus applicable
+  standardized visualization-data dill files. Preserve successful independent results alongside unavailable values
+  and failures.
 - The bundle manifest defines its complete inventory. Individual files have no independent delivery, retry,
   persistence, acceptance, or recovery state.
 - Reconstruction failure produces a failure-only bundle. Validation, report, and influence failures preserve every
   independently successful result under the established attempt/report outcomes. A computational failure recorded in
   a complete bundle does not require retransmission or prevent normal acceptance.
-- Online workers package the selected bundle for compressed delivery. The root validates and unpacks the package before
-  durably publishing the bundle. Package receipt and content processing must not block the active network event loop;
-  do not deserialize visualization dill data there.
+- Online workers package the selected bundle as `.tar.zst` for compressed delivery. The root validates and unpacks the
+  package before durably publishing the bundle. Package receipt and content processing must not block the active
+  network event loop; do not deserialize visualization dill data there.
 - A root-local worker hands off or copies its already validated bundle directly. The root performs no duplicate
   attempt-result validation; acceptance follows successful durable root persistence.
 - Accept the selected outcome and mark its logical task complete only after the complete bundle has been durably
@@ -882,13 +887,13 @@ Before planning or implementing a phase, process project guidance in this order:
   Partial packages, staging directories, incomplete bundles, and transient memory do not establish completion. Never
   overwrite an accepted bundle with a later duplicate.
 - Delivery or persistence failure leaves the logical task unfinished. Retry the same bundle within its remaining
-  budget without reevaluation or per-file retry. Online retry resends the same package; root-local retry reuses the
-  same worker-published bundle.
+  budget without reevaluation or per-file retry. Online retry resends the same `.tar.zst` package; root-local retry
+  reuses the same worker-published bundle.
 - Until acceptance or delivery-retry exhaustion, retain the selected worker bundle and keep its producing attempt slot
   occupied. Other eligible attempt slots remain usable. Retry exhaustion ends that delivery operation but does not
   accept or complete the logical task, authorize reevaluation, or terminate the worker.
 - Configure worker bundle retention as deletion after confirmed acceptance, retention until all applicable root tasks
-  finish, or no automatic deletion. Cleanup applies to the complete bundle and any pending online package.
+  finish, or no automatic deletion. Cleanup applies to the complete bundle and any pending online `.tar.zst` package.
 - Mandatory public-worker release cleanup overrides ordinary retention. Before a public worker serves another user or
   begins an attempt for a different parent, remove earlier-parent result artifacts after any selected delivery has
   completed or reached its established terminal operation state. Cleanup never accepts an undelivered result, completes
@@ -896,8 +901,8 @@ Before planning or implementing a phase, process project guidance in this order:
 - Root-side rendering persists applicable PNG output from accepted visualization data. Rendering is post-reception
   processing and does not undo scientific-result acceptance.
 - Preserve parent, model/unit, attempt, worker, and artifact associations for every bundle. Dataset identity resolves
-  through the parent context. Recovery must distinguish a complete accepted bundle from a partial package, staging
-  directory, or incomplete bundle.
+  through the parent context. Recovery must distinguish a complete accepted bundle from a partial `.tar.zst` package,
+  staging directory, or incomplete bundle.
 
 **Root Restart and Progress Recovery:**
 
@@ -911,16 +916,16 @@ Before planning or implementing a phase, process project guidance in this order:
 - Restore the fixed parent configuration and load its authoritative saved memberships before resuming dispatch.
   Continuing, resumed, and duplicate attempts retain those memberships, accepted results, selected reception, and
   remaining retry budgets. Never rerun the splitter or replace the persisted partition schedule during recovery.
-- Durably record the selected attempt in `execution_state.csv` before online package receipt or root-local handoff
-  begins. Selection alone does not establish result acceptance or logical-task completion.
+- Durably record the selected attempt in `execution_state.csv` before online `.tar.zst` package receipt or root-local
+  handoff begins. Selection alone does not establish result acceptance or logical-task completion.
 - If a worker is still computing, no accepted bundle exists, and its parent has not been stopped, cancelled, or
   superseded, restore its assignment and allow it to continue. Otherwise preserve its stop disposition. Stop remaining
   duplicates after another attempt's bundle is accepted.
 - If a complete accepted bundle already exists in the final root location, reconstruct its logical task as complete and
   confirm acceptance as needed. Do not reevaluate or retransmit it. This includes termination after durable publication
   but before the in-memory completion update or worker acknowledgement.
-- Online recovery distinguishes a published bundle from a pending package or staging directory. Root-local recovery
-  trusts a worker-validated bundle durably copied to its final root location and does not revalidate it.
+- Online recovery distinguishes a published bundle from a pending `.tar.zst` package or staging directory. Root-local
+  recovery trusts a worker-validated bundle durably copied to its final root location and does not revalidate it.
 - If the selected bundle is missing and the worker retains it with retries remaining, resume delivery of that same
   bundle within its remaining budget. Keep its attempt slot occupied and never substitute an unselected duplicate.
 - An exhausted delivery operation remains exhausted across reconnection and restart. Do not reset its retry budget or
@@ -998,9 +1003,9 @@ Before planning or implementing a phase, process project guidance in this order:
 
 **Serialization Ownership and Compatibility:**
 
-- Use schema-controlled UTF-8 CSV for authoritative tabular and key/value persistence. Do not rely on automatic type or
-  missing-value inference. Preserve finite values, `Inf`, `-Inf`, `NaN`, and unavailable `NA` according to the owning
-  schema.
+- Use schema-controlled UTF-8 CSV for authoritative non-result tabular and key/value persistence. Use schema-controlled
+  single-sheet XLSX workbooks for result-bundle tables. Do not rely on automatic type or missing-value inference.
+  Preserve finite values, `Inf`, `-Inf`, `NaN`, and unavailable `NA` according to the owning schema.
 - Use dill only for explicitly designated trusted model payloads and standardized visualization-data payloads; do not
   introduce a direct `pickle` path.
 - Dataset inputs and generated CSV/Parquet transfer artifacts follow their separate input and size-based transfer
@@ -1010,7 +1015,7 @@ Before planning or implementing a phase, process project guidance in this order:
 - For public workers, the root sends only a declarative model specification and applicable non-executable
   model-data artifacts. Public workers reconstruct supported models locally and never deserialize root-supplied
   Python model objects.
-- Workers construct standardized result bundles. Online workers transfer the selected bundle through one compressed
+- Workers construct standardized result bundles. Online workers transfer the selected bundle through one `.tar.zst`
   package that the root validates and unpacks. A same-machine root-local worker uses direct local handoff without
   package creation, root-side result validation, or unpacking. Partition memberships are loaded from the designated
   `partition_schedules.csv`.

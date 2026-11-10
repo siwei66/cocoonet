@@ -1,0 +1,39 @@
+Remaining ambiguities
+No blocking architecture ambiguity remains.
+
+The following implementation mechanisms remain intentionally deferred:
+- Filesystem-safe identifier encoding
+
+MY ANSWER: use sequential integer number 1 / 2 / ... as identifier, examples of ID suffix before extension: `_1` / `_2342` / `_100342`
+
+- Detailed CSV schemas other than the resolved partition membership fields
+
+MY ANSWER: 
+
+- Online package/archive and compression format
+
+MY ANSWER: as requested in 
+
+- Package integrity mechanism
+
+
+
+- Atomic publication implementation and staging suffix
+
+
+
+- Local IPC and bundle-copy mechanism
+
+
+
+- Public-service wire interface
+
+
+
+- Exact recovery constructor/signature
+
+
+
+- Exact worker-directory configuration API
+
+
