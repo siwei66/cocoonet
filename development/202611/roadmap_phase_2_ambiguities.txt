@@ -4,36 +4,101 @@ No blocking architecture ambiguity remains.
 The following implementation mechanisms remain intentionally deferred:
 - Filesystem-safe identifier encoding
 
+```
 MY ANSWER: use sequential integer number 1 / 2 / ... as identifier, examples of ID suffix before extension: `_1` / `_2342` / `_100342`
+```
+
+---
 
 - Detailed CSV schemas other than the resolved partition membership fields
 
-MY ANSWER: 
+```
+MY ANSWER:
+
+I interpret this as the table schema for the result reports.
+
+A. For classification:
+1. validation results:
+- columns: sample_id, sample_label, y_true, y_pred, <class name 0>, <class name 1>, ..., <class name n> (The <class name k> column is for the predicted probability of the class k, while the y_true and y_pred provide the true and predicted categorical class label)
+- rows: sample_id i.e. rows are indexed by sample_id, but save sample_id as a column explicitly, instead of as the row names.
+2. classification performance:
+- columns: class, TP, TN, FP, FN, precision, recall, f1_score, accuracy, AUC (area under curve)
+- rows: class labels and micro-average and macro-average (for average metrics of precision, recall, f1_score, accuracy and AUC only, with TP, TN, FP, FN as not available)
+3. residual analysis:
+- columns: sample_id, sample_label, y_true, <class name 0>_prob, <class name 1>_prob, ..., <class name n>_prob (The <class name k>_prob column is for the predicted probability of the class k), <class name 0>_res, <class name 1>_res, ..., <class name n>_res (The <class name k>_res column is for the residual of predicted probability of the class k), <class name 0>_z, <class name 1>_z, ..., <class name n>_z (The <class name k>_z column is for the z-score of the residual of the class k), sum_of_absolute_residual, root_sum_of_squared_residual, Shannon_entropy_of_absolute_residual, Mahalanobis_distance_of_residual
+- rows: sample_id
+4. sample influence:
+- columns: sample_id, sample_label, <class name 0>, <class name 1>, ..., <class name n> (The <class name k> column is for the stated influence measure of the class k), sum_of_influence, root_sum_of_squared_influence (for the sum of influence measures among classes and root sum of squared influence measures of the classes)
+- rows: sample_id
+
+B. For regression:
+1. validation results:
+- columns: sample_id, sample_label, fold_id (from which fold is y_pred obtained, identical for all tested samples for simple train-test-split because there is only one fold), y_true, y_pred
+- rows: sample_id
+2. regression performance:
+- columns: mean_error, std_of_error, MAE (for mean absolute error), normalized_MAE, MSE (for mean squared error), RMSE (for root mean squared error), normalized_RMSE, CV_RMSE (for coefficient of variation of RMSE), RPD (for residual prediction deviation), R2 (for coefficient of determination)
+- rows: No row identifier needed because there is only one row of these measures for goodness of fit / regression performance for a model / attempt
+3. residual analysis:
+- columns: sample_id, sample_label, y_true, y_pred, residual, standardized_residual
+- rows: sample_id
+4. sample influence:
+- columns: sample_id, sample_label, influence (for the stated influence measure, only one per sample for regression)
+- rows: sample_id
+
+C. For meta-data sheet (2nd sheet of the xlsx table):
+- columns: <key>, <value> (No column name needed because there is only one column of values)
+- rows: <key> (The metadata items that need to be recorded, at least include creation_datetime, parent_id, attempt_id, model_id, model_label, worker_id)
+```
+
+---
 
 - Online package/archive and compression format
 
 MY ANSWER: ".tar.zst" for packing and compression. I state it in AGENTS.md.
 
+---
+
 - Package integrity mechanism
 
-MY ANSWER: 
+```
+MY ANSWER: Resolve the Package integrity mechanism as follows. For online delivery, each worker validates an immutable result bundle, compresses it into one package, and records its exact byte length and SHA-256 digest. A private online worker and its root receive the same randomly generated key of at least 32 bytes through keyword-only runtime API parameters; Cocoonet never transmits, persists, copies, displays, or logs the key. The worker computes HMAC-SHA-256 over canonical metadata containing the protocol version, parent/model/attempt identities, package length, and package SHA-256. The root receives the package into staging, recomputes and verifies the length, digest, and HMAC before safe extraction, manifest/schema validation, and atomic publication. Verification failure leaves the result unaccepted and retries the same package without reevaluation or substitution by another attempt. Root-local workers use direct validated bundle handoff and require no package, network key, or HMAC. This mechanism provides integrity and private-worker authentication, not confidentiality; encryption remains a separate later protocol/deployment decision. Exact archive and compression formats remain deferred to the online delivery phase.
+```
+
+---
 
 - Atomic publication implementation and staging suffix
 
+```
+MY ANSWER:
+Authoritative XLSX result files use same-directory <filename>.partial staging, pre-write validation, flush and file synchronization, followed by atomic rename for immutable files or atomic replacement for mutable execution state. Complete report bundles use <attempt_id>.staging directories and one same-filesystem rename to their final directory. Logs append directly and tolerate an incomplete final line after a crash. Staging content is never authoritative or automatically promoted; recovery or retry removes exact stale staging entries and restarts the whole write. Cocoonet implements one file-publication helper and one bundle-publication helper, without a generic transaction, repository, or artifact framework.
+```
 
+---
 
 - Local IPC and bundle-copy mechanism
 
+```
+MY ANSWER: Resolve Local IPC and bundle-copy mechanism as follows. The root owns and starts the root-local worker with the standard-library multiprocessing spawn context and one duplex Pipe. The worker is not reconnectable and may terminate with the root; orderly root shutdown stops and joins it, while unexpected pipe closure causes it to exit at the next cooperative boundary. IPC messages use Connection.send_bytes() and recv_bytes() with explicit Dill protocol-5 serialization rather than multiprocessing’s default pickle serialization. Large model payloads may be written once to designated Dill files and referenced by managed paths in IPC messages instead of repeatedly crossing the pipe. Dill loading is permitted only at this trusted root-local worker boundary. Control messages contain assignments, paths, progress, bundle readiness, acceptance, stop, and shutdown events; datasets and result bundles never travel through IPC. The worker writes and validates its complete bundle in worker-managed storage, then sends its identity and path. The root copies the selected bundle into root staging and atomically publishes it. Copy failure retries the same bundle without reevaluation. No local networking, authentication, compression, transfer archive, HMAC, or separate public local-worker submodule is required; use only a small private adapter around the shared worker runtime.
+```
 
+---
 
 - Public-service wire interface
 
-
+```
+MY ANSWER: Resolve the online service wire interface as follows. All Cocoonet online root–worker communication uses one versioned Cocoonet protocol over TLS-protected HTTPS/WSS. It carries bounded control messages and streamed dataset, model, and result-bundle payloads; package length and SHA-256 verify complete receipt. Root coordination authority is unchanged by connection direction.
+For a non-public computation network, users provide both root and worker endpoints. Cocoonet defaults to auto, attempts both root-to-worker and worker-to-root connections, and lets the root accept the first authenticated compatible connection for each configured worker_id while closing duplicates. Users may optionally force root_connects or worker_connects. If neither direction succeeds, startup fails before work allocation or scientific-data transfer.
+Exact message schemas, framing, authentication handshake, certificate provisioning, connection arbitration, retry timing, and endpoint signatures belong to the later online-protocol phase and are not implemented in Phase 2.
+```
 
 - Exact recovery constructor/signature
 
-
+```
+MY ANSWER: the exact design is deferred if unnecessary for phase 2, which could be a parameter `resume=True` in the method `run` of a parent evaluation task instance on the root node, or a explicit method named `resume` for `run(..., resume=True, ...)`.
+```
 
 - Exact worker-directory configuration API
 
-
+```
+MY ANSWER: the exact worker API is deferred if unnecessary for phase 2, which could be a worker service instance like `workerservice = WorkerService(root_ip=..., worker_id=..., shared_key=..., work_dir=...), work_dir is optional with default to dir `cocoonet` in the default console working directory, then the worker service could be start with method `start()`.
+```

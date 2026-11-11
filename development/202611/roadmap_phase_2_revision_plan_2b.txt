@@ -1,0 +1,737 @@
+No file has been modified.
+
+I reviewed the previous proposal for redundancy and found four places where it went beyond the ambiguity answers:
+
+- It invented worksheet names and detailed manifest/failure schemas.
+- It added `fold_id` to classification validation despite the supplied schema omitting it.
+- It added safe-extraction rules beyond the requested “safe extraction” requirement.
+- It replaced broader lifecycle sections where targeted edits would preserve more existing policy.
+
+The revised proposal below removes those additions, preserves existing instructions unless they conflict, and retains every required decision from the ambiguity answers.
+
+# Part 1 — Minimal prerequisite revisions to `AGENTS.md`
+
+Additional `AGENTS.md` changes are necessary because it still explicitly defers resolved mechanisms and conflicts with the new connection and worker-directory policies.
+
+## Issue 1 — Sequential managed-path identifiers
+
+### Analysis
+
+Only the representation of Cocoonet-generated identifiers in managed paths is resolved. User labels and scientific identifiers should remain unchanged.
+
+### Exact revision
+
+At [AGENTS.md](E:/swectral_new/cocoonet/AGENTS.md:726), replace lines 726–729 with:
+
+```markdown
+- Use purpose-specific semantic paths. Do not hash an opaque identifier solely to produce a filename or directory name.
+  Cocoonet-generated identifiers used in managed paths are positive sequential decimal integers beginning at `1`,
+  rendered as semantic suffixes such as `_1`, `_2342`, and `_100342`, and not reused within their owning persistent
+  scope. Paths are not authoritative identity evidence: persist and validate exact identities and associations inside
+  the artifacts. Hashes used for integrity, change detection, or another documented purpose remain permitted.
+```
+
+### Summary
+
+This resolves the path representation without changing sample labels, model labels, class labels, or other user data.
+
+---
+
+## Issue 2 — Worker-directory default and root-local IPC
+
+### Analysis
+
+The latest answer changes the default worker location from the environment user’s home directory to `cocoonet/` under the worker’s console working directory. It also resolves the IPC and local bundle-copy mechanisms currently marked deferred.
+
+### Exact revision
+
+At lines 637–639, replace:
+
+```markdown
+- Root coordinator storage and each worker's managed storage are distinct ownership scopes, including for the
+  root-local worker. A worker uses a locally configured base or a managed `cocoonet/` child under the environment
+  user's home directory. The root cannot remotely select or clear an online worker's physical work directory.
+```
+
+with:
+
+```markdown
+- Root coordinator storage and each worker's managed storage are distinct ownership scopes, including for the
+  root-local worker. A worker uses a locally configured work directory or defaults to a managed `cocoonet/` child under
+  the worker service's console working directory. The root cannot remotely select or clear an online worker's physical
+  work directory.
+```
+
+At lines 646–650, retain the existing local-execution paragraph through “acknowledgement semantics” and replace only its final deferral sentence with:
+
+```markdown
+  The root starts its root-local worker with the standard-library multiprocessing `spawn` context and one duplex
+  `Pipe`. Control messages use `Connection.send_bytes()` and `recv_bytes()` with explicit dill serialization using
+  protocol 5. Datasets and result bundles do not travel through the pipe. The worker publishes and validates its
+  bundle in worker storage and reports its identity and managed path; the root copies the selected bundle into root
+  staging and atomically publishes it. Copy failure retries the same bundle without reevaluation.
+```
+
+After that paragraph, insert:
+
+```markdown
+- Large trusted model payloads may be persisted once to designated dill files and referenced by managed paths in local
+  IPC messages. The root-local worker is not reconnectable: orderly root shutdown stops and joins it, while unexpected
+  pipe closure causes it to exit at the next cooperative boundary. Local execution uses no networking, authentication,
+  compression, transfer archive, or HMAC and requires only a small private adapter around the shared worker runtime.
+```
+
+At lines 651–654, replace only:
+
+```markdown
+Exact process/connection lifetimes and local-worker survival after root restart remain deferred.
+```
+
+with:
+
+```markdown
+Online process/connection lifetimes remain deferred. A root-local worker belongs to its current root process and is
+recreated rather than reconnected after root-process termination.
+```
+
+At lines 738–739, revise the dill restriction to:
+
+```markdown
+- Use dill only for applicable trusted model payloads, trusted root-local IPC messages, and standardized visualization
+  data.
+```
+
+At lines 1012–1013, make the matching revision:
+
+```markdown
+- Use dill only for explicitly designated trusted model payloads, trusted root-local IPC messages, and standardized
+  visualization-data payloads; do not introduce a direct `pickle` path.
+```
+
+### Summary
+
+This resolves only the worker default, local IPC, bundle-copy path, and root-local process lifetime.
+
+---
+
+## Issue 3 — Private online connection direction
+
+### Analysis
+
+The latest answer applies bidirectional establishment to private/non-public networks. Public workers remain root-connected through information supplied by the public service.
+
+### Exact revision
+
+At lines 753–762, replace the first three bullets with:
+
+```markdown
+- Every online worker accepts only Cocoonet's versioned internal protocol and serves at most one authenticated root/user
+  at a time. No worker communicates directly with another worker. Connection direction does not change root
+  coordination authority.
+- For a private/non-public computation network, users configure both root and worker endpoints. Direction defaults to
+  `auto`: Cocoonet attempts root-to-worker and worker-to-root establishment, and the root accepts the first
+  authenticated, version-compatible connection for each configured `worker_id` while closing duplicates. Users may
+  instead force `root_connects` or `worker_connects`. If neither permitted direction succeeds, startup fails before
+  work allocation or scientific-data transfer. Private workers remain outside public discovery.
+- For a public worker, the root requests an idle worker from the external service, receives its connection information,
+  and initiates the connection. Public authentication and connection details follow the supplied service interface.
+```
+
+At lines 967–972, replace the two absolute root-initiated connection bullets with:
+
+```markdown
+- Use `asyncio` and `aiofiles`. Online communication uses one versioned Cocoonet protocol over TLS-protected HTTPS/WSS
+  for bounded control messages and streamed dataset, model, and result-package payloads.
+- Scheduling and assignment remain root-controlled. Private connection establishment follows `auto`, `root_connects`,
+  or `worker_connects`; public establishment follows the external service interface. Connection direction never
+  transfers coordination authority to a worker.
+```
+
+### Summary
+
+This changes only private connection establishment and retains existing public-service ownership.
+
+---
+
+## Issue 4 — Package integrity
+
+### Analysis
+
+The integrity mechanism is resolved for all online packages, with HMAC authentication additionally required for private online workers.
+
+The attachment’s statement that archive format remains deferred is superseded by the already approved `.tar.zst` policy.
+
+### Exact revision
+
+After line 883, insert:
+
+```markdown
+- Every online `.tar.zst` package records its exact byte length and SHA-256 digest. For private online delivery, the root
+  and worker receive the same randomly generated key of at least 32 bytes through keyword-only runtime API parameters;
+  Cocoonet never transmits, persists, internally copies, displays, or logs the key.
+- The private worker computes HMAC-SHA-256 over canonical metadata containing the protocol version, parent, model, and
+  attempt identities, package length, and package SHA-256. The root receives the package into staging and verifies its
+  length, digest, and HMAC before safe extraction, manifest/schema validation, and atomic publication. Verification
+  failure leaves the result unaccepted and retries the same package without reevaluation or duplicate substitution.
+  Public-worker authentication remains governed by the supplied public-service interface. This mechanism provides
+  integrity and private-worker authentication, not confidentiality.
+```
+
+### Summary
+
+This adds only the resolved length, SHA-256, private HMAC, key-handling, and verification-order contracts.
+
+---
+
+## Issue 5 — Atomic publication
+
+### Analysis
+
+The staging suffixes, publication sequence, crash behavior, and two-helper limit are resolved and currently marked deferred.
+
+### Exact revision
+
+After line 890, insert:
+
+```markdown
+- Authoritative XLSX files use same-directory `<filename>.partial` staging. Validate before writing, flush and
+  synchronize the completed file, then atomically rename immutable files. Publish mutable `execution_state.csv`
+  through same-directory staging and atomic replacement.
+- Construct a complete bundle in `<attempt_id>.staging` on the same filesystem as its final directory and publish it
+  with one atomic directory rename after validation. Staging content is never authoritative or automatically promoted;
+  recovery or retry removes only the exact stale staging entry and restarts the complete write. Logs append directly
+  and may retain an incomplete final line after a crash.
+- Implement one focused file-publication helper and one focused bundle-publication helper. Do not introduce a generic
+  transaction, repository, or artifact framework.
+```
+
+### Summary
+
+This fixes publication behavior without introducing a general persistence abstraction.
+
+---
+
+## Issue 6 — Remove obsolete deferrals
+
+### Analysis
+
+Package integrity, atomic publication, path-ID representation, and local IPC are no longer deferred. Recovery API and worker-service API signatures remain deferred by explicit approval.
+
+### Exact revision
+
+At lines 936–938, replace the deferral bullet with:
+
+```markdown
+- Exact control-message schemas, canonical HMAC metadata byte encoding, public-service authentication and certificate
+  provisioning, retry timing, compression parameter names, acknowledgement encoding, recovery API signatures, and
+  worker-service API signatures remain deferred to their responsible architecture or protocol phases. They must
+  preserve the fixed connection, integrity, publication, identifier, and recovery semantics above.
+```
+
+### AGENTS.md summary
+
+These are the minimum necessary governing revisions. No result-schema details need to be added to `AGENTS.md`; they belong in architecture.
+
+---
+
+# Part 2 — Minimal `docs/architecture.md` proposal
+
+This proposal assumes the prerequisite `AGENTS.md` revisions above are approved first. All existing architecture text not explicitly replaced remains unchanged.
+
+## Issue 1 — Protected roots and overwrite
+
+### Analysis
+
+Current Section 2.3 still lacks the protected-root guard and `overwrite=False` default required by `AGENTS.md`.
+
+### Exact revision
+
+At [docs/architecture.md](E:/swectral_new/cocoonet/docs/architecture.md:223), replace lines 223–224 with:
+
+```markdown
+Construction or explicit fresh initialization requires a user-provided root working directory. `overwrite` defaults
+to `False`. The root working directory is Cocoonet-managed persistent storage. User-provided dataset source paths are
+user-owned and must remain outside it.
+
+Before directory preparation, reject a proposed root whose canonical physical location equals, contains, or is
+contained within a filesystem anchor, active Python installation root, Python standard-library or system/user
+package-installation directory, installed Cocoonet package directory, or the complete Cocoonet source repository tree.
+Reject the conflict before creating, clearing, or writing any persistent file.
+```
+
+At line 244, replace the deferred path comparison sentence with:
+
+```markdown
+Compare canonical physical locations after resolving absolute paths, existing symbolic links or junctions, and existing
+ancestors, using the platform's path-case behavior. A missing final component is valid when its existing ancestor
+resolves. Malformed or unresolvable paths fail explicitly. Exact helper APIs remain implementation details.
+```
+
+At line 251, change only the table heading to:
+
+```markdown
+| Selected directory after ownership and protected-root checks | Fresh-initialization behavior |
+```
+
+After line 263, insert:
+
+```markdown
+Bind the root directory during construction or explicit fresh initialization, before dataset registration or partition
+preparation. `run()` does not select, clear, or freshly prepare it. Opening persisted execution state is distinct from
+fresh initialization and never clears or implicitly repairs the directory.
+```
+
+At lines 1887–1890, extend the existing overwrite-resolution paragraph with the protected-root guard rather than replacing its other ownership rules.
+
+### Summary
+
+This adds only the missing root-safety and initialization-order contracts.
+
+---
+
+## Issue 2 — `run()` lifecycle and recovery entry
+
+### Analysis
+
+The existing lifecycle is substantially correct but uses obsolete `start()` terminology and unnamed persistence files. Full replacement is unnecessary.
+
+### Exact revision
+
+Apply these targeted replacements:
+
+| Current lines | Minimal revision |
+| --- | --- |
+| 271 | Replace “Start alone commits” with “`run()` alone commits”. |
+| 276–280 | State that `run()` persists `execution_configuration.csv`, establishes the parent, and that mutable observations use `execution_state.csv`; retain the existing statement that other workflow artifacts have their own writers. |
+| 284–291 | Replace `Start/start` with ``run()/run`` without changing consolidation or worker-only-change behavior. |
+| 295–303 | Replace both `start()` entries with `run()`. |
+| 340–341 | Replace “fresh start” with “fresh run”. |
+| 349 | Replace “Fresh start” with “Fresh `run()`”. |
+| 367–376 | Replace `start` terminology with `run` and add the preflight exception below. |
+| 659 | Replace ``created by `start()` `` with ``created by `run()` ``. |
+| 683–684 | Replace “Start/start” with “`run()`/run”. |
+| 1303 | Replace “Start/cancel/recovery” with “Run/cancel/recovery”. |
+| 1570, 1587 | Replace `start`/`Start` with `run`/`Run`. |
+| 1660 | Replace “at start” with “at run”. |
+| 1754–1756 | Replace “start prerequisites” with “run prerequisites”. |
+| 1881 | Replace “start alone” with “`run()` alone”. |
+
+After the normal-target requirement at lines 367–376, insert:
+
+```markdown
+When preflight is requested, `run()` may start a temporary root-local worker solely for a real trial on configured data
+and a selected model subset. It is not an implicit full-evaluation target and does not execute model code in the
+coordinator.
+```
+
+At lines 320–326, retain the existing copying rules and append:
+
+```markdown
+Explicit interruption and unexpected root-process termination use one persisted-state reconciliation procedure:
+open the existing directory, load committed configuration and execution state, validate the authoritative partition
+and accepted bundles, reconcile workers, and dispatch only unfinished eligible work. After interruption the existing
+instance may continue; after termination the user recreates it against the existing directory. The exact public entry,
+whether a `run(..., resume=True)` option or a separate `resume()` method, remains deferred.
+```
+
+### Summary
+
+This keeps the established lifecycle and changes only the method name, persistence filenames, preflight, and shared reconciliation entry.
+
+---
+
+## Issue 3 — Online connection direction and local IPC
+
+### Analysis
+
+Only the private connection direction, worker-directory default, and root-local mechanism need revision. Existing public-service ownership and task semantics remain valid.
+
+### Exact revision
+
+In Section 2.2, replace only lines 191–196 with:
+
+```markdown
+- Every online worker serves at most one authenticated root/user through the versioned Cocoonet protocol. No worker
+  communicates with another worker; connection direction does not change root authority.
+- For a private/non-public network, users configure both endpoints. Direction defaults to `auto`, which attempts both
+  root-to-worker and worker-to-root establishment. The root accepts the first authenticated, compatible connection for
+  each configured `worker_id` and closes duplicates. Users may force `root_connects` or `worker_connects`; failure of
+  all permitted directions fails startup before allocation or scientific-data transfer.
+- For public workers, the root obtains connection information from the external service and initiates the connection.
+```
+
+Retain lines 197–212 concerning public-service ownership and transport separation.
+
+After line 388, insert:
+
+```markdown
+Coordinator and worker storage are separate ownership scopes. A worker administrator may select the worker work
+directory locally; otherwise use `cocoonet/` under the worker service's console working directory. The root cannot
+remotely select or clear an online worker directory.
+```
+
+Replace lines 390–395 with the concise local IPC contract:
+
+```markdown
+The root starts the root-local worker with the multiprocessing `spawn` context and one duplex `Pipe`. Control messages
+use `send_bytes()` and `recv_bytes()` with dill serialization using protocol 5. Datasets and bundles remain in managed
+storage and cross the boundary by managed path, not as IPC payloads. The worker validates and publishes its bundle,
+reports its identity and path, and the root copies the selected bundle through root staging. Copy failure retries the
+same bundle without reevaluation. The worker is not reconnectable and exits after orderly shutdown or unexpected pipe
+closure at its next cooperative boundary.
+```
+
+At lines 1499–1508, revise only connection-direction language to support private `auto`, `root_connects`, and `worker_connects`; retain persistent bidirectional connection reuse and root scheduling authority.
+
+### Summary
+
+This preserves the current public-service and execution model while resolving the two connection mechanisms.
+
+---
+
+## Issue 4 — Partition persistence and visible layout
+
+### Analysis
+
+The current partition dill contract conflicts with `partition_schedules.csv`. The visible layout must be added, but detailed future transfer-preparation directories need not be fixed now.
+
+A binary membership matrix remains insufficient because it cannot independently preserve fold order and population order without implicit row-order semantics.
+
+### Exact revision
+
+At lines 688–708, replace only the dill-specific partition paragraphs with:
+
+```markdown
+Persist each realized schedule once in one authoritative `partition_schedules.csv`. It uses one row per population
+membership:
+
+```text
+schedule_id | dataset_id | fold_index | fold_id | population | position | sample_id | sample_label
+```
+
+`population` is `train` or `test`; `fold_index` preserves fold order and `position` preserves population order.
+Persistence must complete before allocation. Worker copies are execution inputs. Recovery loads and validates this
+existing CSV without rerunning the splitter or creating a replacement schedule.
+```
+
+Rename line 1383 to:
+
+```markdown
+### 6.1 Locally visible managed storage, dataset synchronization, and reuse
+```
+
+Insert immediately below:
+
+````markdown
+Cocoonet-generated managed-path identifiers are positive sequential integers beginning at `1`, producing semantic
+names such as `dataset_1`, `parent_1`, `model_1`, and `attempt_1`.
+
+```text
+<root_dir>/
+  cocoonet_metadata.csv
+  data_reference.csv
+  partition_schedules.csv
+  execution_configuration.csv
+  execution_state.csv
+  attempt_results/
+    parent_1/
+      model_1/
+        attempt_1/
+          bundle_manifest.xlsx
+          attempt_metadata.xlsx
+          fold_sources.xlsx
+          validation_result.xlsx
+          classification_performance.xlsx | regression_performance.xlsx
+          residual_analysis.xlsx
+          sample_influence.xlsx
+          failures.xlsx
+          visualizations/
+            roc_curve.dill
+            scatter_plot.dill
+            residual_plot.dill
+  rendered_plots/
+  logs/
+    root_running.log
+    root_error.log
+```
+
+```text
+<worker_work_dir>/
+  cocoonet_metadata.csv
+  datasets/
+    dataset_1/
+      data_reference.csv
+      sources/
+  parents/
+    parent_1/
+      execution_configuration.csv
+      partition_schedules.csv
+      models/
+        model_1/
+      attempts/
+        model_1/
+          attempt_1/
+            <same immutable bundle members, without rendered PNG files>
+  logs/
+    worker_running.log
+    worker_error.log
+```
+
+Worker parent configuration and partition files are shared execution-input copies; attempt directories do not duplicate
+them. Root-rendered PNG files are post-acceptance outputs outside the immutable bundle.
+
+Every required XLSX workbook contains exactly two worksheets. The first contains its result or inventory data. The
+second is a two-column key/value metadata table containing at least `creation_datetime`, `parent_id`, `attempt_id`,
+`model_id`, `model_label`, and `worker_id`, plus applicable partition, fold, artifact-kind, and schema information.
+Use explicit key and value columns rather than an implicit spreadsheet row index.
+````
+
+Retain the current dataset readiness, ownership, cleanup, and invalidation paragraphs after this insertion. At lines 1420–1425, remove only “storage layout” and identifier encoding from the deferred mechanisms; retain cleanup API, readiness verification, synchronization verification, and deletion implementation as deferred.
+
+### Summary
+
+This fixes only the visible base layout, sequential paths, two-sheet placement, and CSV partition representation.
+
+---
+
+## Issue 5 — XLSX result schemas
+
+### Analysis
+
+The supplied schemas should be used directly, with two necessary compatibility additions:
+
+- Influence results retain `prediction_comparison_count`, already required by Section 4.7.
+- Fold/source associations remain in `fold_sources.xlsx`, so classification validation does not need an added `fold_id` column beyond the supplied schema.
+
+The regression schema explicitly replaces `SDE` with `std_of_error` and omits the existing `CV_MAE`; that is a direct conflict, so the old field must be removed.
+
+### Exact revision
+
+In Section 4.5, replace only the field descriptions for the four affected reports with:
+
+```markdown
+`validation_result.xlsx` first worksheet:
+
+```text
+sample_id | sample_label | y_true | y_pred | <class 0> | ... | <class n>
+```
+
+Class columns contain predicted probabilities.
+
+`classification_performance.xlsx` first worksheet:
+
+```text
+class | TP | TN | FP | FN | precision | recall | f1_score | accuracy | AUC
+```
+
+Rows contain every class followed by micro-average and macro-average. TP, TN, FP, and FN are `NA` for aggregate rows.
+
+`residual_analysis.xlsx` first worksheet:
+
+```text
+sample_id | sample_label | y_true |
+<class 0>_prob ... <class n>_prob |
+<class 0>_res ... <class n>_res |
+<class 0>_z ... <class n>_z |
+sum_of_absolute_residual |
+root_sum_of_squared_residual |
+Shannon_entropy_of_absolute_residual |
+Mahalanobis_distance_of_residual
+```
+
+`sample_influence.xlsx` first worksheet:
+
+```text
+sample_id | sample_label | prediction_comparison_count |
+<class 0> ... <class n> |
+sum_of_influence | root_sum_of_squared_influence
+```
+```
+
+Retain all existing formulas, axes, availability rules, failure isolation, and influence interpretation.
+
+In Section 4.6, replace only the field descriptions with:
+
+```markdown
+`validation_result.xlsx` first worksheet:
+
+```text
+sample_id | sample_label | fold_id | y_true | y_pred
+```
+
+`regression_performance.xlsx` contains one result row and no artificial row identifier:
+
+```text
+mean_error | std_of_error | MAE | normalized_MAE | MSE | RMSE |
+normalized_RMSE | CV_RMSE | RPD | R2
+```
+
+`residual_analysis.xlsx` first worksheet:
+
+```text
+sample_id | sample_label | y_true | y_pred | residual | standardized_residual
+```
+
+`sample_influence.xlsx` first worksheet:
+
+```text
+sample_id | sample_label | prediction_comparison_count | influence
+```
+```
+
+Retain existing conventional metric definitions and Section 4.7’s influence formula.
+
+Add one concise bundle-association statement in Section 6.2:
+
+```markdown
+`fold_sources.xlsx` preserves the required sample/fold/population/source associations, and `failures.xlsx` preserves
+the required value-level and operation-level failure references. Their detailed columns remain assigned to the
+corresponding report-schema implementation step.
+```
+
+### Summary
+
+This applies the supplied schemas without inventing additional manifest or failure-table columns and preserves the existing influence comparison count.
+
+---
+
+## Issue 6 — Result bundles, `.tar.zst`, integrity, and publication
+
+### Analysis
+
+Sections 5–7 still describe one dill result file. Those clauses must change to directory-bundle terminology, but existing selection, retry, retention, and failure rules should remain.
+
+### Exact revision
+
+At the following locations, replace only result-file terminology:
+
+| Current lines | Replacement |
+| --- | --- |
+| 37, 46–47, 83–88 | “evaluation-result file(s)” → “immutable result bundle(s)” with online package or local handoff as applicable. |
+| 159–162 | Packaging component constructs the bundle manifest and, for online delivery, its `.tar.zst` package. |
+| 179–185 | Delivery operates on the selected bundle/package without reevaluation. |
+| 316, 392–393 | “result files” → “result bundles”. |
+| 741–742, 816–824, 848–853, 903 | Replace one-file wording with one immutable result bundle. |
+| 1242–1266 | Replace selected-file reception with selected `.tar.zst` reception or selected local bundle handoff; preserve every existing duplicate-ordering rule. |
+| 1332–1357 | Replace complete/pending file states with final bundle, pending `.tar.zst`, local staging, and bundle acceptance states. |
+| 1510–1511 | Sending a selected package or reporting a local bundle does not release its attempt slot. |
+| 1768–1769, 1792–1793 | “failure-only file” → “failure-only bundle”. |
+
+Replace Section 6.2, lines 1427–1451, with:
+
+```markdown
+### 6.2 One immutable result bundle per evaluation attempt
+
+A completed attempt produces one immutable bundle containing applicable two-sheet XLSX result workbooks,
+visualization-data dill files, and the bundle manifest. The manifest defines the complete inventory. Individual members
+have no independent delivery, retry, persistence, acceptance, or recovery lifecycle.
+
+Preserve independently successful results, unavailable values, and failure provenance under the existing report
+outcomes. Reconstruction failure produces a failure-only bundle. XLSX data worksheets store finite values numerically
+and deliberately store `Inf`, `-Inf`, `NaN`, and `NA` as text tokens. Visualization dill files contain rendering data,
+not plotting objects, callables, or duplicate numeric reports.
+```
+
+In Section 6.3, retain the existing acknowledgement, retry exhaustion, attempt-slot, and duplicate rules, but revise the transport clauses to:
+
+```markdown
+Online delivery uses one `.tar.zst` package. Record and verify its exact byte length and SHA-256. Private delivery also
+uses HMAC-SHA-256 over canonical protocol/version and package identity metadata with the runtime-only shared key.
+Verify applicable integrity/authentication before safe extraction, manifest/schema validation, and publication.
+
+Root-local delivery copies the already validated selected bundle through root staging without packaging, HMAC,
+unpacking, or duplicate root-side result validation. Any failure retries the same package or local bundle without
+reevaluation or selection of another duplicate.
+```
+
+After Section 6.4, insert:
+
+```markdown
+### 6.5 Atomic publication
+
+Write authoritative XLSX files through same-directory `<filename>.partial`, validate before writing, flush and
+synchronize them, and atomically rename them. Publish mutable `execution_state.csv` through atomic replacement.
+
+Construct each bundle in same-filesystem `<attempt_id>.staging` and publish it with one atomic directory rename after
+validation. Staging content is never authoritative or automatically promoted. Recovery removes the exact stale staging
+entry and restarts the complete write. Logs append directly and may retain an incomplete final line after a crash.
+
+Use one focused file-publication helper and one focused bundle-publication helper, not a general transaction framework.
+```
+
+In Section 7.2, replace only the serialization bullets that require universal dill with:
+
+```markdown
+- Use schema-controlled CSV for non-result metadata/configuration/state, two-sheet XLSX for result tables, and dill only
+  for trusted model payloads, trusted root-local IPC messages, and standardized visualization data.
+- Online result delivery uses `.tar.zst`; root-local delivery uses direct managed-path handoff.
+```
+
+Retain all existing version-compatibility and public-model restrictions.
+
+### Summary
+
+This converts only the obsolete result representation and transport clauses while preserving the established workflow.
+
+---
+
+## Issue 7 — Recovery and remaining deferrals
+
+### Analysis
+
+Recovery should incorporate the resolved staging and integrity mechanisms. Exact recovery and worker-service signatures remain deferred by explicit approval.
+
+### Exact revision
+
+In Section 5.4, preserve the existing still-computing, accepted, pending-delivery, and exhausted-retry cases, with these targeted changes:
+
+```markdown
+Reconstruct progress from `execution_configuration.csv`, `execution_state.csv`, `partition_schedules.csv`, and complete
+final root bundles. Persist selected reception in `execution_state.csv` before package receipt or local copying.
+
+A final bundle is completion evidence; `.partial`, `.staging`, and partial `.tar.zst` content are not. Remove exact stale
+staging entries and restart their whole write. Resume only the selected package or local bundle within its remaining
+budget, never an unselected duplicate.
+```
+
+At lines 1848–1862, remove package format, integrity, atomic publication, path encoding, and local IPC from the deferred list. Retain as deferred only:
+
+```markdown
+- Exact online message framing, canonical HMAC metadata byte encoding, authentication handshake and certificate
+  provisioning, public-service endpoint signatures, retry timing, compression parameter names, and acknowledgement
+  encoding.
+- Exact recovery and worker-service public signatures.
+- Detailed CSV/XLSX schemas not explicitly fixed above.
+```
+
+Update Section 10.1’s first deferred item to the same reduced list.
+
+### Summary
+
+This aligns recovery with the resolved evidence model while preserving approved API and protocol deferrals.
+
+# Final consistency report
+
+The concise proposal preserves:
+
+- Existing scientific formulas and numerical behavior
+- Existing failure isolation and retry exhaustion
+- Existing duplicate selection and at-most-one acceptance
+- Existing worker retention and public cleanup rules
+- Existing dataset ownership and cleanup gates
+- Existing model trust restrictions
+- Existing CPU-capacity rules
+- Existing public-service ownership
+
+It changes only the contracts directly affected by the ambiguity answers.
+
+No blocking ambiguity remains. The following are intentionally deferred by the user’s answers:
+
+- Recovery API signature
+- Worker-service API signature
+- Canonical HMAC metadata byte encoding
+- Online message framing and handshake
+- Certificate provisioning
+- Public-service endpoint signatures
+- Numeric compression parameter defaults
+- Detailed schemas not explicitly supplied above

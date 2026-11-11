@@ -1,0 +1,233 @@
+The execution hierarchy should remain:
+
+```text
+parent → model/unit task → execution attempt
+```
+
+The filesystem hierarchy should intentionally compress it:
+
+- Root working directory already represents one parent, so no root `parent_<id>/`.
+- Each worker may serve multiple parents, so workers retain `results/parent_<id>/`.
+- Each worker has only its own attempt for a parent/model.
+- The root publishes only the selected attempt’s bundle.
+- Therefore, neither root nor worker needs a final `attempt_<id>/` layer.
+- Attempt identity remains in metadata, execution state, messages, and failure provenance.
+
+The change cannot be add-only because `AGENTS.md` explicitly names `data_reference.csv`, `partition_schedules.csv`, and CSV partition persistence. The following are the minimal necessary revisions.
+
+## 1. Replace managed dataset-reference names
+
+Replace root references to:
+
+```text
+data_reference.csv
+```
+
+with:
+
+```text
+root_data_reference.xlsx
+```
+
+Replace worker references with:
+
+```text
+worker_data_reference.xlsx
+```
+
+Revise the relevant requirements to say:
+
+> Dataset preparation creates exactly one managed `<root_dir>/root_data_reference.xlsx` for the current root dataset. On each worker, Cocoonet creates the corresponding `worker_data_reference.xlsx` containing the same sample identities and semantics with worker-local source paths. Neither workbook is a user input or a `SampleRecord.sources` entry.
+
+## 2. Replace the partition-schedule format
+
+Replace every:
+
+```text
+partition_schedules.csv
+```
+
+with:
+
+```text
+partition_schedules.xlsx
+```
+
+Replace the CSV-format rule with:
+
+> Use schema-controlled XLSX for root and worker data references and partition schedules. Use schema-controlled UTF-8 CSV for `cocoonet_metadata.csv`, `execution_configuration.csv`, and `execution_state.csv`.
+
+Update recovery and loading references accordingly:
+
+> Recovery loads and validates the authoritative root `partition_schedules.xlsx`; it never reruns the splitter or treats a worker copy as authoritative.
+
+## 3. Add the hierarchy-versus-layout rule
+
+Add:
+
+> The logical execution hierarchy remains parent evaluation → model/unit task → execution attempt. Filesystem layout intentionally omits hierarchy levels that are already fixed by the containing storage scope. A root working directory belongs to exactly one parent evaluation instance, so its parent identity is stored in metadata rather than repeated as a directory. Attempt identity remains required for allocation, selection, delivery, rejection of late results, recovery, and provenance, but it is stored in `execution_state.csv`, bundle metadata, failure records, and protocol messages rather than as a final result-directory level.
+
+## 4. Add the exact root layout
+
+> Root persistence uses this layout:
+>
+> ```text
+> <parent_evaluation_instance_work_dir>/
+>   cocoonet_metadata.csv
+>   root_data_reference.xlsx
+>   partition_schedules.xlsx
+>   execution_configuration.csv
+>   execution_state.csv
+>   models_for_transfer/
+>     model_<model_id>.dill
+>     models_parent_<parent_id>.<extension>  # extension uses 7z or .tar.zst according to user specification or automatically chosen by size
+>     # Or tiled version
+>     models_parent_<parent_id>.<extension>  # if too large and tiled or according to user specification and tiled
+>   attempt_results/
+>     model_<model_id>/
+>       root_model_<model_id>_reference.csv  # The model reference for the model evaluated on root, recording: model_id | model_label | model_path
+>       worker_model_<model_id>_reference.csv  # The model reference for the model evaluated on worker, received with worker results
+>       bundle_manifest.xlsx
+>       attempt_metadata.xlsx
+>       fold_sources.xlsx
+>       validation_result.xlsx
+>       classification_performance.xlsx | regression_performance.xlsx
+>       residual_analysis.xlsx
+>       sample_influence.xlsx
+>       failures.xlsx
+>       visualizations/
+>         roc_curve.dill
+>         scatter_plot.dill
+>         residual_plot.dill
+>         rendered_plots/
+>       worker_error.log  # exists if any failure is recorded on the worker
+>   logs/
+>     root_running.log
+>     root_error.log  # exists if any failure happens for the parent task
+>
+> # The datasets are prepared / compressed and packed in the dataset dir and also recorded in `root_data_reference.xlsx`
+> <source_dataset_root_dir>/
+>   dataset_for_transfer/
+>     dataset_<dataset_id>.<extension>  # extension uses 7z or .tar.zst according to user specification or automatically chosen by size
+>     # Or tiled version
+>     dataset_<dataset_id>_<tile_id>.<extension>  # if too large and tiled or according to user specification and tiled
+> ```
+>
+> The root stores only the selected accepted bundle for each model. Another attempt’s late or unselected bundle never creates another root result directory and never overwrites the accepted bundle. `rendered_plots/` exists only when requested. Error logs and task-dependent report files exist only when applicable and are declared by the bundle manifest.
+
+## 5. Add the exact worker layout
+
+> A reusable worker working directory may retain several parent scopes and uses:
+>
+> ```text
+> <worker_work_dir>/
+>   datasets/
+>     dataset_<dataset_id>/
+>   models/
+>     parent_<parent_id>/
+>       model_<model_id>.dill  # worker model source
+>   results/
+>     parent_<parent_id>/
+>       cocoonet_metadata.csv
+>       worker_data_reference.xlsx
+>       partition_schedules.xlsx
+>       execution_configuration.csv
+>       execution_state.csv
+>       attempt_results/
+>         model_<model_id>/
+>           worker_model_<model_id>_reference.csv  # The model reference for the model evaluated on worker, recording: model_id | model_label | model_path, generated by worker after receiving the model
+>           bundle_manifest.xlsx
+>           attempt_metadata.xlsx
+>           fold_sources.xlsx
+>           validation_result.xlsx
+>           classification_performance.xlsx | regression_performance.xlsx
+>           residual_analysis.xlsx
+>           sample_influence.xlsx
+>           failures.xlsx
+>           visualizations/
+>             roc_curve.dill
+>             scatter_plot.dill
+>             residual_plot.dill
+>           logs/
+>             worker_running.log
+>             worker_error.log  # exists if any failure happens in the execution of the attempt
+> ```
+>
+> A worker knows and persists only its own attempt for an assigned parent/model. It does not need information about competing attempts on other workers. Do not allocate another attempt of the same parent/model to that worker while its existing bundle occupies the model result path. Workers never render visualization files.
+>
+> A root-local worker uses direct root-local dataset access and does not create a redundant dataset copy under its worker `datasets/` directory.
+
+## 6. Clarify authoritative versus copied state
+
+Add:
+
+> Root `root_data_reference.xlsx`, `partition_schedules.xlsx`, `execution_configuration.csv`, and `execution_state.csv` are authoritative for the parent. Worker copies are parent-scoped execution inputs or worker-local observations, not competing authoritative state. In particular, worker `execution_state.csv` contains only that worker’s applicable assignment and attempt observations; it does not duplicate root-wide reception selection, other workers’ attempts, or root acceptance state.
+
+This prevents the identically named worker file from being mistaken for a copy of the complete root coordinator checkpoint.
+
+## 7. Replace attempt-keyed final publication wording
+
+Replace:
+
+```text
+Construct a complete bundle in <attempt_id>.staging ...
+```
+
+with:
+
+> Construct a complete bundle in `model_<model_id>.staging` beside its applicable final model directory and publish it with one atomic directory rename to `model_<model_id>`. Persist and validate the producing `attempt_id` inside `attempt_metadata.xlsx` and `bundle_manifest.xlsx`. Temporary online transfer packages may use attempt identity for routing and retry, but attempt identity does not become a final result-directory layer.
+
+## 8. Preserve attempt semantics
+
+Retain the existing requirements that:
+
+- every execution attempt produces one immutable bundle;
+- duplicate attempts remain distinct runtime executions;
+- the root selects at most one attempt per model;
+- delivery retries reuse the same selected bundle;
+- attempt identity remains necessary for coordination and recovery.
+
+Add:
+
+> “One result bundle per attempt” describes the execution outcome, not a requirement for a final `attempt_<id>/` directory. Worker storage contains that worker’s single bundle under the model, and root storage contains the selected accepted bundle under the model.
+
+## 9. Clarify root worker-error logging
+
+Add:
+
+> Root `worker_error.log` records worker failures reported to or observed by the root. It is not a copied worker log. Each worker’s complete local diagnostic record remains in its own parent-scoped `logs/worker_error.log`.
+
+```
+MY ADVICE: No, `worker_error.log` is exactly the copy of `worker_error.log` from the worker once it exists on the worker when failure has happened. Root node observations are all in root side logs, but user must know what happened to the worker if the processing on worker fails e.g. the disk space is full / computation error or any other errors. The `worker_error.log` is not created by the root, it is simply a part of the result bundle when error on worker happens.
+```
+
+
+## Remaining layout issue requiring approval
+
+Existing `AGENTS.md` also requires root-managed prepared dataset representations and prepared public-model weight artifacts. Those files are not represented in the proposed exhaustive root tree.
+
+One of these must be selected before declaring the tree complete:
+
+1. Add explicit root preparation directories, such as:
+
+   ```text
+   transfer_preparation/
+     datasets/
+     models/
+   ```
+
+MY ADVICE: Layouts updated for the transfer_preparation, but dataset should be prepared under dataset root dir and recorded in the dataset reference file.
+
+2. Define a separate user-selected managed preparation/cache root outside the parent evaluation directory.
+
+MY ADVICE: use the `dataset_for_transfer` or `models_for_transfer` directories, the compressed package for models can be stored directly in `models_for_transfer` for reuse.
+
+3. State that the displayed tree covers authoritative parent execution and report persistence only and is not exhaustive of reusable transfer-preparation files.
+
+```
+MY ADVICE: Added, check the revised layout.
+```
+
+I have not assumed one of these choices because it would change your exact root layout. Apart from this unresolved placement, the revisions above are the minimal changes needed to align `AGENTS.md` with your model-keyed persistence design while preserving the complete parent/model/attempt execution hierarchy.
+
+No files were modified. Awaiting your approval.

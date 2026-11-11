@@ -30,7 +30,7 @@ workers use synchronized datasets. Scientific auditability, transparency, and re
 - Incomplete configuration is valid before run: dataset setup may be pending and model/worker counts may be zero.
   Ordinary configuration edits change in-memory attributes only; they do not create, modify, or delete files.
   `add_dataset()` is the explicit artifact-preparation exception: it realizes or validates and persists the current
-  partition schedule, managed `data_reference.csv`, and applicable reusable transfer representations. These writes
+  partition schedule, managed `root_data_reference.xlsx`, and applicable reusable transfer representations. These writes
   do not consolidate execution configuration or modify original user data or a fixed parent's dataset.
 - `run()` from `initialized` validates prerequisites, persists the fixed execution configuration in
   `execution_configuration.csv`, establishes a fresh parent, and begins the workflow. Once committed, the instance is
@@ -124,7 +124,7 @@ already-terminal or unnecessary pending handling ends immediately. Late results 
   memberships. Models and workers must not independently regenerate, reshuffle, or alter them. Splitting randomness
   is resolved only during root-side split preparation; separate parent tasks may realize different partitions.
   Preparing or reusing a split must preserve its dataset association and the persistence contract below.
-- Persist each realized schedule once in one authoritative `partition_schedules.csv` file. Preserve its dataset and
+- Persist each realized schedule once in one authoritative `partition_schedules.xlsx` file. Preserve its dataset and
   partition identities, sample-ID/label associations, ordered folds, distinct training and testing memberships, and
   population order. Persistence must succeed before unit allocation. Do not divide or duplicate its authoritative
   storage; worker copies are execution inputs.
@@ -133,7 +133,7 @@ already-terminal or unnecessary pending handling ends immediately. Late results 
   splitter. A retained ready dataset may be
   reused without retransmission, but the worker must receive the applicable parent partition context before allocation.
   Every unit task and attempt, including duplicates, uses the same saved memberships. After a root restart following
-  successful persistence, load and validate the existing CSV file; do not rerun the splitter or create replacement
+  successful persistence, load and validate the existing XLSX file; do not rerun the splitter or create replacement
   partitions.
   Retaining only the splitting method or seed is insufficient.
 - Worker outputs include fold data, validation results, performance and residual reports, visualization data, and an
@@ -162,7 +162,8 @@ already-terminal or unnecessary pending handling ends immediately. Late results 
 
 **Dataset input and standardization clarification:**
 
-- Users provide source input table files; users do not provide Cocoonet's managed `data_reference.csv`.
+- Users provide source input table files; users do not provide Cocoonet's managed `root_data_reference.xlsx` or
+  `worker_data_reference.xlsx`.
   Inline-feature and inline-tensor datasets accept one or more input tables. File-backed datasets accept
   exactly one input reference table. Supported formats are `.csv`, `.csv.gz`, `.csv.zst`, `.xls`, `.xlsx`,
   `.ods`, `.parquet`, `.orc`, and `.feather`. Pickle/dill dataset inputs, including `.pkl`, `.pickle`, and
@@ -200,18 +201,19 @@ already-terminal or unnecessary pending handling ends immediately. Late results 
 - Input standardization and storage/transfer translation are separate. Standardization applies the field
   contracts above. Translation changes only the storage representation of already-standardized data and
   must preserve its values, sample associations, and semantics exactly.
-- Dataset preparation creates exactly one managed `<root_dir>/data_reference.csv` for the computation's
+- Dataset preparation creates exactly one managed `<root_dir>/root_data_reference.xlsx` for the computation's
   current dataset. It contains generated sample IDs and standardized labels, groups, masks, targets, source
   associations, and tensor metadata.
 - For file-backed input, the user input table identifies the actual file or files containing each sample's
   X data. `SampleRecord.sources` references those X-bearing files, not the user input reference table.
 - For inline input, X is present in the input table, so that table is the sample source.
-- Managed `data_reference.csv` and any future managed `data_meta.csv` are never included in
+- Managed `root_data_reference.xlsx`, `worker_data_reference.xlsx`, and any future managed `data_meta.csv` are never
+  included in
   `SampleRecord.sources`.
 - `SourceReference` identifies a logical file path only. It contains no row number, row position, or record
   locator. Initial source-table matching uses the standardized sample label; internal dataset, partition,
   prediction, and reporting associations use the generated `sample_id`.
-- On workers, Cocoonet generates the corresponding `data_reference.csv` with worker-local synchronized paths
+- On workers, Cocoonet generates the corresponding `worker_data_reference.xlsx` with worker-local synchronized paths
   selected by Cocoonet. Root physical paths do not become worker physical paths.
 
 **Large-table transfer preparation:**
@@ -232,11 +234,13 @@ already-terminal or unnecessary pending handling ends immediately. Late results 
 - Treat every source file as an independent preparation unit. Read, standardize, compress, and shard one
   source at a time. Dataset-global shard numbering must not require combining or simultaneously materializing
   multiple source files.
-- Store prepared representations in a dataset-specific Cocoonet-managed preparation directory on the root
-  node. Number shards globally within that prepared dataset as
+- Store prepared representations in the Cocoonet-managed `dataset_for_transfer/` directory under the configured source
+  dataset root. This is an explicit `add_dataset()` artifact-preparation exception and does not make the original source
+  files Cocoonet-managed. Number shards globally within that prepared dataset as
   `cocoonet_dataset_shard_<zero-padded-one-based-number>.parquet`.
-- Never modify or replace original source files. Prepared representations remain until the user removes them
-  through the operating system. Worker cleanup does not remove them.
+- Never modify, replace, rename, or delete original source files. Prepared representations remain visible until the
+  user removes them through the operating system or invokes a documented regeneration operation. Worker cleanup does
+  not remove them.
 - Within an existing parent, reuse its fixed prepared representation for every worker transfer without
   repeating source-state checks, compression, or sharding.
 - Persist automatic-reuse state containing the source path, stored file size, modification time, and all
@@ -635,8 +639,9 @@ Before planning or implementing a phase, process project guidance in this order:
   coordinator process. The local worker shares the evaluation implementation and technically enforced model
   restrictions with online workers; process separation alone does not replace those restrictions.
 - Root coordinator storage and each worker's managed storage are distinct ownership scopes, including for the
-  root-local worker. A worker uses a locally configured base or a managed `cocoonet/` child under the environment
-  user's home directory. The root cannot remotely select or clear an online worker's physical work directory.
+  root-local worker. A worker uses a locally configured work directory or defaults to a managed `cocoonet/` child under
+  the worker service's console working directory. The root cannot remotely select or clear an online worker's physical
+  work directory.
 - A worker validates and durably publishes its result bundle before reporting the attempt ready.
 - Online delivery packages and compresses the selected bundle as `.tar.zst`. The root receives, validates, unpacks, and
   persists that package before acceptance.
@@ -647,11 +652,21 @@ Before planning or implementing a phase, process project guidance in this order:
   or network result delivery. Framework-managed local data/model/result access must preserve dataset identity,
   authoritative saved partitions, parent/unit/attempt associations, failure scopes, and standardized result files.
   Local completion still requires root persistence and the same selected-result acceptance and acknowledgement
-  semantics through the local control boundary. Exact IPC and artifact-sharing/copy mechanisms remain deferred.
+  semantics through the local control boundary. The root starts its root-local worker with the standard-library
+  multiprocessing `spawn` context and one duplex `Pipe`. Control messages use `Connection.send_bytes()` and
+  `recv_bytes()` with explicit dill serialization using protocol 5. Datasets and result bundles do not travel through
+  the pipe. The worker publishes and validates its bundle in worker storage and reports its identity and managed path;
+  the root copies the selected bundle into root staging and atomically publishes it. Copy failure retries the same
+  bundle without reevaluation.
+- Large trusted model payloads may be persisted once to designated dill files and referenced by managed paths in local
+  IPC messages. The root-local worker is not reconnectable: orderly root shutdown stops and joins it, while unexpected
+  pipe closure causes it to exit at the next cooperative boundary. Local execution uses no networking, authentication,
+  compression, transfer archive, or HMAC and requires only a small private adapter around the shared worker runtime.
 - Workers are reusable root/computation resources that may serve successive parent tasks; a parent owns its unit
   tasks and attempts, not exclusive lifetime ownership of a worker. Reuse may retain online connections, the local
-  worker process, and valid datasets under their applicable policies. Exact process/connection lifetimes and
-  local-worker survival after root restart remain deferred. Configuration copying does not clone runtime resources.
+  worker process, and valid datasets under their applicable policies. Online process/connection lifetimes remain
+  deferred. A root-local worker belongs to its current root process and is recreated rather than reconnected after
+  root-process termination. Configuration copying does not clone runtime resources.
   External public allocation and mandatory release cleanup still apply.
 
 **Worker Concurrency and Execution Ownership:**
@@ -714,8 +729,9 @@ Before planning or implementing a phase, process project guidance in this order:
 - Public workers serve one root/user exclusively per allocation. Cocoonet must not treat connection loss itself as
   permission to serve another user. Public-pool allocation and release decisions belong to the external service.
   Apply the worker-side cleanup rules below before serving another user; do not allow prior work to recreate data.
-- `dataset_id` encoding, synchronization verification, disconnect detection, and cleanup verification belong in the
-  corresponding architecture/lifecycle specification; they must preserve these invariants.
+- Dataset synchronization verification, disconnect detection, and cleanup verification belong in the corresponding
+  architecture/lifecycle specification; they must preserve these invariants. The managed-path `dataset_id`
+  representation is fixed by Locally Visible Managed Persistence below.
 
 **Locally Visible Managed Persistence:**
 
@@ -724,25 +740,153 @@ Before planning or implementing a phase, process project guidance in this order:
   persistence follows the same rule for the local worker owner or operator. This local visibility creates no remote
   filesystem-access interface and does not weaken private- or public-worker isolation.
 - Use purpose-specific semantic paths. Do not hash an opaque identifier solely to produce a filename or directory name.
-  Paths are not authoritative identity evidence: persist and validate the exact applicable identities and associations
-  inside the artifacts. Any identifier used in a path must use a defined filesystem-safe representation. Hashes used
-  for integrity, change detection, or another documented purpose remain permitted.
-- Use schema-controlled UTF-8 CSV for node metadata, authoritative partition schedules, execution configuration, and
-  execution state.
+  Generate each `dataset_id` as exactly 12 lowercase hexadecimal characters using a cryptographically secure random
+  source equivalent to `secrets.token_hex(6)`. Check for collision before accepting an initial registration and
+  regenerate if necessary. If the same identifier is later associated with different dataset metadata, sample
+  associations, or source associations, reject it as a collision; never merge, overwrite, or treat the representations
+  as equal. Do not derive `dataset_id` from dataset length, byte size, or sample count.
+- Generate `parent_id` as the first 16 lowercase hexadecimal characters of SHA-256 over the canonical bytes
+  `b"cocoonet-parent-v1\0" + dataset_id.encode("ascii") + b"\0" + str(created_at_utc_ns).encode("ascii")`.
+  `created_at_utc_ns` is a nonnegative UTC Unix timestamp in integer nanoseconds captured once when the parent is
+  created and persisted with it. If an existing worker path has the same `parent_id` but different dataset, timestamp,
+  or parent metadata, reject the collision.
+- Other generated identifiers used in managed paths, including model and tile identifiers, are positive sequential
+  decimal integers beginning at `1`, have no zero padding, and are not reused within their owning persistent scope.
+  Examples are `dataset_4f08a7d8612f`, `parent_87d16f204b6a818c`, and `model_1`. Paths are not authoritative identity
+  evidence: persist and validate exact identities and associations inside the artifacts. Hashes used for integrity,
+  change detection, or another documented purpose remain permitted.
+- Preserve the logical parent/model-unit/attempt hierarchy in execution metadata and lifecycle state. Filesystem
+  persistence deliberately compresses that hierarchy: one root working directory represents one parent, so it has no
+  parent subdirectory, and accepted results are keyed by model rather than by attempt. Attempt identity remains in
+  execution state, bundle metadata, failure records, manifests, and protocol messages.
+- Use this root persistence layout:
+
+```text
+<parent_evaluation_instance_work_dir>/
+  cocoonet_metadata.csv
+  root_data_reference.xlsx
+  partition_schedules.xlsx
+  execution_configuration.csv
+  execution_state.csv
+  models_for_transfer/
+    model_<model_id>.dill
+    models_parent_<parent_id>.<archive_extension>
+    # Or tiled:
+    models_parent_<parent_id>_<tile_id>.<archive_extension>
+  attempt_results/
+    model_<model_id>/
+      root_model_<model_id>_reference.csv
+      worker_model_<model_id>_reference.csv
+      bundle_manifest.xlsx
+      attempt_metadata.xlsx
+      fold_sources.xlsx
+      validation_result.xlsx
+      classification_performance.xlsx | regression_performance.xlsx
+      residual_analysis.xlsx
+      sample_influence.xlsx
+      failures.xlsx
+      visualizations/
+        roc_curve.dill
+        scatter_plot.dill
+        residual_plot.dill
+        rendered_plots/
+      worker_error.log
+  logs/
+    root_running.log
+    root_error.log
+```
+
+- `root_model_<model_id>_reference.csv` records at least the model identity, user-facing model label, and logical
+  root-managed model path. `worker_model_<model_id>_reference.csv` records the same model identity and label with the
+  worker-managed path. Managed paths are logical paths relative to the owning managed scope, not unqualified physical
+  absolute paths. The worker-created reference travels with its result and is copied unchanged; the root independently
+  creates its own reference. The final root manifest lists both files, and neither is renamed into the other.
+- `models_for_transfer/` contains reusable model-transfer preparation. Trusted root-local and private paths may use the
+  shown dill file where executable deserialization is permitted; public workers still receive only supported
+  declarative specifications and non-executable model-data artifacts. The untiled and tiled archive forms are
+  alternatives. Exact archive format, size threshold, tiling, and compression settings remain deferred to the
+  responsible transfer design.
+- The root stores only the selected accepted bundle for each model. A late or unselected duplicate never creates or
+  overwrites `attempt_results/model_<model_id>/`. Rendered plots are created only when requested. The final manifest
+  records which conditional result workbooks, visualization files, rendered plots, and error logs exist.
+- Store dataset-transfer preparation under the configured source dataset root as follows:
+
+```text
+<source_dataset_root_dir>/
+  dataset_for_transfer/
+    dataset_<dataset_id>.<archive_extension>
+    # Or tiled:
+    dataset_<dataset_id>_<tile_id>.<archive_extension>
+```
+
+  Creation of these visible managed representations is part of the explicit `add_dataset()` artifact-preparation
+  exception. It never authorizes modifying, replacing, renaming, or deleting original sources. The single and tiled
+  archive forms are alternatives; exact archive selection, size threshold, tiling, and compression remain deferred.
+- Use this worker persistence layout:
+
+```text
+<worker_work_dir>/
+  datasets/
+    dataset_<dataset_id>/
+  models/
+    parent_<parent_id>/
+      model_<model_id>.dill
+  results/
+    parent_<parent_id>/
+      cocoonet_metadata.csv
+      worker_data_reference.xlsx
+      partition_schedules.xlsx
+      execution_configuration.csv
+      execution_state.csv
+      attempt_results/
+        model_<model_id>/
+          worker_model_<model_id>_reference.csv
+          bundle_manifest.xlsx
+          attempt_metadata.xlsx
+          fold_sources.xlsx
+          validation_result.xlsx
+          classification_performance.xlsx | regression_performance.xlsx
+          residual_analysis.xlsx
+          sample_influence.xlsx
+          failures.xlsx
+          visualizations/
+            roc_curve.dill
+            scatter_plot.dill
+            residual_plot.dill
+          logs/
+            worker_running.log
+            worker_error.log
+```
+
+- The worker knows only its own attempt and does not persist information about competing attempts. It must not allocate
+  another attempt for the same parent/model while a published or retained bundle occupies that model-keyed path.
+  Workers never render plots. The shown model dill file is permitted only for root-local and private trusted execution;
+  public-worker model persistence remains non-executable. A root-local worker may directly access the configured root
+  dataset and must not create a redundant dataset copy merely to fit the worker layout.
+- Root `root_data_reference.xlsx`, `partition_schedules.xlsx`, `execution_configuration.csv`, and
+  `execution_state.csv` are authoritative. Worker copies are execution inputs and worker-local observations, not
+  competing authority. In particular, worker `execution_state.csv` records only that worker's assignment and attempt;
+  it contains no root-wide selection state, other-worker state, or root acceptance decision.
+- Use schema-controlled UTF-8 CSV for `cocoonet_metadata.csv`, model-reference files,
+  `execution_configuration.csv`, and `execution_state.csv`. Use schema-controlled XLSX for
+  `root_data_reference.xlsx`, `worker_data_reference.xlsx`, and `partition_schedules.xlsx`.
 - Use schema-controlled XLSX for result-bundle tables, including attempt metadata and manifests, fold/source
   associations, validation results, numeric reports, influence results, and failure records. Each required result table
   is a separate `.xlsx` workbook containing exactly two worksheets. The first worksheet contains the result data. The
   second contains schema-controlled result metadata needed for identity, association, schema, and integrity validation,
   including the applicable parent task, model/unit, attempt, dataset/partition, fold, worker, artifact kind, and schema
   identity where applicable.
-- Use dill only for applicable trusted model payloads and standardized visualization data. Visualization dill files
-  contain rendering data, not arbitrary plotting objects, callables, or duplicate numeric reports.
+- Use dill only for applicable trusted model payloads, trusted root-local IPC messages, and standardized visualization
+  data. Visualization dill files contain rendering data, not arbitrary plotting objects, callables, or duplicate
+  numeric reports.
 - Persistence representation and transfer preparation are separate concerns. These CSV, XLSX, and dill requirements
   do not replace the applicable compressed Parquet preparation or result-package transfer contracts.
 - Store each shared fact once per owning scope. Do not duplicate authoritative dataset references, partition schedules,
   execution configuration, execution state, or independently derivable result summaries. Required worker execution
   inputs, result-package staging, and acknowledged worker/root bundle copies are not competing authoritative artifacts.
-- One attempt outcome is one immutable result bundle. Its files have no independent delivery, retry, acceptance, or
+- One attempt outcome is one immutable result bundle. Duplicate attempts remain distinct execution outcomes, and the
+  root accepts at most one for each model/unit. The attempt identifier is required in metadata and protocol state even
+  though the final filesystem has no attempt directory. Its files have no independent delivery, retry, acceptance, or
   recovery lifecycle.
 - Online delivery uses one `.tar.zst` package for the selected bundle. Compression parameters are user-configurable;
   their defaults favor the best performance for result bundles of approximately 1 MB or less. Same-machine root-local
@@ -750,16 +894,16 @@ Before planning or implementing a phase, process project guidance in this order:
 
 **Worker Ownership and External Discovery:**
 
-- Every online worker accepts only Cocoonet's internal protocol and serves at most one authenticated root/user at a
-  time. Online workers never initiate connections to the root. No worker communicates directly with other workers.
-  The root-local worker is controlled through its owning root's local boundary without network authentication.
-- Private-worker registration generates connection information and a unique credential, returned directly to the user
-  through the worker-side module, for example as a dictionary for root configuration. The root connects using this
-  configured information. Private workers never appear in public discovery; their connection, disconnection, and
-  lifecycle operations remain under explicit user control. Connection loss does not automatically release them.
-- For a public worker, the root requests an idle worker from an external discovery service, receives the selected
-  worker's connection information, and initiates the connection to that worker. Discovery does not cause a worker
-  to connect back to the root.
+- Every online worker accepts only Cocoonet's versioned internal protocol and serves at most one authenticated root/user
+  at a time. No worker communicates directly with another worker. Connection direction does not change root
+  coordination authority.
+- For a private/non-public computation network, users configure both root and worker endpoints. Direction defaults to
+  `auto`: Cocoonet attempts root-to-worker and worker-to-root establishment, and the root accepts the first
+  authenticated, version-compatible connection for each configured `worker_id` while closing duplicates. Users may
+  instead force `root_connects` or `worker_connects`. If neither permitted direction succeeds, startup fails before
+  work allocation or scientific-data transfer. Private workers remain outside public discovery.
+- For a public worker, the root requests an idle worker from the external service, receives its connection information,
+  and initiates the connection. Public authentication and connection details follow the supplied service interface.
 - The public-worker service is outside Cocoonet's scope and is planned separately, for example as `CocoonService`.
   It owns worker availability, idle-worker selection, reservation/allocation state, and decisions about when a worker
   becomes available again. Pool state remains internal to that service; Cocoonet receives connection information,
@@ -883,12 +1027,38 @@ Before planning or implementing a phase, process project guidance in this order:
 - Online workers package the selected bundle as `.tar.zst` for compressed delivery. The root validates and unpacks the
   package before durably publishing the bundle. Package receipt and content processing must not block the active
   network event loop; do not deserialize visualization dill data there.
+- Every online `.tar.zst` package records its exact byte length and SHA-256 digest. For private online delivery, the root
+  and worker receive the same randomly generated key of at least 32 bytes through keyword-only runtime API parameters;
+  Cocoonet never transmits, persists, internally copies, displays, or logs the key.
+- The private worker computes HMAC-SHA-256 over canonical metadata containing the protocol version, parent, model, and
+  attempt identities, package length, and package SHA-256. The root receives the package into staging and verifies its
+  length, digest, and HMAC before safe extraction, manifest/schema validation, and atomic publication. Verification
+  failure leaves the result unaccepted and retries the same package without reevaluation or duplicate substitution.
+  Public-worker authentication remains governed by the supplied public-service interface. This mechanism provides
+  integrity and private-worker authentication, not confidentiality.
 - A root-local worker hands off or copies its already validated bundle directly. The root performs no duplicate
-  attempt-result validation; acceptance follows successful durable root persistence.
+  attempt-result validation, scientific recomputation, or scientific reinterpretation. It copies the worker files,
+  adds only the root model reference and final root inventory, and acceptance follows successful durable root
+  persistence.
 - Accept the selected outcome and mark its logical task complete only after the complete bundle has been durably
   published in root storage. Confirm acceptance to the worker through the applicable online or local control boundary.
   Partial packages, staging directories, incomplete bundles, and transient memory do not establish completion. Never
   overwrite an accepted bundle with a later duplicate.
+- Authoritative XLSX files use same-directory `<filename>.partial` staging. Validate before writing, flush and
+  synchronize the completed file, then atomically rename immutable files. Publish mutable `execution_state.csv`
+  through same-directory staging and atomic replacement.
+- A worker constructs a complete bundle in `model_<model_id>.staging` beside the final worker
+  `attempt_results/model_<model_id>/` directory and publishes it with one atomic directory rename after validation.
+  The attempt identifier remains inside the bundle metadata and manifest; a temporary online delivery package may also
+  use it to distinguish the selected attempt.
+- The root constructs the selected result in `attempt_results/model_<model_id>.staging`, copies the worker-produced
+  files, adds its root-owned model reference and final inventory, and publishes the final
+  `attempt_results/model_<model_id>/` directory with one atomic rename. It does not recompute or reinterpret scientific
+  results. Staging content is never authoritative or automatically promoted; recovery or retry removes only the exact
+  stale staging entry and restarts the complete write. Logs append directly and may retain an incomplete final line
+  after a crash.
+- Implement one focused file-publication helper and one focused bundle-publication helper. Do not introduce a generic
+  transaction, repository, or artifact framework.
 - Delivery or persistence failure leaves the logical task unfinished. Retry the same bundle within its remaining
   budget without reevaluation or per-file retry. Online retry resends the same `.tar.zst` package; root-local retry
   reuses the same worker-published bundle.
@@ -901,15 +1071,21 @@ Before planning or implementing a phase, process project guidance in this order:
   begins an attempt for a different parent, remove earlier-parent result artifacts after any selected delivery has
   completed or reached its established terminal operation state. Cleanup never accepts an undelivered result, completes
   its logical task, or deletes an already persisted root bundle.
-- Root-side rendering persists applicable PNG output from accepted visualization data. Rendering is post-reception
-  processing and does not undo scientific-result acceptance.
+- If a worker-side failure occurs during an attempt, the worker creates
+  `attempt_results/model_<model_id>/logs/worker_error.log` and lists it in the worker manifest. For the selected result,
+  the root copies that file byte-for-byte to `attempt_results/model_<model_id>/worker_error.log` and lists it in the
+  final root manifest. The root never creates, appends to, reconstructs, or reinterprets a worker error log. Root-side
+  failures are recorded only in `logs/root_error.log`.
+- When requested, root-side rendering persists applicable output below
+  `attempt_results/model_<model_id>/visualizations/rendered_plots/` from accepted visualization data. Workers never
+  render plots. Rendering is post-reception processing and does not undo scientific-result acceptance.
 - Preserve parent, model/unit, attempt, worker, and artifact associations for every bundle. Dataset identity resolves
   through the parent context. Recovery must distinguish a complete accepted bundle from a partial `.tar.zst` package,
   staging directory, or incomplete bundle.
 
 **Root Restart and Progress Recovery:**
 
-- Reconstruct progress from committed CSV configuration/state, the authoritative `partition_schedules.csv`, and
+- Reconstruct progress from committed CSV configuration/state, the authoritative `partition_schedules.xlsx`, and
   complete root result bundles, then reconcile worker state through local control or root-initiated reconnection. Do
   not rely solely on pre-termination in-memory coordinator state.
 - Explicit interruption and unexpected root-process termination use the same loading, reconciliation, and continuation
@@ -933,9 +1109,10 @@ Before planning or implementing a phase, process project guidance in this order:
   bundle within its remaining budget. Keep its attempt slot occupied and never substitute an unselected duplicate.
 - An exhausted delivery operation remains exhausted across reconnection and restart. Do not reset its retry budget or
   restart delivery merely because a retained bundle exists.
-- Exact message schemas, retry timing, package-integrity mechanisms, atomic-publication mechanisms, filesystem-safe
-  identifier encodings, and acknowledgement encoding remain deferred to the corresponding architecture or protocol
-  specification. They must implement these recovery semantics rather than redefine them.
+- Exact control-message schemas, canonical HMAC metadata byte encoding, public-service authentication and certificate
+  provisioning, retry timing, compression parameter names, acknowledgement encoding, recovery API signatures, and
+  worker-service API signatures remain deferred to their responsible architecture or protocol phases. They must
+  preserve the fixed connection, integrity, publication, identifier, and recovery semantics above.
 
 **Reproducibility and Auditability:**
 
@@ -964,12 +1141,11 @@ Before planning or implementing a phase, process project guidance in this order:
 
 **Asynchronous I/O and Worker Connections:**
 
-- Use `asyncio` and `aiofiles`. For online workers, the root initiates a secure WebSocket (`WSS`) connection over port
-  443
-  and keeps it open for evaluation communication. Workers expose the designated Cocoonet endpoint reachable from the
-  root using configured private-worker information or connection information supplied by the external public service.
-- Online connection establishment, scheduling, and assignment are root-controlled. Workers accept
-  the root's connection; they do not initiate connections to the root or other workers.
+- Use `asyncio` and `aiofiles`. Online communication uses one versioned Cocoonet protocol over TLS-protected HTTPS/WSS
+  for bounded control messages and streamed dataset, model, and result-package payloads.
+- Scheduling and assignment remain root-controlled. Private connection establishment follows `auto`, `root_connects`,
+  or `worker_connects`; public establishment follows the external service interface. Connection direction never
+  transfers coordination authority to a worker.
 - Track worker usability, parent readiness, attempt capacity, and occupied attempt slots separately.
   A worker may accept another attempt while others are active when it has a free eligible slot.
   Each allocation requires compatibility and readiness of the fixed parent dataset, evaluation
@@ -1006,12 +1182,13 @@ Before planning or implementing a phase, process project guidance in this order:
 
 **Serialization Ownership and Compatibility:**
 
-- Use schema-controlled UTF-8 CSV for authoritative non-result tabular and key/value persistence. Use schema-controlled
-  two-sheet XLSX workbooks for result-bundle tables under the result-data and metadata worksheet contract above. Do not
-  rely on automatic type or missing-value inference. Preserve finite values, `Inf`, `-Inf`, `NaN`, and unavailable
-  `NA` according to the owning schema.
-- Use dill only for explicitly designated trusted model payloads and standardized visualization-data payloads; do not
-  introduce a direct `pickle` path.
+- Use schema-controlled UTF-8 CSV for Cocoonet metadata, model-reference files, execution configuration, and execution
+  state. Use schema-controlled XLSX for root and worker data references, authoritative and worker-copy partition
+  schedules, and two-sheet result-bundle tables under the result-data and metadata worksheet contract above. Do not rely
+  on automatic type or missing-value inference. Preserve finite values, `Inf`, `-Inf`, `NaN`, and unavailable `NA`
+  according to the owning schema.
+- Use dill only for explicitly designated trusted model payloads, trusted root-local IPC messages, and standardized
+  visualization-data payloads; do not introduce a direct `pickle` path.
 - Dataset inputs and generated CSV/Parquet transfer artifacts follow their separate input and size-based transfer
   contracts.
 - For root-local and private workers, the root may create dill model payloads, and those workers may deserialize
@@ -1022,7 +1199,7 @@ Before planning or implementing a phase, process project guidance in this order:
 - Workers construct standardized result bundles. Online workers transfer the selected bundle through one `.tar.zst`
   package that the root validates and unpacks. A same-machine root-local worker uses direct local handoff without
   package creation, root-side result validation, or unpacking. Partition memberships are loaded from the designated
-  `partition_schedules.csv`.
+  `partition_schedules.xlsx`.
 - Require exactly equal complete Cocoonet version identifiers for root and worker. For online workers, check during
   the connection handshake before normal protocol operation, dataset synchronization, task assignment, or model
   deserialization. Local compatibility checking does not require a network handshake. Matching major/minor versions
