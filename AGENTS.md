@@ -610,6 +610,12 @@ Before planning or implementing a phase, process project guidance in this order:
 - The production change limits exclude testing code. A complete testing unit dedicated to the approved change unit
   may be added or updated in the same step, including the test functions needed to verify it.
 - Keep tests focused on the approved production work; do not generate unrelated or project-wide test suites.
+- Prefer tests that exercise real code paths with small representative datasets, supported models, and actual local or
+  loopback online worker processes as applicable. Mocks, monkeypatches, stubs, fakes, and other test doubles are allowed
+  only at network boundaries, and only when necessary to represent an unavailable external service or a network
+  condition that cannot be exercised reliably through the real protocol. Prefer real root/worker protocol simulation
+  whenever practical. Do not replace dataset handling, scientific computation, model execution, persistence, worker
+  control, or lifecycle behavior with test doubles.
 - If a production unit does not yet provide independently verifiable functionality, tests may be deferred. Explain
   what cannot yet be verified and why, then wait for user approval of that working unit before continuing.
 - Preserve tests of scientific and lifecycle invariants when representations change. Update tests tied to superseded
@@ -1083,8 +1089,9 @@ Before planning or implementing a phase, process project guidance in this order:
 **Root Restart and Progress Recovery:**
 
 - Reconstruct progress from committed CSV configuration/state, the authoritative `partition_schedules.xlsx`, and
-  complete root result bundles, then reconcile worker state through local control or root-initiated reconnection. Do
-  not rely solely on pre-termination in-memory coordinator state.
+  complete root result bundles, then reconcile worker state through local control or, after online reconnection under
+  the configured direction, root-initiated reconciliation. Do not rely solely on pre-termination in-memory coordinator
+  state.
 - Explicit interruption and unexpected root-process termination use the same loading, reconciliation, and continuation
   implementation. After interruption the existing instance may continue; after termination the user recreates it
   against the existing working directory. Explicit interruption remains a distinct event with stop and
@@ -1153,7 +1160,8 @@ Before planning or implementing a phase, process project guidance in this order:
 - Availability to the owning root neither releases the external public allocation nor makes the
   worker publicly discoverable. Public-pool ownership and allocation remain the service's responsibility.
 - Reuse the bidirectional connection for assignments, status, results, and subsequent tasks. Do not replace this model
-  with worker polling or separate task-submission endpoints. On reconnection, the root again initiates the connection.
+  with worker polling or separate task-submission endpoints. Private reconnection follows `auto`, `root_connects`, or
+  `worker_connects`; after establishment, the root initiates reconciliation.
 - Message schemas, authentication, acknowledgements, heartbeat/disconnect detection, reconnection, and message
   serialization details are defined incrementally before implementing the corresponding protocol units.
 

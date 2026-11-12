@@ -725,11 +725,11 @@ dataset source paths against the current root working directory under Section 2.
 or persisting a new partition:
 
 - With an existing `split_path`, load the persisted partition and validate it against the supplied dataset. Do not
-  rerun the splitter.
+  rerun the splitter. Persist the validated schedule as the managed root `partition_schedules.xlsx`; the supplied
+  source artifact remains user-owned and unchanged.
 - Without an existing split, require a splitting method and its required configuration. Generate and validate the
-  complete realized partition set on the root and persist it before `add_dataset()` successfully completes. Its
-  destination may be supplied explicitly; otherwise derive it from
-  the computation's working directory, which is required at initialization.
+  complete realized partition set on the root and persist it as managed root `partition_schedules.xlsx` before
+  `add_dataset()` successfully completes.
 - Before accepting the dataset, validate its exact representation and the paired internal `sample_id` and
   user-facing `sample_label` identities against the persisted/supplied partition. A matching ID with a different label,
   or a matching label with a different ID, is not the same association. Validate all training/testing memberships.
@@ -764,7 +764,7 @@ attach every later parent.
 A later `add_dataset()` may select an existing valid artifact or create another one. Replacing the computation's current
 split association does not authorize overwriting a file still required by an existing parent. Parents preserve their
 original dataset/partition associations for their lifetime. Another computation may reuse `split_path` only after the
-same validation. The exact signature, default filename, in-file container, and validation mechanism remain deferred.
+same validation. The exact signature, worksheet/container details, and validation mechanism remain deferred.
 
 Supply a copy of the applicable indices together with online dataset synchronization, or local artifact preparation,
 during parent-context setup. Workers use those indices to select data from the exact ready representation; they never

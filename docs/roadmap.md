@@ -1,6 +1,6 @@
 # Cocoonet Initial Development Roadmap
 
-This roadmap uses root [AGENTS.md](AGENTS.md) and [docs/architecture.md](docs/architecture.md) as its architectural
+This roadmap uses root [`AGENTS.md`](../AGENTS.md) and [`architecture.md`](architecture.md) as its architectural
 basis. It sequences capabilities; it neither authorizes implementation nor replaces their contracts. A phase is a
 milestone that will later be divided into small, approved changes, usually one production function or method at a time.
 Intermediate phases are not promises of a complete public execution mode.
@@ -12,7 +12,7 @@ Implement the smallest useful foundations first, then grow dependencies in one d
 ```text
 shared contracts -> durable storage -> configuration -> dataset and saved partitions
     -> enforced execution boundary -> model execution -> baseline results -> reports
-    -> influence -> PyTorch integration -> bounded worker parallelism -> complete attempt files
+    -> influence -> PyTorch integration -> bounded worker parallelism -> complete attempt bundles
     -> local coordination and acceptance -> bounded delivery -> interruption and recovery
     -> private online connections -> online synchronization and execution
     -> mixed scheduling and duplicates -> explicit cleanup -> public-service integration
@@ -34,11 +34,13 @@ established semantics; representation changes remain possible through the same d
 Throughout every phase:
 
 - Follow Python 3.12 through the latest stable release, excluding prereleases, and the existing dependency/tool
-  configuration. Use asyncio/aiofiles for asynchronous I/O and dill exclusively for Cocoonet serialized payloads.
-  Dataset inputs are limited to the non-executable table formats defined by the dataset contract. Generated
-  CSV/Parquet artifacts do not introduce alternative Cocoonet payload serialization.
-  Applicable pytest, mypy, Black, and Ruff checks must pass for approved implementation work; use targeted tests, not
-  unrelated suites. Validate documentation accessibility and version switching when documentation is rebuilt.
+  configuration. Use asyncio/aiofiles for asynchronous I/O. Use schema-controlled UTF-8 CSV for Cocoonet metadata,
+  model references, execution configuration, and execution state; schema-controlled XLSX for root/worker data
+  references, partition schedules, and two-sheet result workbooks; and dill only for designated trusted model payloads,
+  root-local IPC messages, and standardized visualization data. Online selected-result delivery uses `.tar.zst`;
+  dataset and model transfer preparation follows its separate Parquet and archive contracts. Applicable pytest, mypy,
+  Black, and Ruff checks must pass for approved implementation work; use targeted tests, not unrelated suites.
+  Validate documentation accessibility and version switching when documentation is rebuilt.
 - Provide NumPy-style source docstrings for public and internal components, public-only API documentation, useful
   examples, and comments explaining non-obvious logic. Preserve the typing, narrow suppression, decomposition,
   simplicity, efficiency, and line-length rules in AGENTS.md.
@@ -78,7 +80,7 @@ Establish the logical state needed for configuration consolidation, worker readi
 inputs, stop disposition, report status, result selection, durable acceptance, and bounded-operation progress.
 Any report containing a computational failure has `failed` report status, even when successful results remain in its
 payload; no separate partial-report status is used.
-Define standardized prediction/class alignment and the single-attempt result envelope, including the failure-only
+Define standardized prediction/class alignment and the logical one-attempt `AttemptResult` contract, including the
 outcome, before their producers and consumers. Distinguish formula-defined `NaN`, unavailable `None` with failure
 references, and schema-defined non-applicable `None` without introducing a parallel per-value status enum. Define trace
 context for stage, model, fold, sample/class, exception, message, and traceback.
@@ -88,8 +90,8 @@ summaries, container restrictions, and validation machinery. Select minimal repr
 inspection, and consumption examples, including partial failures.
 
 Phase 1 settles the shared identities, associations, prediction/result structure, and operational evidence needed by
-dependent phases. Concrete metric payloads, model adapters, storage/wire encodings, and lifecycle algorithms remain in
-their assigned phases.
+dependent phases. Concrete metric payload schemas and producers, model adapters, persistence implementation, wire
+encoding, and lifecycle algorithms remain in their assigned phases.
 
 Reconcile affected schemas, validators, tests, and component boundaries before implementing their consumers. Preserve
 scientific and lifecycle semantics; this review does not itself authorize code changes.
@@ -97,29 +99,31 @@ scientific and lifecycle semantics; this review does not itself authorize code c
 ### 2. Filesystem ownership and durable persistence foundations
 
 Build on Phase 1 to establish the storage boundary before any configuration operation can prepare files. Implement
-root-directory preparation and the bidirectional ownership validation: dataset source paths must neither equal nor
-lie inside the managed root, and a proposed root must be checked against all configured source paths, including those
-retained by a copied instance. Reject conflicting root configuration before any persistent-file modification.
+root-directory preparation and bidirectional ownership validation: dataset source paths must neither equal nor lie
+inside the managed root, and a proposed root must be checked against every configured source path, including paths
+retained by a copied instance. Resolve canonical physical locations and reject a root that equals, contains, or is
+contained within a filesystem anchor, Python installation or package-installation directory, installed Cocoonet
+package directory, or the complete Cocoonet source repository before modifying persistent files.
 
-Keep user source files outside managed storage and unchanged by Cocoonet. Apply the missing/empty/nonempty directory
-and overwrite rules, while preserving existing parent partition/recovery protections. Fresh initialization and recovery
-are separate operations; a general root-file clearing API is not required.
+Apply the missing, empty, nonempty, and `overwrite` rules without changing user source files. Fresh initialization and
+recovery remain separate operations; no general root-file clearing API is required. Managed paths must follow the
+semantic root/worker layouts and identifier contracts in Architecture Section 6.2. Paths are locators rather than
+authoritative identity evidence.
 
-Establish designated dill persistence/loading paths and complete-versus-incomplete publication for partition artifacts,
-execution configuration/state, and result files. Provide the durable evidence needed later for the known task set,
-fixed parent context, pending result selection, acceptance, and remaining retry budgets. Establish structured
-root/worker
-running and error logs, failure/provenance context, and explicit persistence errors. Result persistence must support
-asynchronous I/O and
-content processing outside the active receive path.
+Establish schema-controlled CSV and XLSX persistence boundaries and structured running/error logs. Implement the
+focused atomic file-publication foundation required by Architecture Section 6.5: authoritative XLSX files use
+same-directory `<filename>.partial` staging, mutable `execution_state.csv` uses staged atomic replacement, and staging
+content is never authoritative or automatically promoted. Establish the focused directory-publication foundation for
+later immutable result bundles without requiring future metric payloads.
 
-Use the reviewed Phase 1 contracts for identity, association, and required durable evidence. Storage foundations must
-not require concrete future metric payloads or implement scheduling, acceptance policy, or recovery transitions.
-Integrate later payload schemas when their producing phases define them.
+Define durable evidence for fixed parent context, the known task set, selected reception, acceptance, remaining retry
+budgets, and complete-versus-incomplete publication. Preserve asynchronous I/O and keep later online receive-path
+content processing outside the active event loop.
 
-The exit condition is a reliable storage interface and stable recovery evidence, not an implemented recovery engine.
-Do not duplicate the authoritative partition storage. Split generation, execution-state transitions, resend loops,
-retention actions, and network transfer are introduced by their owning later phases.
+The exit condition is a reliable, format-specific persistence interface with stable recovery evidence and focused file
+and bundle publication helpers. Phase 2 does not generate partitions, schedule tasks, accept results, run recovery
+transitions, perform retention cleanup, or transfer network payloads. Later phases integrate their concrete schemas
+without changing these ownership and publication contracts.
 
 ### 3. Reusable computation configuration and lifecycle foundations
 
@@ -127,6 +131,8 @@ With identities and storage available, build root configuration and initializati
 Support incomplete configuration, one active dataset slot, model and worker registries, and model/worker
 add/list/inspect/summary/remove capabilities with singular and bulk operations. Define bulk commit/failure behavior
 before implementing bulk conveniences; do not leave undocumented partial configuration.
+Assign registered models positive sequential decimal `model_id` values beginning at `1`, without zero padding or reuse
+within their owning persistent scope.
 
 Retain worker device configuration and the requested positive integer `n_attempt`,
 defaulting to `1`, without starting runtime services. The worker-configuration API
@@ -140,12 +146,12 @@ ordinary active-execution locks and prospective edits after root interruption. M
 require a new parent and explicit reinitialization; worker-only changes preserve the existing parent.
 
 Ordinary copying preserves configuration, root directory, lifecycle state, and existing parent identity without cloning
-runtime resources, duplicating accepted files, or creating another parent. Dataset removal removes references only.
+runtime resources, duplicating accepted bundles, or creating another parent. Dataset removal removes references only.
 Worker removal is configuration-only
 and sends no stop, disconnect, cleanup, reset, or release instruction. Root reassignment must use Phase 2 validation.
 
 Before proceeding, configuration validation, copy semantics, mutation boundaries, and parent-snapshot preparation must
-be stable. Dataset registration becomes complete in Phase 4. Runnable start, cancellation, resume, worker runtime
+be stable. Dataset registration becomes complete in Phase 4. Runnable `run()`, cancellation, resume, worker runtime
 management, and external service operations remain deferred; no placeholder may silently perform those operations.
 
 ### 4. Dataset normalization and authoritative realized partitions
@@ -166,18 +172,22 @@ disjoint within each fold, regardless of splitting method. Missing groups receiv
 during normalization; supplied groups remain unchanged. Reject incompatible splitting configurations explicitly,
 without changing the selected method or group values.
 
-Complete add_dataset() as dataset-plus-partition preparation. Load and validate a supplied split_path without running
-the splitter; otherwise require the splitting method/configuration, realize the whole schedule, validate it, and
-persist it once in one authoritative dill file before successful completion. Validate exact dataset identity,
-sample_id/sample_label associations, and memberships. Resolve splitting randomness here.
+Complete `add_dataset()` as dataset-plus-partition preparation. Load and validate a supplied `split_path` without
+running the splitter; otherwise require the splitting method and configuration, realize the complete schedule, validate
+it, and persist it before successful completion. Generate `dataset_id` as exactly 12 lowercase hexadecimal characters
+from a cryptographically secure random source, with the collision handling required by Architecture Section 3.1.
 
-Provide dataset and partition inspection alongside registration, exposing the normalized sample associations and saved
-memberships. The stable output is an evaluation-ready dataset/partition association that parents can bind and later
-instances can reuse after validation. Re-registration cannot overwrite an artifact still required by an existing parent.
-Define
-default/explicit partition paths and identity restoration before consumers depend on them. Decide mixed-row and
-tensor-shape encoding support here without promising unsupported variants. Worker synchronization, model fitting, and
-runtime dispatch remain later work.
+Persist the normalized dataset reference as managed `root_data_reference.xlsx` and the single authoritative schedule
+as managed `partition_schedules.xlsx`, using Phase 2 atomic workbook publication. The schedule columns are
+`partition_id`, `dataset_id`, `fold_id`, `population`, `position`, `sample_id`, and `sample_label`. Preserve fold order,
+write training rows before testing rows within each fold, and preserve one-based population position. Validate exact
+dataset identity, sample-ID/label associations, masks, disjoint memberships, and group separation before publication
+and after loading. No separate `fold_index` or duplicate authoritative schedule is required.
+
+Provide dataset and partition inspection alongside registration. Re-registration cannot overwrite an artifact still
+required by an existing parent. Resolve mixed inline/file-backed rows and per-sample versus dataset-global tensor-shape
+encoding here before dependent consumers; neither capability is implied until that decision is documented. Worker
+synchronization, model fitting, and runtime dispatch remain later work.
 
 Implement the dataset contracts from architecture Sections 3.1 and 3.5. Support CSV and compressed CSV with
 encoding detection, first-sheet XLS/XLSX/ODS, Parquet, ORC, and Feather. Reject pickle/dill dataset input.
@@ -186,17 +196,21 @@ Accept multiple inline inputs only as sample-wise divisions. Reject column-wise 
 rows by globally unique sample labels; reject partial missing labels and generate reserved labels only when
 the column is entirely absent. Generate sample IDs after initial identification.
 
-Implement text identifier and classification-target conversion, configurable finite floating-point regression/X values,
-integer `0`/`1` masks excluding booleans, and positive-integer tensor-shape parsing. Reject inadmissible types,
-nonfinite numeric content, conversion collisions, and malformed shapes without cleansing input.
+Implement text identifier conversion, configurable finite floating-point regression/X values, integer `0`/`1` masks
+excluding booleans, and positive-integer tensor-shape parsing. Standardized classification labels must match
+`^[A-Za-z0-9_-]{1,64}$`; reserve `micro-average` and `macro-average`, and reject a class count that would exceed the XLSX
+column limit for any required wide result schema. Reject inadmissible types, nonfinite numeric input, conversion
+collisions, malformed shapes, and invalid class labels without cleansing or rewriting them.
 
-Generate one managed `<root_dir>/data_reference.csv`. For file-backed samples, sources are actual X-bearing
-files; for inline samples, sources are input tables. Managed metadata files are not sample sources.
+Generate one managed `<root_dir>/root_data_reference.xlsx`. For file-backed samples, sources are the actual X-bearing
+files; for inline samples, sources are the input tables. Managed metadata and reference workbooks are not sample
+sources.
 
 Implement reusable transfer preparation: ZSTD Parquet above 16 MB and sample-row sharding above 1 GB.
 Calculate shard count from original stored size and the configurable target, defaulting to 512 MB. Process
-sources independently, use dataset-global shard numbering, and store representations in a dataset-specific
-managed preparation directory.
+sources independently, use dataset-global shard numbering, and store prepared representations in
+`<source_dataset_root_dir>/dataset_for_transfer/`, using the established dataset and shard naming contracts.
+Dataset/model archive wrapping, tiling thresholds, and archive compression remain Phase 17 decisions.
 
 Implement persisted metadata-based reuse state using source path, stored size, modification time, and
 preparation settings. Do not compute content digests solely for reuse decisions.
@@ -267,31 +281,28 @@ than separately distributed fold tasks.
 ### 8. Ordinary reports and visualization data
 
 Build independent report components from Phase 7's standardized results. Settle concrete report schemas, conventional
-formula/report conventions, and reuse of shared intermediates immediately before their consumers; preserve explicit
-project-specific definitions rather than inventing variants.
+formula/report conventions, and reuse of shared intermediates immediately before their consumers. Their structured
+outputs must match the exact column order and metadata contracts in Architecture Sections 4.4–4.6; Phase 12 owns
+workbook persistence.
 
-Classification includes confusion matrices and class identities, TP/TN/FP/FN, precision, recall, F1, accuracy, AUC,
-and the requested micro/macro scopes. Preserve the three specified accuracy definitions and None for macro-averaged
-confusion counts. Residual reports include per-class probability residuals, probability z-scores, absolute/root-squared
-summaries, Shannon entropy of absolute residuals, and Mahalanobis distance. Return class-specific ROC/AUC plotting data.
+Classification validation, performance, and residual outputs preserve exact model class order and use the exact class
+label followed by `_probability`, `_residual`, or `_z_score`. Workbook metadata is authoritative for class identity;
+do not parse column suffixes. The performance table contains class rows followed by `micro-average` and
+`macro-average`, with non-applicable aggregate confusion counts represented as `NA`. Do not create a duplicate
+confusion-matrix table. Preserve the three specified accuracy definitions.
 
-Regression includes Mean_Error, SDE, MAE, Normalized_MAE, CV_MAE, MSE, RMSE, Normalized_RMSE, CV_RMSE, RPD, and R2,
-plus residual/standardized-residual reports and scatter/residual plotting data. User-facing reports identify samples
-and models by their user labels while internal records preserve identities and dataset-relative sources.
+Regression performance contains, in order, `mean_error`, `std_of_error`, `MAE`, `normalized_MAE`, `MSE`, `RMSE`,
+`normalized_RMSE`, `CV_RMSE`, `RPD`, and `R2`. Implement the corresponding validation and residual schemas from
+Architecture Section 4.6. Conventional metric details are documented with their implementation; explicit Cocoonet
+variations remain unchanged.
 
-Concrete report schemas apply the generated scientific-value contract: finite values and mathematically permitted
-infinities are floats, formula-defined undefined values are `NaN`, computationally unavailable values are `None` with
-applicable failure references, and explicitly non-applicable values are `None` without failures where the schema
-permits them. Exact count fields remain integers. Do not add per-value status fields.
+Every result table is represented for persistence as a separate XLSX workbook with one result-data worksheet and one
+schema-controlled metadata worksheet. Finite values remain numeric; `Inf`, `-Inf`, `NaN`, and `NA` are deliberate text
+tokens. Visualization components return standardized rendering data rather than plotting objects or rendered images.
 
-Human-readable reports use numeric output, `Inf`, `-Inf`, `NaN`, and `NA`. If CSV or another report export format is
-supported, define explicit encoding and round-trip validation so `NaN` and `None` cannot be collapsed by library
-defaults.
-
-Each report runs when its actual prerequisites are available. Its failure preserves other reports, identifiers, and
-successful values, with unavailable values and detailed errors represented as specified. Components return report
-data; they do not independently own filesystem persistence or retrain models. Before proceeding, report consumers
-must need no model-specific orchestration. Rendered plots, influence, and result-file delivery remain out of scope.
+Each report runs only when its prerequisites are available. A report failure preserves other reports, identities,
+successful values, and detailed failure provenance. Components return report data and do not independently persist
+files or retrain models. Rendered plots, influence computation, and result-bundle delivery remain out of scope.
 
 ### 9. Optional sample influence
 
@@ -309,7 +320,9 @@ class-specific probability influence or single-target regression influence, and 
 `M_i = sum_{f in F_i} |V_f|`. Count zero changes and repeated comparisons, retain exact comparison counts and
 applicable value-level failure references, and propagate formula-defined undefined contributions through ordinary
 aggregation. Do not add a separate influence evaluation-status field or replace the divisor with fold count or
-training size. Define the minimal concrete influence payload in Phase 9.
+training size. Persist the exact influence schemas defined in Architecture Sections 4.5 and 4.6. Classification places
+`prediction_comparison_count` immediately after `sample_label`, before the class-ordered `_influence` columns;
+regression records `sample_id`, `sample_label`, `influence`, and `prediction_comparison_count`.
 
 Contain removal-model initialization, fit, prediction, and calculation failures at the sample/fold/class boundary.
 Preserve independently computable values and continue other removal evaluations. Any such computational failure marks
@@ -399,77 +412,65 @@ Keep communication/control responsive and contain failures without stopping unre
 attempts or the long-running worker. Root allocation and result acceptance are
 integrated in the following phases.
 
-### 12. Complete attempt packaging and worker persistence
+### 12. Complete attempt result bundles and worker persistence
 
-Once evaluation producers and Phase 11 resource control are stable, complete worker report persistence and result
-packaging using Phase 2. Construct exactly one standardized dill result file per completed execution attempt,
-containing its reports, successful values, formula-defined `NaN`, permitted infinities, non-applicable or unavailable
-`None`, and traceable failures. Preserve value-level failure associations without storing redundant value-status
-vectors.
+Once evaluation producers and Phase 11 resource control are stable, construct one immutable result bundle per completed
+attempt. Persist every applicable result table as its own schema-controlled two-sheet XLSX workbook; include applicable
+visualization-data dill files, model reference, worker error log, attempt metadata, fold/source associations, failures,
+and a manifest defining the complete inventory. No bundle member has an independent delivery, retry, acceptance, or
+recovery lifecycle.
 
-Initial reconstruction failure produces a complete `reconstruction_failed` failure-only file without predictions or
-reports. Primary-validation failure produces a complete `validation_failed` file containing preserved fold results,
-unavailable predictions, dependent failed or blocked reports, and failure provenance. Successful primary validation
-with one or more ordinary-report or influence failures produces `completed_with_errors`.
+Initial reconstruction failure produces a complete `reconstruction_failed` failure-only bundle. Primary-validation
+failure produces a complete `validation_failed` bundle containing preserved fold results, failed or blocked dependent
+reports, and failure provenance. Successful validation with report or influence failures produces
+`completed_with_errors`.
 
-Preserve parent/unit/attempt associations, model identity, fold/sample/class alignment, and the context needed for root
-report processing and provenance. Evaluation components remain separate from persistence; delivery receives a completed
-existing file and does not reconstruct evaluation results. Keep persistence failures at their bounded-operation scope
-and the long-running worker alive.
+Construct the bundle in worker `model_<model_id>.staging`, validate the complete inventory and schemas, and publish it
+with one atomic directory rename to `attempt_results/model_<model_id>/`. Staging is never authoritative or promoted
+during recovery. Preserve parent, model/unit, attempt, worker, fold, sample, and class associations.
 
-Before proceeding, `completed`, `completed_with_errors`, `validation_failed`, and `reconstruction_failed` outcomes
-must be publishable and distinguishable from incomplete writes. No report receives an independent delivery lifecycle.
-File construction must be stable before local acceptance, bounded resends, or networking; do not add
-streaming/backpressure machinery for these small files.
+Before proceeding, every attempt outcome must be durably publishable and distinguishable from an incomplete write.
+Online `.tar.zst` creation and delivery belong to Phase 17; root-local copying and acceptance belong to Phase 13.
+Do not introduce per-file delivery or streaming/backpressure machinery for these small bundles.
 
 ### 13. Local coordinator, worker control, and result acceptance
 
 Integrate Phases 1–12 into the first complete normal execution path with an explicitly configured,
-separate root-local worker process. Root control owns the reusable computation; the coordinator owns
-unit-task allocation and progress; worker control owns its reserved attempt slots and assigned attempts
-and remains responsive while their evaluation workflows run. Dispatch attempts while eligible capacity
-remains, without waiting for a full batch. Each attempt's execution state remains independent and local
-to its executing worker, without inter-worker communication or shared mutable execution state.
+separate root-local worker. Start it with the multiprocessing `spawn` context and use one duplex `Pipe`. Serialize
+bounded control messages explicitly with dill protocol 5 through `send_bytes()` and `recv_bytes()`. Dataset files and
+result bundles do not travel through the pipe, and root and worker managed storage remain separate ownership scopes.
 
-Apply Phase 1's exact-version compatibility rule through local control without a network handshake. Complete start
-prerequisite checks and execution-configuration persistence. Require one active dataset, at least one
-model, and a usable configured target; never execute in the coordinator or silently create a worker. Bind the parent's
-validated saved partitions and confirm durable partition persistence before allocation. Establish local artifacts and
-parent context, then dispatch only model-specific input and necessary lifecycle references in that context. The local
-attempt begins with that model handoff and continues through model loading/reconstruction, evaluation, result
-publication, and delivery.
+Complete `run()` prerequisite checks and persist `execution_configuration.csv` and mutable `execution_state.csv`.
+Require one active dataset, at least one model, and a usable configured target. Capture `created_at_utc_ns` and generate
+`parent_id` exactly as specified by Architecture Section 3.4. Bind the validated saved partition before allocating work.
 
-Implement root selection and acceptance using the stable attempt records even though this milestone needs only the
-local normal path. Persist the selected attempt as authoritative pending selection state, receive/handoff the selected complete file, durably persist it,
-then accept and acknowledge it. A scientific failure-only outcome is eligible on the same basis as success; incomplete
-writes are not completion. Root deserialization/content processing stays outside active reception. Worker completion
-alone does not establish availability or result acceptance.
+Durably record the selected attempt before local handoff. The worker reports its validated published-bundle identity
+and managed path; the root copies only that selected bundle into root staging, adds its root model reference and final
+inventory, and publishes the model-keyed root directory atomically. Root-local handoff uses no archive, compression,
+HMAC, unpacking, or duplicate scientific/result validation. A scientific failure-only bundle is accepted on the same
+persistence basis as a successful bundle.
 
-Before proceeding, a full local evaluation must yield the standardized root-persisted outcome and stable task/attempt
-progress. Choose local IPC/artifact access and process-lifetime mechanisms before this integration. Runtime scheduling
-must fit the shared local/online contracts without artificial network behavior. Bounded delivery, cancellation/restart,
-multiple-target arbitration, and remote execution are completed in the following phases.
+Before proceeding, a full local evaluation must yield an atomically published root bundle and stable task/attempt
+progress. Worker completion alone does not establish acceptance, and sending the bundle identity does not release the
+producing attempt slot. Bounded retries, interruption/restart, multiple-target arbitration, and online execution remain
+in their assigned later phases.
 
 ### 14. Bounded operations, delivery waits, and result retention
 
 Build normal-operation failure handling on Phase 13's persisted selection/acceptance state and Phase 12's completed
-worker file. Implement the delivery component's acknowledgement/resend/wait lifecycle through the local boundary;
-online transport later uses the same operation semantics.
+worker bundle. Implement acknowledgement, retry, and wait behavior through the local boundary; online transport later
+uses the same operation semantics.
 
-A selected transfer or root-persistence failure requests the same existing file within its configured retry budget,
-without reevaluation. Retain it and keep its worker unavailable for new tasks until confirmation or exhaustion.
-At exhaustion, end only that operation, log its limit/attempts/final error, and allow normal worker handling when
-eligible. The logical task remains unfinished and unaccepted; exhaustion authorizes neither recomputation nor promotion
-of a competing result. Persist enough state to prevent budget resets after restart.
+A selected handoff or root-persistence failure retries the same published bundle within its remaining budget, without
+reevaluation or per-file retry. Retain that bundle and keep its producing attempt slot occupied until acceptance or
+retry exhaustion; other eligible slots remain usable. Exhaustion ends only that delivery operation. It does not accept
+or complete the logical task, authorize reevaluation or duplicate substitution, or terminate the worker. Persist enough
+state to prevent a restart from resetting the budget.
 
-Implement result-retention choices: deletion after confirmed delivery, retention until all root tasks finish, or no
-automatic deletion. Preserve pending delivery except for the mandatory public-release cleanup introduced in Phase 20.
-Apply configured bounded-operation handling to persistence and subsequent transfer consumers without allowing retries
-where scientific failure policy prohibits them.
-
-Add deletion on transition to a different parent task as another result-retention mode. Keep it configurable for
-private and root-local workers; Phase 20 makes it mandatory for public workers. A transition must not prematurely
-delete an artifact still required by selected-delivery handling.
+Implement bundle-retention choices: deletion after confirmed acceptance, retention until all applicable root tasks
+finish, or no automatic deletion. Add configurable deletion on transition to a different parent for private and
+root-local workers; Phase 20 makes it mandatory for public workers. Never delete a bundle still required by selected
+delivery except under mandatory public-release cleanup.
 
 Before proceeding, delivery status, scientific outcome, acceptance, and worker availability must be independently
 observable. Counts/timing and operation interfaces are settled here. Reconnection and periodic connection rounds do not
@@ -486,39 +487,41 @@ disposition. Changed model evaluation configuration requires explicit reinitiali
 evaluation, with or without worker edits, resumes the existing parent. Late results cannot enter another parent.
 Configuration unlocking is distinct from worker inactivity and cleanup eligibility.
 
-Recover the known task set, committed parent configuration, authoritative partition file, reception selection,
-accepted files, and retry progress. Reconcile continuing work; recognize complete persisted files without reevaluation
-or retransmission; continue eligible pending selected delivery within its remaining budget. Preserve stop dispositions,
-accepted outcomes, and exhausted budgets. Do not resplit, infer completion from partial files, or invent automatic
-training recovery after a worker/process failure.
+Recover the known task set and fixed parent from `execution_configuration.csv`, `execution_state.csv`, the authoritative
+`partition_schedules.xlsx`, and complete model-keyed root result bundles. Recognize an atomically published accepted
+bundle without reevaluation or retransmission; never infer completion from a package, staging directory, or incomplete
+bundle. Preserve selected reception, stop dispositions, accepted outcomes, and exhausted retry budgets.
 
-Before proceeding, local interruption and crash/restart cases must preserve identity and at-most-one acceptance,
-including the persistence-before-acknowledgement window. Settle concrete durable-state and local-process reconciliation
-mechanisms here. Online reconnection and multi-attempt recovery will exercise these same records in Phases 16–18,
-not replace the recovery model.
+Explicit interruption and unexpected root-process termination use the same persisted loading and continuation
+foundation but have different runtime consequences. The existing instance may continue after interruption. After
+termination, the user recreates it against the existing working directory and the root-local worker is recreated rather
+than reconnected. Settle the exact recovery API here.
+
+Before proceeding, interruption and restart must preserve identity and at-most-one acceptance across the
+publication-before-acknowledgement window. Online reconnection and multi-attempt recovery in Phases 16–18 reuse these
+records rather than replacing the recovery model.
 
 ### 16. Private online-worker connection and control
 
 Introduce networking only after the complete local path and lifecycle are stable. Extend the root connection and
-communication components with private registration credentials, root-initiated authenticated WSS over port 443,
-exclusive single-root ownership, and a persistent bidirectional control/status connection. Private registration
-generates a unique credential and returns connection information directly to its user; private workers never appear
-in public discovery. Workers never connect back or communicate with one another. Local-only execution still
-initializes no online subsystem.
+communication components. Private workers use configured endpoints and one of `auto`, `root_connects`, or
+`worker_connects`; initial establishment and reconnection follow the same policy. `auto` attempts both directions. The
+root accepts the first authenticated, exact-version-compatible connection for the configured worker identity and closes
+duplicates. Connection direction never transfers scheduling or coordination authority: after establishment, the root
+initiates reconciliation and all task and lifecycle instructions.
 
-Choose handshake/control encoding, authentication/reconnection mechanisms, heartbeat/disconnect detection, and
-stop/status acknowledgement details before dependent messages. Enforce exactly matching complete Cocoonet versions
-before normal protocol operations, synchronization, assignment, or model loading. Read compatibility metadata without
-loading model/report payloads; support differing declared Python versions without dependency negotiation.
+Choose the exact control-message framing, connection authentication, heartbeat/disconnect detection, reconnection
+mechanism, and stop/status acknowledgement details before implementing their consumers. Enforce exclusive single-root
+ownership and exactly matching complete Cocoonet versions before normal protocol operations, synchronization,
+assignment, or model loading. Private workers never enter public discovery.
 
-Implement asynchronous per-worker connection rounds before start, during execution, and after disconnect, using the
-configured period and intra-round delays. Exhaustion makes only that worker unavailable until the next scheduled round;
-configuration remains. Connection failure is not scientific failure, worker release, or delivery-budget reset.
-Measure allocation-time responsiveness without permanent priority or blocking other workers.
+Implement asynchronous per-worker connection rounds before `run()`, during execution, and after disconnect, using the
+configured period and intra-round delays. Exhaustion makes only that worker unavailable until the next round and does
+not reset a delivery budget or create a scientific failure.
 
-Before proceeding, authenticated control, version rejection, readiness/status observations, and independent reconnection
-must be stable. Start uses currently runnable targets and fails if none exist while connection management continues.
-Model/dataset transfer, remote evaluation, and public discovery are not enabled by this connection milestone alone.
+Before proceeding, authenticated control, version rejection, direction-aware reconnection, root-initiated
+reconciliation, readiness observations, and independent connection rounds must be stable. `run()` uses currently
+runnable targets and fails when none are usable while connection management continues independently.
 
 ### 17. Online synchronization, execution, and delivery
 
@@ -538,15 +541,19 @@ model-specific/lifecycle information, not another dataset or an independent data
 online attempt begins with this attempt-specific model synchronization and continues through model reconstruction,
 evaluation, result publication, and delivery.
 
-Dispatch through the established connection and run the same evaluation components. Return only the selected complete
-file over that connection; persist promptly with asynchronous I/O, acknowledge, and apply the existing bounded delivery
-and retention rules. Reconnection reconciles running, stopped, pending-delivery, and already-persisted outcomes using
-Phase 15's durable evidence, without scientific retries or resetting exhausted operations.
+For the selected result, package the already published immutable bundle once as `.tar.zst` and reuse those same package
+bytes for every retry. Record and verify exact byte length and SHA-256. Private delivery also uses the shared runtime
+key and HMAC-SHA-256 metadata contract from Architecture Section 6.4. Resolve canonical HMAC metadata encoding, result
+compression parameter names, acknowledgement encoding, and applicable retry timing before implementing this path.
 
-Before proceeding, one private online worker must support complete normal, failure, and reconnect paths, with dataset
-reuse and provenance intact. Synchronization verification and concrete transfer schemas are resolved here. Dataset
-cleanup operations remain in Phase 19; multi-worker/duplicate arbitration is the next milestone, and public allocation
-remains outside this phase.
+The root stages the package and verifies length, digest, HMAC, safe extraction, manifest inventory, workbook schemas,
+and identities before atomic root publication. Package receipt and content processing must not block the active network
+event loop, and visualization dill data must not be deserialized there. Public authentication remains governed by the
+external service interface.
+
+Before proceeding, one private online worker must support complete normal, scientific-failure, package-failure, retry,
+and reconnect paths with dataset reuse and provenance intact. Resolve dataset/model transfer archive selection, tiling,
+thresholds, and compression here. Cleanup remains Phase 19; duplicate arbitration remains Phase 18.
 
 ### 18. Mixed scheduling and duplicate-attempt arbitration
 
@@ -565,9 +572,10 @@ oldest by its first execution start. A completed result awaiting delivery is not
 launch a duplicate; terminal reconstruction or primary-validation failures are not retried.
 
 Exercise receiving-order selection, serialized reception per unit, and at-most-one durable acceptance across attempts.
-An earlier failure outcome can win over later success. Selection or transfer failure cannot promote another result.
-Only after selected-file persistence and acceptance, stop remaining duplicates without receiving their files.
-Unselected files do not enter the resend lifecycle. Different units remain independent.
+An earlier failure outcome can win over later success. Selection or delivery failure cannot promote another attempt.
+Only after the selected bundle is atomically published and accepted may remaining duplicates be stopped without
+receiving their packages or handing off their local bundles. Unselected bundles do not enter the retry lifecycle.
+Different units remain independent.
 
 Before proceeding, mixed execution, simultaneous ready results, duplicate cancellation, reconnects, and root restart
 must all use the existing identities, persisted selection state, and remaining budgets. This phase adds scheduling policy and
@@ -638,12 +646,12 @@ After the capabilities exist, close the integration verification for supported m
 online-only, and mixed operation. Earlier phases already require applicable checks; this milestone is not permission
 to postpone correctness, security, or failure isolation.
 
-Verify the declared Python support range and cross-supported-version dill/model/result behavior for exactly matching
-Cocoonet releases. Exercise resource limits and responsiveness, fixed partitions and identifiers, all report/failure
-outcomes, duplicate acceptance, persistence/acknowledgement interruption, exhausted retry preservation, connection
-rounds, data retention/reuse, configuration copying/reuse, and public cleanup through the supplied integration.
-Verify that result and supported report-export round trips preserve finite values, permitted infinities, `NaN`, `None`,
-and value-level failure associations without collapsing `NaN` and `None`.
+Verify the declared Python support range and cross-supported-version behavior for trusted dill model/visualization
+payloads, CSV state, XLSX workbooks, and `.tar.zst` result packages under exactly matching Cocoonet releases. Exercise
+resource limits and responsiveness, fixed partitions and identifiers, report/failure outcomes, duplicate acceptance,
+atomic publication and acknowledgement interruption, exhausted retry preservation, connection rounds, data
+retention/reuse, configuration copying/reuse, and public cleanup through the supplied integration. Verify that XLSX
+result round trips preserve finite values and the distinct `Inf`, `-Inf`, `NaN`, and `NA` tokens.
 
 Complete public workflow documentation and examples using the implemented APIs, keeping internal details in source
 documentation. Confirm asynchronous receipt does not deserialize in the active event loop and that worker application
@@ -656,8 +664,7 @@ categories, distributed folds, rendered worker plots, and a public-service imple
 
 ## Dependency decisions and roadmap risks
 
-No unresolved architectural contradiction currently prevents this ordering. The difficult boundaries are handled
-before their consumers, rather than postponed until they force changes across working subsystems:
+This ordering places difficult boundaries before their consumers:
 
 - **Shared evidence before behavior:** Phase 1 defines minimal parent/unit/attempt associations and independent stop,
   selection, acceptance, and operation observations. Phase 2 establishes their required durable evidence. Later phases
@@ -670,21 +677,18 @@ before their consumers, rather than postponed until they force changes across wo
   architecture but must be selected and verified before Phase 5 executes any model payload. Confirm it supports the
   intended reconstruction, local/online ownership, and PyTorch needs. If it cannot enforce the documented restrictions,
   pause that dependent work and seek an architectural decision; do not implement an unsafe temporary path.
-- **Durable publication and resource lifetimes need timely decisions:** Choose atomic/complete publication evidence,
-  source-path equality/containment validation, and partition identity restoration before Phases 2–4 depend on them.
-  Choose local IPC/process lifetime and reconciliation mechanisms before Phases 13–15. These are implementation
-  decisions constrained by existing invariants, not separate architecture-repair phases.
-- **Protocol and service boundaries are staged dependencies:** Concrete authenticated messages, heartbeat detection,
-  transfer validation, and timer mechanisms are decided immediately before Phases 16–17. The external public-service
-  interface is a real dependency for Phase 20 only; private/local implementation can proceed without inventing it.
+- **Durable publication and resource lifetimes are established before use:** Phase 2 implements the fixed protected-root,
+  semantic-path, and atomic-publication contracts. Phase 4 implements the fixed partition workbook. Phase 13 implements
+  the fixed `spawn`/duplex-`Pipe` local boundary. Later phases add lifecycle behavior without redefining these mechanisms.
+- **Protocol and service boundaries remain staged dependencies:** Phase 16 settles online framing, authentication,
+  heartbeat, and direction-aware reconnection. Phase 17 settles canonical HMAC bytes, acknowledgements, result
+  compression parameters, and dataset/model transfer archives. The supplied external service interface remains a
+  dependency only for Phase 20.
 - **Scientific and platform compatibility require early checks:** Set report conventions at Phase 8 and test model
   output and serialization contracts as their adapters are introduced. Phase 21 broadens integration coverage rather
   than discovering incompatible schemas or unsupported Python behavior for the first time.
 
-No new architectural decision is required solely to begin the foundations. Deferred API names, containers, file/wire
-encodings, timer values, and local algorithms should be settled with their first dependent implementation unit, under
-the existing documentation gate, without reopening defined NaN behavior or adding speculative architecture.
-
-This roadmap is intentionally at the repository root as requested. Existing references to docs/roadmap.md in the
-architectural documents are a documentation-location mismatch; those references were not changed by this task.
-Resolve their location when documentation updates are next authorized. This does not alter the dependency sequence.
+No deferred decision blocks Phases 1–2. Resolve the remaining Architecture Section 10 decisions only in their owning
+phases: mixed-row/tensor-shape representation in Phase 4; technical isolation in Phase 5; conventional report details
+in Phase 8; recovery and worker-service APIs in Phases 13–15; online protocol, integrity, retry, and compression details
+in Phases 16–17; and cleanup verification and public-service integration in Phases 19–20.
