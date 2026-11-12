@@ -273,8 +273,7 @@ project-specific definitions rather than inventing variants.
 Classification includes confusion matrices and class identities, TP/TN/FP/FN, precision, recall, F1, accuracy, AUC,
 and the requested micro/macro scopes. Preserve the three specified accuracy definitions and None for macro-averaged
 confusion counts. Residual reports include per-class probability residuals, probability z-scores, absolute/root-squared
-summaries, Shannon entropy of absolute residuals, and Mahalanobis distance under the prescribed within-sample class
-axis. Return class-specific ROC/AUC plotting data.
+summaries, Shannon entropy of absolute residuals, and Mahalanobis distance. Return class-specific ROC/AUC plotting data.
 
 Regression includes Mean_Error, SDE, MAE, Normalized_MAE, CV_MAE, MSE, RMSE, Normalized_RMSE, CV_RMSE, RPD, and R2,
 plus residual/standardized-residual reports and scatter/residual plotting data. User-facing reports identify samples

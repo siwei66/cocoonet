@@ -19,16 +19,16 @@ I interpret this as the table schema for the result reports.
 
 A. For classification:
 1. validation results:
-- columns: sample_id, sample_label, y_true, y_pred, <class name 0>, <class name 1>, ..., <class name n> (The <class name k> column is for the predicted probability of the class k, while the y_true and y_pred provide the true and predicted categorical class label)
+- columns: sample_id, sample_label, y_true, y_pred, <class name 0>_probability, <class name 1>_probability, ..., <class name n>_probability (The <class name k> column is for the predicted probability of the class k, while the y_true and y_pred provide the true and predicted categorical class label)
 - rows: sample_id i.e. rows are indexed by sample_id, but save sample_id as a column explicitly, instead of as the row names.
 2. classification performance:
 - columns: class, TP, TN, FP, FN, precision, recall, f1_score, accuracy, AUC (area under curve)
 - rows: class labels and micro-average and macro-average (for average metrics of precision, recall, f1_score, accuracy and AUC only, with TP, TN, FP, FN as not available)
 3. residual analysis:
-- columns: sample_id, sample_label, y_true, <class name 0>_prob, <class name 1>_prob, ..., <class name n>_prob (The <class name k>_prob column is for the predicted probability of the class k), <class name 0>_res, <class name 1>_res, ..., <class name n>_res (The <class name k>_res column is for the residual of predicted probability of the class k), <class name 0>_z, <class name 1>_z, ..., <class name n>_z (The <class name k>_z column is for the z-score of the residual of the class k), sum_of_absolute_residual, root_sum_of_squared_residual, Shannon_entropy_of_absolute_residual, Mahalanobis_distance_of_residual
+- columns: sample_id, sample_label, y_true, <class name 0>_probability, <class name 1>_probability, ..., <class name n>_probability (The <class name k>_probability column is for the predicted probability of the class k), <class name 0>_residual, <class name 1>_residual, ..., <class name n>_residual (The <class name k>_residual column is for the residual of predicted probability of the class k), <class name 0>_z_score, <class name 1>_z_score, ..., <class name n>_z_score (The <class name k>_z_score column is for the z-score of the residual of the class k), sum_of_absolute_residual, root_sum_of_squared_residual, Shannon_entropy_of_absolute_residual, Mahalanobis_distance_of_residual
 - rows: sample_id
 4. sample influence:
-- columns: sample_id, sample_label, <class name 0>, <class name 1>, ..., <class name n> (The <class name k> column is for the stated influence measure of the class k), sum_of_influence, root_sum_of_squared_influence (for the sum of influence measures among classes and root sum of squared influence measures of the classes)
+- columns: sample_id, sample_label, <class name 0>_influence, <class name 1>_influence, ..., <class name n>_influence (The <class name k>_influence column is for the stated influence measure of the class k), sum_of_influence, root_sum_of_squared_influence (for the sum of influence measures among classes and root sum of squared influence measures of the classes)
 - rows: sample_id
 
 B. For regression:

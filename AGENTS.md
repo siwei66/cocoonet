@@ -298,9 +298,6 @@ already-terminal or unnecessary pending handling ends immediately. Late results 
 - Macro-average overall accuracy is the arithmetic mean of the classwise overall accuracies of all classes.
 - These accuracy definitions apply to distinct scopes. Different classwise, micro-average, and macro-average values
   in multiclass classification are expected; their differences are not an ambiguity or a reason to replace a formula.
-- Classification residual measures are computed across the class entries within each individual sample, independently
-  of other samples. This axis applies to probability z-scores and residual summaries; do not substitute normalization
-  or covariance estimates computed across samples.
 - Standard classification and regression metrics use their established conventional definitions unless Cocoonet
   explicitly specifies a project-specific variation. Detailed formulas and report conventions may be documented in
   `docs/architecture.md` during the corresponding planning and implementation steps; their absence from an early

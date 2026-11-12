@@ -1,0 +1,175 @@
+It is substantially clearer, but it still contains several implementation-relevant contradictions and ambiguities.
+
+1. Residual sign is inconsistent.
+
+The Mahalanobis definition uses:
+
+\[
+r_{i,c}=q_{i,c}-t_{i,c}
+\]
+
+but the reference code uses:
+
+```python
+res = y_true_proba - y_pred_proba
+```
+
+which means:
+
+\[
+r_{i,c}=t_{i,c}-q_{i,c}
+\]
+
+One convention must govern every residual and z-score column. I recommend the conventional residual definition \(r=t-q\), matching the reference code. The Mahalanobis description should then use:
+
+\[
+\mathbf r_i=\mathbf t_i-\mathbf q_i
+\]
+
+The sign does not change absolute, squared, entropy, or Mahalanobis magnitudes, but it reverses the reported residuals and z-scores.
+
+MY ADVICE: Recommendation approved.
+
+
+2. The z-score description should explicitly say “across samples.”
+
+“Entire probability residual vector of the class” remains linguistically ambiguous. A precise definition is:
+
+> `<class label c>_z_score` is the z-score of sample \(i\)’s residual for class \(c\), calculated across all \(N\) evaluated samples’ residuals for that class.
+
+Matching the code’s default `ddof=0` behavior:
+
+\[
+\mu_c=\frac1N\sum_{i=1}^N r_{i,c}
+\]
+
+\[
+\sigma_c=
+\sqrt{\frac1N\sum_{i=1}^N(r_{i,c}-\mu_c)^2}
+\]
+
+\[
+z_{i,c}=\frac{r_{i,c}-\mu_c}{\sigma_c}
+\]
+
+It must also state that \(\sigma_c=0\) produces `NaN`.
+
+MY ADVICE: Recommendation approved.
+
+
+3. `nanmean` and `nanstd` conflict with the numerical policy.
+
+The code silently excludes `NaN` values:
+
+```python
+np.nanmean(...)
+np.nanstd(...)
+```
+
+The project contract prohibits NaN-skipping aggregation from manufacturing a defined result. If residual inputs are required to be finite, use:
+
+```python
+np.mean(...)
+np.std(..., ddof=0)
+```
+
+If unavailable residuals are permitted, their propagation and failure behavior must be explicitly defined rather than silently skipped.
+
+MY ADVICE: Let user configure it, default to NaN propagation, but allow user configure to use nanmean and nanstd to skip NaN input.
+
+
+4. The entropy edge cases need definition.
+
+The formula is clear when at least one absolute residual is positive. It should additionally specify:
+
+\[
+0\log(0)=0
+\]
+
+If all residuals for a sample are zero, then:
+
+\[
+\sum_c |r_{i,c}|=0
+\]
+
+and \(p_{i,c}\) is undefined. Under the current numerical rules, normalized entropy should therefore be `NaN` unless the project explicitly defines another result.
+
+The logarithm base does not affect the normalized value as long as the same base is used in the numerator and \(\log_b(C)\).
+
+MY ADVICE: If all residuals are zero, all residuals are identical, means a maximum entropy of 1, so it should therefore be 1 instead of `NaN`, because the semantic meaning is clear, not undefined, the unavailability is due to computation intermediate step instead of the semantic meaning.
+
+
+5. The Mahalanobis population should be named explicitly.
+
+Define \(N\) as the complete evaluated sample population represented in this residual report. The covariance matrix is therefore calculated across those sample residual vectors, with classes as dimensions.
+
+The existing formula clearly specifies:
+
+- sample covariance with divisor \(N-1\);
+- centering by the mean residual vector;
+- the Moore–Penrose pseudoinverse for singular covariance.
+
+Still required are:
+
+- behavior when \(N<2\);  # MY ADVICE: Use Undefined for this case.
+- behavior when residual vectors contain unavailable or undefined values;  # MY ADVICE: If the NaN or undefined is the sample residual itself, its Mahalanobis distance is NaN. If the NaN or undefined is not the sample residual itself but the other residual in the vector, let user configure whether to skip it. If the valid residuals left is not enough for computing the distance, even when user configure to skip NaN and the residual of the corresponding sample itself is valid, the result should still be NaN.
+- whether a failed covariance calculation makes all Mahalanobis values unavailable.  # MY ADVICE: Yes.
+
+6. The reference code does not match the declared file schema.
+
+The proposed file columns use:
+
+```text
+sample_id
+sample_label
+<class label>_residual
+<class label>_z_score
+```
+
+The code instead creates:
+
+```text
+Sample_ID
+Label
+Probability_residual_<class label>
+Z-score_residual_<class label>
+```
+
+It also omits `y_true` and the probability columns. Either label the code as computation-only pseudocode or revise it to use the exact persistence schema.
+
+MY ADVICE: Reference code is for reference, not ground truth to follow, design the computation according to my explicit requirements, but you can follow the reference code logic to realize the requirements e.g. using established dependecies to obtain the metrics safely. Follow my explicit requirements for the column names instead of the reference code.
+
+7. Column capitalization must be intentional.
+
+These names begin with uppercase letters while the other columns use lowercase:
+
+```text
+Shannon_entropy_of_absolute_residual
+Mahalanobis_distance_of_residual
+```
+
+Because column names are schema-controlled and case-sensitive, decide whether these exact names are intentional. Consistent snake case would be:
+
+```text
+shannon_entropy_of_absolute_residual
+mahalanobis_distance_of_residual
+```
+
+MY ADVICE: For final column names, the capitalization is intentional as they are human names, which is uppercase. For internal use in code, you should follow the common rule and use lowercase and `_` for the variable names or function names, and use uppercase for class names.
+
+
+The remaining summary formulas are clear:
+
+\[
+\operatorname{sum\_of\_absolute\_residual}_i
+=
+\sum_{c=1}^{C}|r_{i,c}|
+\]
+
+\[
+\operatorname{root\_sum\_of\_squared\_residual}_i
+=
+\sqrt{\sum_{c=1}^{C}r_{i,c}^2}
+\]
+
+Therefore, the design is close, but residual sign, z-score edge behavior, entropy’s all-zero case, Mahalanobis failure behavior, and schema/code naming still need resolution before implementation.

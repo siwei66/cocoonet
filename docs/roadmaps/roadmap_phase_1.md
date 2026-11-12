@@ -895,8 +895,8 @@ that merely repeat declarations.
 
 Phase 1 implements **no scientific formula**, split randomness, CPU-capacity calculation, model invocation, or metric
 aggregation. Architecture Sections 4.5–4.7 and 9.3 remain authoritative for later scientific phases. In particular,
-the approved influence denominator, classwise/micro/macro accuracy distinctions, within-sample classification
-residual axis, and formula-defined NaN behavior are not reopened here.
+the approved influence denominator, classwise/micro/macro accuracy distinctions, and formula-defined NaN behavior are
+not reopened here.
 
 Numerical checks cover integer count bounds, standardized scalar admissibility, finite dataset
 targets and timestamps, aligned dimensions, probability bounds, and value/failure consistency.
