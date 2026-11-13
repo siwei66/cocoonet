@@ -688,7 +688,7 @@ This ordering places difficult boundaries before their consumers:
   output and serialization contracts as their adapters are introduced. Phase 21 broadens integration coverage rather
   than discovering incompatible schemas or unsupported Python behavior for the first time.
 
-No deferred decision blocks Phases 1–2. Resolve the remaining Architecture Section 10 decisions only in their owning
-phases: mixed-row/tensor-shape representation in Phase 4; technical isolation in Phase 5; conventional report details
-in Phase 8; recovery and worker-service APIs in Phases 13–15; online protocol, integrity, retry, and compression details
-in Phases 16–17; and cleanup verification and public-service integration in Phases 19–20.
+Resolve the remaining Architecture Section 10 decisions only in their owning phases: mixed-row/tensor-shape
+representation in Phase 4; technical isolation in Phase 5; conventional report details in Phase 8; recovery and
+worker-service APIs in Phases 13–15; online protocol, integrity, retry, and compression details in Phases 16–17; and
+cleanup verification and public-service integration in Phases 19–20.

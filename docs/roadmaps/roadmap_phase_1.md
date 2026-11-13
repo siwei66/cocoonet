@@ -50,7 +50,7 @@ governing documents.
 - Filesystem inspection or mutation, directory ownership enforcement, serialization/deserialization, durable writes,
   artifact filenames, log writers, recovery journals, and publication mechanisms: Phase 2 and later consumers.
 - The public computation class, initialization, configuration mutation, copying, bulk operations, and configuration
-  transition algorithms: Phase 3. No `start()`, `add_dataset()`, or worker-management implementation belongs here.
+  transition algorithms: Phase 3. No `run()`, `add_dataset()`, or worker-management implementation belongs here.
 - Dataframe adapters, feature/tensor storage, dataset identity generation/content verification, partition generation,
   split reuse/restoration, and dataset registration: Phase 4.
 - Executable model payloads, API probing, reconstruction, fitting, prediction production, subprocesses, device handling,
@@ -612,8 +612,8 @@ and checked against that result when loaded. It is not another authoritative sta
   worker management, result transfer, result persistence, configuration, startup, or worker-process incidents.
   Those failures remain at their owning boundaries.
 - Interruption/cancellation is not a fabricated reconstruction or primary-validation failure or complete result. A
-  stopped attempt is represented by Section 7's state; this phase does not define a new cancelled-result file.
-- One envelope describes one attempt; result files, dill bytes, completion publication, report loading, and user-facing
+  stopped attempt is represented by Section 7's state; this phase does not define a new cancelled result bundle.
+- One envelope describes one attempt; result-bundle files, completion publication, report loading, and user-facing
   rendering are later component responsibilities. At most one accepted result per unit is a separate root invariant.
 
 ### 6.3 Planned prediction/result validators and tests
@@ -692,7 +692,7 @@ it as an operation of these kinds.
   alternate acceptance bit; an exhausted delivery may leave an unaccepted unit. Worker inactivity is a separate fact.
 - Worker control owns attempt execution/stop observations. Running requires a start timestamp; allocated has none.
   Result-ready requires a start timestamp and a completed result artifact reference. Stopped attempts may have
-  started or may have been stopped before execution; stopping does not imply a result file or stopped worker process.
+  started or may have been stopped before execution; stopping does not imply a result bundle or stopped worker process.
   Result artifacts are allowed only for result-ready or stopped attempts with an already completed result and
   a start timestamp.
 - Stop `none` has no reason; requested/observed requires a reason. `stopped` requires observed stop. Result-ready may
@@ -779,7 +779,7 @@ Root coordination owns one `ReceptionRecord` per `(parent_id, model_id)` pair, c
 | `validate_attempt_progress(value: AttemptProgress, *, parent: ParentEvaluation) -> None` | Check attempt context, status/start/artifact/stop consistency. | Allocated/running/result-ready; stop while running; stopped before start; terminal handling stop; invalid timestamp; no result created. |
 | `validate_worker_observation(value: WorkerObservation) -> None` | Check usability prerequisites, known/unknown positive capacity, unique valid reserved-attempt IDs, and unique parent readiness. | Available worker with zero, some, or all slots occupied; unavailable worker retaining multiple attempts; unknown capacity; invalid/bool capacity; duplicate attempt IDs; reservations exceeding a prospectively lowered limit; no scheduling or mutation. |
 | `validate_bounded_operation(value: BoundedOperation) -> None` | Check count bounds, status, last-error context, and operation kind. | Zero/past-limit counts; bool rejected; success after retries; failed/exhausted; cancelled; distinct connection round identity; no budget reset or reevaluation. |
-| `validate_reception_record(value: ReceptionRecord, *, attempts: tuple[AttemptInputs, ...]) -> None` | Validate parent/model identifiers, selected-attempt identity and parent/model agreement, and receipt/persistence/acceptance prerequisites. | Invalid parent/model IDs even before selection; unknown selected attempt; mismatched parent or model; partial file; complete persistence before acceptance; accepted failure outcome uses same facts; absent result artifact; no file I/O. |
+| `validate_reception_record(value: ReceptionRecord, *, attempts: tuple[AttemptInputs, ...]) -> None` | Validate parent/model identifiers, selected-attempt identity and parent/model agreement, and receipt/persistence/acceptance prerequisites. | Invalid parent/model IDs even before selection; unknown selected attempt; mismatched parent or model; incomplete bundle reception; complete persistence before acceptance; accepted failure outcome uses same facts; absent result artifact; no persistence I/O. |
 | `validate_reception_set(values: tuple[ReceptionRecord, ...], *, attempts: tuple[AttemptInputs, ...]) -> None` | Check unique parent/model pairs using a local tuple set and unique attempt IDs, then validate each record. | Reject duplicate parent/model pairs and duplicate attempt IDs; allow the same model ID under different parents and different models under one parent. |
 
 Runtime enforcement against concurrent writes, historical selection replacement, or acceptance replacement cannot be
