@@ -20,7 +20,9 @@ from cocoonet._storage.paths import (
     _validate_managed_root_against,
     discover_protected_locations,
     resolve_physical_path,
+    validate_dataset_source_ownership,
     validate_managed_root,
+    validate_root_ownership,
 )
 
 
@@ -335,3 +337,110 @@ def test_validate_managed_root_uses_discovered_protections() -> None:
         match=r"protected location",
     ):
         validate_managed_root(package_directory)
+
+
+def test_dataset_source_ownership_enforces_asymmetric_containment(
+    tmp_path: Path,
+) -> None:
+    """Reject sources inside the root while permitting the inverse."""
+    root = tmp_path / "managed_root"
+    equal_source = root
+    contained_source = root / "dataset.csv"
+    containing_source = root.parent
+    disjoint_source = root.parent / "dataset.csv"
+
+    for source in (equal_source, contained_source):
+        with pytest.raises(
+            ValueError,
+            match=(r"Dataset source .* must not equal or be contained within " r"managed root"),
+        ):
+            validate_dataset_source_ownership(root, source)
+
+    canonical_root, canonical_containing = validate_dataset_source_ownership(root, containing_source)
+    assert canonical_root == resolve_physical_path(root)
+    assert canonical_containing == resolve_physical_path(containing_source)
+
+    canonical_root, canonical_disjoint = validate_dataset_source_ownership(root, disjoint_source)
+    assert canonical_root == resolve_physical_path(root)
+    assert canonical_disjoint == resolve_physical_path(disjoint_source)
+
+    assert not root.exists()
+    assert not contained_source.exists()
+    assert not disjoint_source.exists()
+
+
+def test_validate_root_ownership_preserves_source_order(
+    tmp_path: Path,
+) -> None:
+    """Materialize and return the complete canonical source collection."""
+    root = tmp_path / "managed_root"
+    first = tmp_path / "first.csv"
+    second = tmp_path / "second.csv"
+    sources = (source for source in (first, second))
+
+    canonical_root, canonical_sources = validate_root_ownership(
+        root,
+        sources,
+    )
+
+    assert canonical_root == resolve_physical_path(root)
+    assert canonical_sources == (
+        resolve_physical_path(first),
+        resolve_physical_path(second),
+    )
+    assert not root.exists()
+    assert not first.exists()
+    assert not second.exists()
+
+
+def test_validate_root_ownership_rejects_duplicate_canonical_sources(
+    tmp_path: Path,
+) -> None:
+    """Reject duplicate source associations without filesystem mutation."""
+    root = tmp_path / "managed_root"
+    source = tmp_path / "dataset.csv"
+
+    with pytest.raises(
+        ValueError,
+        match=r"sources\[1\] duplicates canonical source sources\[0\]",
+    ):
+        validate_root_ownership(root, (source, source))
+
+    assert not root.exists()
+    assert not source.exists()
+
+
+def test_validate_root_ownership_rejects_conflict_after_materialization(
+    tmp_path: Path,
+) -> None:
+    """Reject a conflicting collection without creating any supplied path."""
+    root = tmp_path / "managed_root"
+    outside = tmp_path / "outside.csv"
+    conflicting = root / "inside.csv"
+
+    with pytest.raises(
+        ValueError,
+        match=r"Dataset source .* managed root",
+    ):
+        validate_root_ownership(
+            root,
+            (outside, conflicting),
+        )
+
+    assert not root.exists()
+    assert not outside.exists()
+    assert not conflicting.exists()
+
+
+def test_validate_root_ownership_rejects_path_as_source_collection(
+    tmp_path: Path,
+) -> None:
+    """Reject one path passed where a source collection is required."""
+    with pytest.raises(
+        TypeError,
+        match=r"^sources must be an iterable of path inputs; got ",
+    ):
+        validate_root_ownership(
+            tmp_path / "managed_root",
+            tmp_path / "dataset.csv",  # type: ignore[arg-type]
+        )

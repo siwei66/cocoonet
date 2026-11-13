@@ -4,6 +4,7 @@ import os
 import site
 import sys
 import sysconfig
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -289,6 +290,146 @@ def validate_managed_root(root: PathInput, /) -> Path:
         discover_protected_locations(),
     )
     return canonical_root
+
+
+def _validate_canonical_dataset_source_ownership(
+    root: Path,
+    source: Path,
+    /,
+) -> None:
+    """Validate one canonical source against one canonical managed root.
+
+    Parameters
+    ----------
+    root
+        Canonical managed-root path.
+    source
+        Canonical user-owned dataset-source path.
+
+    Raises
+    ------
+    ValueError
+        If the source equals or is contained within the managed root.
+
+    Notes
+    -----
+    A managed root contained within the source is permitted. This pure helper
+    performs no filesystem access or protected-location validation.
+
+    Node usage scope: Root - Protects user-owned dataset sources.
+    """
+    if _paths_equal(source, root) or _is_path_within(source, root):
+        raise ValueError(
+            f"Dataset source {str(source)!r} must not equal or be contained " f"within managed root {str(root)!r}."
+        )
+
+
+def validate_dataset_source_ownership(
+    root: PathInput,
+    source: PathInput,
+    /,
+) -> tuple[Path, Path]:
+    """Validate one managed-root and dataset-source ownership boundary.
+
+    Parameters
+    ----------
+    root
+        Absolute or relative managed-root path.
+    source
+        Absolute or relative user-owned dataset-source path.
+
+    Returns
+    -------
+    tuple[pathlib.Path, pathlib.Path]
+        Canonical root and source paths.
+
+    Raises
+    ------
+    TypeError
+        If either input is not a string-producing path-like value.
+    ValueError
+        If the source equals or is contained within the root.
+    StorageError
+        If either path cannot be physically resolved.
+
+    Notes
+    -----
+    This function performs no filesystem mutation. Protected-root validation
+    is a separate boundary.
+
+    Node usage scope: Root - Protects user-owned dataset sources.
+    """
+    canonical_root = resolve_physical_path(root)
+    canonical_source = resolve_physical_path(source)
+    _validate_canonical_dataset_source_ownership(
+        canonical_root,
+        canonical_source,
+    )
+    return canonical_root, canonical_source
+
+
+def validate_root_ownership(
+    root: PathInput,
+    sources: Iterable[PathInput],
+    /,
+) -> tuple[Path, tuple[Path, ...]]:
+    """Validate a root against a complete dataset-source collection.
+
+    Parameters
+    ----------
+    root
+        Absolute or relative managed-root path.
+    sources
+        Dataset-source paths to materialize and validate as one collection.
+
+    Returns
+    -------
+    tuple[pathlib.Path, tuple[pathlib.Path, ...]]
+        Canonical root and ordered canonical source paths.
+
+    Raises
+    ------
+    TypeError
+        If the root, collection, or a source has an incorrect runtime type.
+    ValueError
+        If a source conflicts with the root or duplicates another canonical
+        source.
+    StorageError
+        If a path cannot be physically resolved.
+
+    Notes
+    -----
+    The complete collection is materialized and canonicalized before ownership
+    checks. This function performs no filesystem mutation or protected-root
+    validation.
+
+    Node usage scope: Root - Protects user-owned dataset sources.
+    """
+    canonical_root = resolve_physical_path(root)
+
+    if isinstance(sources, (str, bytes, os.PathLike)) or not isinstance(
+        sources,
+        Iterable,
+    ):
+        observed_type = f"{type(sources).__module__}.{type(sources).__qualname__}"
+        raise TypeError("sources must be an iterable of path inputs; " f"got {observed_type}.")
+
+    materialized_sources = tuple(sources)
+    canonical_sources = tuple(resolve_physical_path(source) for source in materialized_sources)
+
+    for index, source in enumerate(canonical_sources):
+        for previous_index, previous in enumerate(canonical_sources[:index]):
+            if _paths_equal(source, previous):
+                raise ValueError(
+                    f"sources[{index}] duplicates canonical source " f"sources[{previous_index}] at {str(source)!r}."
+                )
+
+        _validate_canonical_dataset_source_ownership(
+            canonical_root,
+            source,
+        )
+
+    return canonical_root, canonical_sources
 
 
 @dataclass(frozen=True, slots=True)
