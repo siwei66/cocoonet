@@ -1,6 +1,6 @@
 # Phase 2: Filesystem ownership and durable persistence foundations
 
-Status: revised proposal; Phase 2 implementation is not authorized.
+Status: revised proposal;
 
 ## 1. Authority and purpose
 
