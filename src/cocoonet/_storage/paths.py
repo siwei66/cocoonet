@@ -8,6 +8,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from cocoonet._contracts.identity import DatasetId, ModelId, ParentId
 from cocoonet._storage.publication import StorageError
 from cocoonet._type_validation import validate_args
 
@@ -637,4 +638,380 @@ def build_root_storage_layout(root: PathInput, /) -> RootStorageLayout:
         logs=logs,
         root_running_log=logs / "root_running.log",
         root_error_log=logs / "root_error.log",
+    )
+
+
+def build_worker_storage_layout(root: PathInput, /) -> WorkerStorageLayout:
+    """Build the top-level semantic storage paths for one worker.
+
+    Parameters
+    ----------
+    root
+        Absolute or relative worker storage path.
+
+    Returns
+    -------
+    WorkerStorageLayout
+        Immutable collection of canonical worker storage paths.
+
+    Raises
+    ------
+    TypeError
+        If ``root`` is not a string-producing path-like value.
+    ValueError
+        If the root path contains an embedded NUL character.
+    StorageError
+        If the root path cannot be physically resolved.
+
+    Notes
+    -----
+    This function creates no filesystem entries and validates no artifact
+    contents.
+
+    Node usage scope: Worker - Defines the top-level worker persistence layout.
+    """
+    canonical_root = resolve_physical_path(root)
+
+    return WorkerStorageLayout(
+        root=canonical_root,
+        datasets=canonical_root / "datasets",
+        models=canonical_root / "models",
+        results=canonical_root / "results",
+    )
+
+
+@validate_args
+def build_worker_parent_storage_layout(
+    layout: WorkerStorageLayout,
+    parent_id: ParentId,
+    /,
+) -> WorkerParentStorageLayout:
+    """Build one parent's semantic result paths within a worker layout.
+
+    Parameters
+    ----------
+    layout
+        Valid worker storage layout containing the parent result.
+    parent_id
+        Parent identifier represented as 16 lowercase hexadecimal characters.
+
+    Returns
+    -------
+    WorkerParentStorageLayout
+        Immutable collection of parent-specific worker result paths.
+
+    Raises
+    ------
+    TypeError
+        If an argument has an incorrect runtime type.
+    ValueError
+        If the parent identifier is invalid or the results directory escapes
+        the worker root.
+    StorageError
+        If a supplied layout path cannot be physically resolved.
+
+    Notes
+    -----
+    This function creates no filesystem entries and validates no artifact
+    contents.
+
+    Node usage scope: Worker - Defines one parent's worker result layout.
+    """
+    _validate_parent_id(parent_id)
+
+    canonical_root = resolve_physical_path(layout.root)
+    canonical_results = resolve_physical_path(layout.results)
+    if not _is_path_within(canonical_results, canonical_root):
+        raise ValueError(
+            f"Worker results path {str(canonical_results)!r} must be contained "
+            f"within worker root {str(canonical_root)!r}."
+        )
+
+    parent_root = canonical_results / f"parent_{parent_id}"
+
+    return WorkerParentStorageLayout(
+        parent_root=parent_root,
+        metadata_csv=parent_root / "cocoonet_metadata.csv",
+        worker_data_reference_xlsx=(parent_root / "worker_data_reference.xlsx"),
+        partition_schedules_xlsx=(parent_root / "partition_schedules.xlsx"),
+        execution_configuration_csv=(parent_root / "execution_configuration.csv"),
+        execution_state_csv=parent_root / "execution_state.csv",
+        attempt_results=parent_root / "attempt_results",
+    )
+
+
+@validate_args
+def root_trusted_model_dill_path(
+    layout: RootStorageLayout,
+    model_id: ModelId,
+    /,
+) -> Path:
+    """Build the trusted root-side model path for one model.
+
+    Parameters
+    ----------
+    layout
+        Root storage layout containing the trusted model.
+    model_id
+        Canonical positive decimal model identifier.
+
+    Returns
+    -------
+    pathlib.Path
+        Exact ``models_for_transfer/model_<model_id>.dill`` path.
+
+    Raises
+    ------
+    TypeError
+        If an argument has an incorrect runtime type.
+    ValueError
+        If the model identifier is invalid or the model directory escapes the
+        root.
+    StorageError
+        If a supplied layout path cannot be physically resolved.
+
+    Notes
+    -----
+    This helper locates trusted model storage only. It performs no
+    serialization and does not authorize dill use for public workers.
+
+    Node usage scope: Root - Locates trusted root-side model payloads.
+    """
+    _validate_positive_decimal_identifier(
+        model_id,
+        field="model_id",
+    )
+
+    canonical_root = resolve_physical_path(layout.root)
+    canonical_models = resolve_physical_path(layout.models_for_transfer)
+    if not _is_path_within(canonical_models, canonical_root):
+        raise ValueError(
+            f"Root model directory {str(canonical_models)!r} must be " f"contained within root {str(canonical_root)!r}."
+        )
+
+    return canonical_models / f"model_{model_id}.dill"
+
+
+@validate_args
+def worker_dataset_directory(
+    layout: WorkerStorageLayout,
+    dataset_id: DatasetId,
+    /,
+) -> Path:
+    """Build the worker directory for one synchronized dataset.
+
+    Parameters
+    ----------
+    layout
+        Worker storage layout containing the dataset.
+    dataset_id
+        Dataset identifier represented as 12 lowercase hexadecimal characters.
+
+    Returns
+    -------
+    pathlib.Path
+        Exact ``datasets/dataset_<dataset_id>`` directory.
+
+    Raises
+    ------
+    TypeError
+        If an argument has an incorrect runtime type.
+    ValueError
+        If the dataset identifier is invalid or the datasets directory escapes
+        the worker root.
+    StorageError
+        If a supplied layout path cannot be physically resolved.
+
+    Notes
+    -----
+    This helper creates no directory and performs no dataset synchronization.
+
+    Node usage scope: Worker - Locates synchronized dataset storage.
+    """
+    _validate_dataset_id(dataset_id)
+
+    canonical_root = resolve_physical_path(layout.root)
+    canonical_datasets = resolve_physical_path(layout.datasets)
+    if not _is_path_within(canonical_datasets, canonical_root):
+        raise ValueError(
+            f"Worker datasets directory {str(canonical_datasets)!r} must be "
+            f"contained within worker root {str(canonical_root)!r}."
+        )
+
+    return canonical_datasets / f"dataset_{dataset_id}"
+
+
+@validate_args
+def worker_trusted_model_dill_path(
+    layout: WorkerStorageLayout,
+    parent_id: ParentId,
+    model_id: ModelId,
+    /,
+) -> Path:
+    """Build the trusted worker-side model path for one parent and model.
+
+    Parameters
+    ----------
+    layout
+        Worker storage layout containing the trusted model.
+    parent_id
+        Parent identifier represented as 16 lowercase hexadecimal characters.
+    model_id
+        Canonical positive decimal model identifier.
+
+    Returns
+    -------
+    pathlib.Path
+        Exact ``models/parent_<parent_id>/model_<model_id>.dill`` path.
+
+    Raises
+    ------
+    TypeError
+        If an argument has an incorrect runtime type.
+    ValueError
+        If an identifier is invalid or the models directory escapes the worker
+        root.
+    StorageError
+        If a supplied layout path cannot be physically resolved.
+
+    Notes
+    -----
+    This helper locates trusted worker model storage only. It performs no
+    serialization and does not authorize dill use for public workers.
+
+    Node usage scope: Worker - Locates trusted worker-side model payloads.
+    """
+    _validate_parent_id(parent_id)
+    _validate_positive_decimal_identifier(
+        model_id,
+        field="model_id",
+    )
+
+    canonical_root = resolve_physical_path(layout.root)
+    canonical_models = resolve_physical_path(layout.models)
+    if not _is_path_within(canonical_models, canonical_root):
+        raise ValueError(
+            f"Worker models directory {str(canonical_models)!r} must be "
+            f"contained within worker root {str(canonical_root)!r}."
+        )
+
+    return canonical_models / f"parent_{parent_id}" / f"model_{model_id}.dill"
+
+
+@validate_args
+def root_bundle_publication_paths(
+    layout: RootStorageLayout,
+    model_id: ModelId,
+    /,
+) -> BundlePublicationPaths:
+    """Build root staging and final paths for one model result bundle.
+
+    Parameters
+    ----------
+    layout
+        Root storage layout containing the accepted bundle.
+    model_id
+        Canonical positive decimal model identifier.
+
+    Returns
+    -------
+    BundlePublicationPaths
+        Sibling ``model_<model_id>.staging`` and ``model_<model_id>`` paths.
+
+    Raises
+    ------
+    TypeError
+        If an argument has an incorrect runtime type.
+    ValueError
+        If the model identifier is invalid or the attempt-results directory
+        escapes the root.
+    StorageError
+        If a supplied layout path cannot be physically resolved.
+
+    Notes
+    -----
+    This helper performs no publication, validation, acceptance, cleanup, or
+    filesystem mutation.
+
+    Node usage scope: Root - Locates selected bundle publication paths.
+    """
+    _validate_positive_decimal_identifier(
+        model_id,
+        field="model_id",
+    )
+
+    canonical_root = resolve_physical_path(layout.root)
+    canonical_attempt_results = resolve_physical_path(layout.attempt_results)
+    if not _is_path_within(canonical_attempt_results, canonical_root):
+        raise ValueError(
+            f"Root attempt-results directory "
+            f"{str(canonical_attempt_results)!r} must be contained within root "
+            f"{str(canonical_root)!r}."
+        )
+
+    model_name = f"model_{model_id}"
+    return BundlePublicationPaths(
+        staging=canonical_attempt_results / f"{model_name}.staging",
+        final=canonical_attempt_results / model_name,
+    )
+
+
+@validate_args
+def worker_bundle_publication_paths(
+    parent_layout: WorkerParentStorageLayout,
+    model_id: ModelId,
+    /,
+) -> BundlePublicationPaths:
+    """Build worker staging and final paths for one model result bundle.
+
+    Parameters
+    ----------
+    parent_layout
+        Parent-specific worker layout containing the bundle.
+    model_id
+        Canonical positive decimal model identifier.
+
+    Returns
+    -------
+    BundlePublicationPaths
+        Sibling ``model_<model_id>.staging`` and ``model_<model_id>`` paths.
+
+    Raises
+    ------
+    TypeError
+        If an argument has an incorrect runtime type.
+    ValueError
+        If the model identifier is invalid or the attempt-results directory
+        escapes the parent result root.
+    StorageError
+        If a supplied layout path cannot be physically resolved.
+
+    Notes
+    -----
+    This helper performs no publication, validation, delivery, cleanup, or
+    filesystem mutation.
+
+    Node usage scope: Worker - Locates one bundle's publication paths.
+    """
+    _validate_positive_decimal_identifier(
+        model_id,
+        field="model_id",
+    )
+
+    canonical_parent_root = resolve_physical_path(parent_layout.parent_root)
+    canonical_attempt_results = resolve_physical_path(parent_layout.attempt_results)
+    if not _is_path_within(
+        canonical_attempt_results,
+        canonical_parent_root,
+    ):
+        raise ValueError(
+            f"Worker attempt-results directory "
+            f"{str(canonical_attempt_results)!r} must be contained within "
+            f"parent root {str(canonical_parent_root)!r}."
+        )
+
+    model_name = f"model_{model_id}"
+    return BundlePublicationPaths(
+        staging=canonical_attempt_results / f"{model_name}.staging",
+        final=canonical_attempt_results / model_name,
     )

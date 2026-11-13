@@ -28,7 +28,7 @@ After finishing：
 - Verify the compliance of current implementation to the development requirement of `AGENTS.md`, delivery a compliance report.
 - Verify the over-engineering risk specifically i.e. verify the risk of too many layer of nesting, over-complicated logic, over-defensive for a light-weight python module and functional or coding redundancy in the context of `roadmap.md` and the phase roadmap. Considering whether a demand is really needed in the real implementation of current step and current phase, instead of view all roadmap demands as ground truth to follow. Deliver a over-engineering risk report.
 - Then, propose a standard one-line git commit message for the changes with scope. If the changes have multiple associated scopes, propose one git commit message for each associated scope.
-- At last, show me the progress of implementation of the current phase, list the implemented units and the units to be implemented in the current phase.
+- At last, show me the progress of implementation of the current phase, and list the implemented units in the current phase in one table and list the units to be implemented in the current phase in another table.
 
 ---
 

@@ -4,12 +4,13 @@ import os
 import site
 import sys
 import sysconfig
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 
 import pytest
 
 import cocoonet._storage.paths as storage_paths
+from cocoonet._contracts.identity import DatasetId, ModelId, ParentId
 from cocoonet._storage.paths import (
     BundlePublicationPaths,
     RootStorageLayout,
@@ -22,11 +23,18 @@ from cocoonet._storage.paths import (
     _validate_parent_id,
     _validate_positive_decimal_identifier,
     build_root_storage_layout,
+    build_worker_parent_storage_layout,
+    build_worker_storage_layout,
     discover_protected_locations,
     resolve_physical_path,
+    root_bundle_publication_paths,
+    root_trusted_model_dill_path,
     validate_dataset_source_ownership,
     validate_managed_root,
     validate_root_ownership,
+    worker_bundle_publication_paths,
+    worker_dataset_directory,
+    worker_trusted_model_dill_path,
 )
 
 
@@ -619,3 +627,339 @@ def test_build_root_storage_layout_returns_exact_paths_without_io(
         root_error_log=canonical_root / "logs" / "root_error.log",
     )
     assert not candidate.exists()
+
+
+def test_build_worker_storage_layout_returns_exact_paths_without_io(
+    tmp_path: Path,
+) -> None:
+    """Build every top-level worker path without creating entries."""
+    candidate = tmp_path / "worker"
+    canonical_root = resolve_physical_path(candidate)
+
+    layout = build_worker_storage_layout(candidate)
+
+    assert layout == WorkerStorageLayout(
+        root=canonical_root,
+        datasets=canonical_root / "datasets",
+        models=canonical_root / "models",
+        results=canonical_root / "results",
+    )
+    assert not candidate.exists()
+
+
+def test_build_worker_parent_storage_layout_returns_exact_paths_without_io(
+    tmp_path: Path,
+) -> None:
+    """Build every parent-specific worker result path without creating entries."""
+    worker = build_worker_storage_layout(tmp_path / "worker")
+    parent_id = ParentId("0123456789abcdef")
+    parent_root = worker.results / f"parent_{parent_id}"
+
+    layout = build_worker_parent_storage_layout(
+        worker,
+        parent_id,
+    )
+
+    assert layout == WorkerParentStorageLayout(
+        parent_root=parent_root,
+        metadata_csv=parent_root / "cocoonet_metadata.csv",
+        worker_data_reference_xlsx=(parent_root / "worker_data_reference.xlsx"),
+        partition_schedules_xlsx=(parent_root / "partition_schedules.xlsx"),
+        execution_configuration_csv=(parent_root / "execution_configuration.csv"),
+        execution_state_csv=parent_root / "execution_state.csv",
+        attempt_results=parent_root / "attempt_results",
+    )
+    assert not parent_root.exists()
+
+
+def test_build_worker_parent_storage_layout_rejects_invalid_parent_id(
+    tmp_path: Path,
+) -> None:
+    """Reject unsafe parent text before constructing a managed path."""
+    worker = build_worker_storage_layout(tmp_path / "worker")
+
+    with pytest.raises(
+        ValueError,
+        match=r"^parent_id must be exactly 16 lowercase hexadecimal",
+    ):
+        build_worker_parent_storage_layout(
+            worker,
+            ParentId("../invalid"),
+        )
+
+
+def test_build_worker_parent_storage_layout_rejects_results_escape(
+    tmp_path: Path,
+) -> None:
+    """Reject a results directory outside the worker root."""
+    root = resolve_physical_path(tmp_path / "worker")
+    worker = WorkerStorageLayout(
+        root=root,
+        datasets=root / "datasets",
+        models=root / "models",
+        results=root.parent / "outside_results",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"Worker results path .* must be contained within worker root",
+    ):
+        build_worker_parent_storage_layout(
+            worker,
+            ParentId("0123456789abcdef"),
+        )
+
+    assert not root.exists()
+    assert not worker.results.exists()
+
+
+def test_root_trusted_model_dill_path_returns_exact_path_without_io(
+    tmp_path: Path,
+) -> None:
+    """Build the exact trusted root model path without creating it."""
+    layout = build_root_storage_layout(tmp_path / "root")
+
+    path = root_trusted_model_dill_path(
+        layout,
+        ModelId("1"),
+    )
+
+    assert path == layout.models_for_transfer / "model_1.dill"
+    assert not path.exists()
+
+
+def test_worker_dataset_directory_returns_exact_path_without_io(
+    tmp_path: Path,
+) -> None:
+    """Build the exact worker dataset directory without creating it."""
+    layout = build_worker_storage_layout(tmp_path / "worker")
+
+    path = worker_dataset_directory(
+        layout,
+        DatasetId("0123456789ab"),
+    )
+
+    assert path == layout.datasets / "dataset_0123456789ab"
+    assert not path.exists()
+
+
+def test_worker_trusted_model_dill_path_returns_exact_path_without_io(
+    tmp_path: Path,
+) -> None:
+    """Build the exact trusted worker model path without creating it."""
+    layout = build_worker_storage_layout(tmp_path / "worker")
+
+    path = worker_trusted_model_dill_path(
+        layout,
+        ParentId("0123456789abcdef"),
+        ModelId("2"),
+    )
+
+    assert path == (layout.models / "parent_0123456789abcdef" / "model_2.dill")
+    assert not path.exists()
+
+
+def test_unit_paths_reject_invalid_identifiers(
+    tmp_path: Path,
+) -> None:
+    """Reject invalid identifiers before incorporating them into paths."""
+    root = build_root_storage_layout(tmp_path / "root")
+    worker = build_worker_storage_layout(tmp_path / "worker")
+
+    with pytest.raises(
+        ValueError,
+        match=r"^model_id must be canonical positive decimal text",
+    ):
+        root_trusted_model_dill_path(
+            root,
+            ModelId("01"),
+        )
+
+    with pytest.raises(
+        ValueError,
+        match=r"^dataset_id must be exactly 12 lowercase hexadecimal",
+    ):
+        worker_dataset_directory(
+            worker,
+            DatasetId("../invalid"),
+        )
+
+    with pytest.raises(
+        ValueError,
+        match=r"^parent_id must be exactly 16 lowercase hexadecimal",
+    ):
+        worker_trusted_model_dill_path(
+            worker,
+            ParentId("../invalid"),
+            ModelId("1"),
+        )
+
+
+def test_unit_paths_reject_layout_escape(
+    tmp_path: Path,
+) -> None:
+    """Reject model and dataset base directories outside their roots."""
+    root_path = resolve_physical_path(tmp_path / "root")
+    root = RootStorageLayout(
+        root=root_path,
+        metadata_csv=root_path / "cocoonet_metadata.csv",
+        root_data_reference_xlsx=(root_path / "root_data_reference.xlsx"),
+        partition_schedules_xlsx=(root_path / "partition_schedules.xlsx"),
+        execution_configuration_csv=(root_path / "execution_configuration.csv"),
+        execution_state_csv=root_path / "execution_state.csv",
+        models_for_transfer=root_path.parent / "outside_models",
+        attempt_results=root_path / "attempt_results",
+        logs=root_path / "logs",
+        root_running_log=root_path / "logs" / "root_running.log",
+        root_error_log=root_path / "logs" / "root_error.log",
+    )
+
+    worker_path = resolve_physical_path(tmp_path / "worker")
+    worker = WorkerStorageLayout(
+        root=worker_path,
+        datasets=worker_path.parent / "outside_datasets",
+        models=worker_path.parent / "outside_models",
+        results=worker_path / "results",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"Root model directory .* must be contained within root",
+    ):
+        root_trusted_model_dill_path(root, ModelId("1"))
+
+    with pytest.raises(
+        ValueError,
+        match=r"Worker datasets directory .* must be contained within worker root",
+    ):
+        worker_dataset_directory(
+            worker,
+            DatasetId("0123456789ab"),
+        )
+
+    with pytest.raises(
+        ValueError,
+        match=r"Worker models directory .* must be contained within worker root",
+    ):
+        worker_trusted_model_dill_path(
+            worker,
+            ParentId("0123456789abcdef"),
+            ModelId("1"),
+        )
+
+    assert not root_path.exists()
+    assert not worker_path.exists()
+
+
+def test_root_bundle_publication_paths_return_exact_siblings_without_io(
+    tmp_path: Path,
+) -> None:
+    """Build exact root staging and final bundle siblings without creating them."""
+    layout = build_root_storage_layout(tmp_path / "root")
+
+    paths = root_bundle_publication_paths(
+        layout,
+        ModelId("1"),
+    )
+
+    assert paths == BundlePublicationPaths(
+        staging=layout.attempt_results / "model_1.staging",
+        final=layout.attempt_results / "model_1",
+    )
+    assert not paths.staging.exists()
+    assert not paths.final.exists()
+
+
+def test_worker_bundle_publication_paths_return_exact_siblings_without_io(
+    tmp_path: Path,
+) -> None:
+    """Build exact worker staging and final bundle siblings without creating them."""
+    worker = build_worker_storage_layout(tmp_path / "worker")
+    parent = build_worker_parent_storage_layout(
+        worker,
+        ParentId("0123456789abcdef"),
+    )
+
+    paths = worker_bundle_publication_paths(
+        parent,
+        ModelId("2"),
+    )
+
+    assert paths == BundlePublicationPaths(
+        staging=parent.attempt_results / "model_2.staging",
+        final=parent.attempt_results / "model_2",
+    )
+    assert not paths.staging.exists()
+    assert not paths.final.exists()
+
+
+def test_bundle_publication_paths_reject_invalid_model_id(
+    tmp_path: Path,
+) -> None:
+    """Reject invalid model text before constructing bundle paths."""
+    root = build_root_storage_layout(tmp_path / "root")
+    worker = build_worker_storage_layout(tmp_path / "worker")
+    parent = build_worker_parent_storage_layout(
+        worker,
+        ParentId("0123456789abcdef"),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"^model_id must be canonical positive decimal text",
+    ):
+        root_bundle_publication_paths(
+            root,
+            ModelId("../invalid"),
+        )
+
+    with pytest.raises(
+        ValueError,
+        match=r"^model_id must be canonical positive decimal text",
+    ):
+        worker_bundle_publication_paths(
+            parent,
+            ModelId("01"),
+        )
+
+
+def test_bundle_publication_paths_reject_layout_escape(
+    tmp_path: Path,
+) -> None:
+    """Reject attempt-results directories outside their owning roots."""
+    root = build_root_storage_layout(tmp_path / "root")
+    escaped_root = replace(
+        root,
+        attempt_results=root.root.parent / "outside_root_results",
+    )
+
+    worker = build_worker_storage_layout(tmp_path / "worker")
+    parent = build_worker_parent_storage_layout(
+        worker,
+        ParentId("0123456789abcdef"),
+    )
+    escaped_parent = replace(
+        parent,
+        attempt_results=parent.parent_root.parent / "outside_worker_results",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"Root attempt-results directory .* must be contained within root",
+    ):
+        root_bundle_publication_paths(
+            escaped_root,
+            ModelId("1"),
+        )
+
+    with pytest.raises(
+        ValueError,
+        match=(r"Worker attempt-results directory .* must be contained within " r"parent root"),
+    ):
+        worker_bundle_publication_paths(
+            escaped_parent,
+            ModelId("1"),
+        )
+
+    assert not escaped_root.attempt_results.exists()
+    assert not escaped_parent.attempt_results.exists()
