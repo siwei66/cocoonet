@@ -17,7 +17,11 @@ from cocoonet._storage.paths import (
     WorkerStorageLayout,
     _is_path_within,
     _paths_equal,
+    _validate_dataset_id,
     _validate_managed_root_against,
+    _validate_parent_id,
+    _validate_positive_decimal_identifier,
+    build_root_storage_layout,
     discover_protected_locations,
     resolve_physical_path,
     validate_dataset_source_ownership,
@@ -444,3 +448,174 @@ def test_validate_root_ownership_rejects_path_as_source_collection(
             tmp_path / "managed_root",
             tmp_path / "dataset.csv",  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "",
+        "0123456789a",
+        "0123456789abc",
+        "0123456789AB",
+        "0123456789ag",
+        "dataset_0123456789ab",
+        "012345/6789ab",
+        ".",
+        "..",
+    ),
+)
+def test_dataset_id_rejects_invalid_managed_path_text(value: str) -> None:
+    """Reject dataset IDs outside the exact lowercase hexadecimal format."""
+    with pytest.raises(
+        ValueError,
+        match=r"^dataset_id must be exactly 12 lowercase hexadecimal",
+    ):
+        _validate_dataset_id(value)
+
+
+def test_dataset_id_accepts_exact_lowercase_hexadecimal_text() -> None:
+    """Accept exactly 12 lowercase hexadecimal characters."""
+    _validate_dataset_id("0123456789ab")
+
+
+def test_dataset_id_rejects_non_text_value() -> None:
+    """Reject non-string dataset identifiers through shared validation."""
+    with pytest.raises(TypeError) as error:
+        _validate_dataset_id(1)  # type: ignore[arg-type]
+
+    message = str(error.value)
+    assert "path: value" in message
+    assert "expected: builtins.str" in message
+    assert "got type: builtins.int" in message
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "",
+        "0123456789abcde",
+        "0123456789abcdef0",
+        "0123456789ABCDE",
+        "0123456789abcdeg",
+        "parent_0123456789abcdef",
+        "0123456789ab/cdef",
+        ".",
+        "..",
+    ),
+)
+def test_parent_id_rejects_invalid_managed_path_text(value: str) -> None:
+    """Reject parent IDs outside the exact lowercase hexadecimal format."""
+    with pytest.raises(
+        ValueError,
+        match=r"^parent_id must be exactly 16 lowercase hexadecimal",
+    ):
+        _validate_parent_id(value)
+
+
+def test_parent_id_accepts_exact_lowercase_hexadecimal_text() -> None:
+    """Accept exactly 16 lowercase hexadecimal characters."""
+    _validate_parent_id("0123456789abcdef")
+
+
+def test_parent_id_rejects_non_text_value() -> None:
+    """Reject non-string parent identifiers through shared validation."""
+    with pytest.raises(TypeError) as error:
+        _validate_parent_id(1)  # type: ignore[arg-type]
+
+    message = str(error.value)
+    assert "path: value" in message
+    assert "expected: builtins.str" in message
+    assert "got type: builtins.int" in message
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("model_id", "tile_id"),
+)
+@pytest.mark.parametrize(
+    "value",
+    (
+        "",
+        "0",
+        "00",
+        "01",
+        "+1",
+        "-1",
+        "1.0",
+        "1/2",
+        "model_1",
+        ".",
+        "..",
+    ),
+)
+def test_positive_decimal_identifier_rejects_noncanonical_text(
+    field: str,
+    value: str,
+) -> None:
+    """Reject noncanonical model and tile identifier text."""
+    with pytest.raises(
+        ValueError,
+        match=rf"^{field} must be canonical positive decimal text",
+    ):
+        _validate_positive_decimal_identifier(
+            value,
+            field=field,
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("model_id", "tile_id"),
+)
+@pytest.mark.parametrize(
+    "value",
+    ("1", "9", "10", "999"),
+)
+def test_positive_decimal_identifier_accepts_canonical_text(
+    field: str,
+    value: str,
+) -> None:
+    """Accept canonical positive model and tile identifier text."""
+    _validate_positive_decimal_identifier(
+        value,
+        field=field,
+    )
+
+
+def test_positive_decimal_identifier_rejects_boolean_value() -> None:
+    """Reject booleans through the shared validation boundary."""
+    with pytest.raises(TypeError) as error:
+        _validate_positive_decimal_identifier(
+            True,  # type: ignore[arg-type]
+            field="model_id",
+        )
+
+    message = str(error.value)
+    assert "path: value" in message
+    assert "expected: builtins.str" in message
+    assert "got type: builtins.bool" in message
+
+
+def test_build_root_storage_layout_returns_exact_paths_without_io(
+    tmp_path: Path,
+) -> None:
+    """Build every required root path without creating filesystem entries."""
+    candidate = tmp_path / "managed_root"
+    canonical_root = resolve_physical_path(candidate)
+
+    layout = build_root_storage_layout(candidate)
+
+    assert layout == RootStorageLayout(
+        root=canonical_root,
+        metadata_csv=canonical_root / "cocoonet_metadata.csv",
+        root_data_reference_xlsx=(canonical_root / "root_data_reference.xlsx"),
+        partition_schedules_xlsx=(canonical_root / "partition_schedules.xlsx"),
+        execution_configuration_csv=(canonical_root / "execution_configuration.csv"),
+        execution_state_csv=canonical_root / "execution_state.csv",
+        models_for_transfer=canonical_root / "models_for_transfer",
+        attempt_results=canonical_root / "attempt_results",
+        logs=canonical_root / "logs",
+        root_running_log=canonical_root / "logs" / "root_running.log",
+        root_error_log=canonical_root / "logs" / "root_error.log",
+    )
+    assert not candidate.exists()

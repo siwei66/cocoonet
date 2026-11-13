@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cocoonet._storage.publication import StorageError
+from cocoonet._type_validation import validate_args
 
 type PathInput = str | os.PathLike[str]
 
@@ -432,6 +433,97 @@ def validate_root_ownership(
     return canonical_root, canonical_sources
 
 
+@validate_args
+def _validate_dataset_id(value: str, /) -> None:
+    """Validate the exact managed-path representation of a dataset ID.
+
+    Parameters
+    ----------
+    value
+        Candidate dataset identifier.
+
+    Raises
+    ------
+    TypeError
+        If the candidate is not a string.
+    ValueError
+        If the candidate is not exactly 12 lowercase hexadecimal characters.
+
+    Notes
+    -----
+    This function validates representation only. It does not generate an
+    identifier, check collisions, or inspect the filesystem.
+
+    Node usage scope: Shared - Used by root and worker path builders.
+    """
+    if len(value) != 12 or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError("dataset_id must be exactly 12 lowercase hexadecimal characters; " f"got {value!r}.")
+
+
+@validate_args
+def _validate_parent_id(value: str, /) -> None:
+    """Validate the exact managed-path representation of a parent ID.
+
+    Parameters
+    ----------
+    value
+        Candidate parent identifier.
+
+    Raises
+    ------
+    TypeError
+        If the candidate is not a string.
+    ValueError
+        If the candidate is not exactly 16 lowercase hexadecimal characters.
+
+    Notes
+    -----
+    This function validates representation only. It does not generate an
+    identifier, check collisions, or inspect the filesystem.
+
+    Node usage scope: Shared - Used by root and worker path builders.
+    """
+    if len(value) != 16 or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError("parent_id must be exactly 16 lowercase hexadecimal characters; " f"got {value!r}.")
+
+
+@validate_args
+def _validate_positive_decimal_identifier(
+    value: str,
+    *,
+    field: str,
+) -> None:
+    """Validate canonical positive decimal text used in managed paths.
+
+    Parameters
+    ----------
+    value
+        Candidate model or tile identifier.
+    field
+        Identifier field included in diagnostics.
+
+    Raises
+    ------
+    TypeError
+        If either argument is not a string.
+    ValueError
+        If the candidate is not canonical positive decimal text.
+
+    Notes
+    -----
+    Valid values begin with ``1`` through ``9`` and contain only decimal
+    digits. Signs, zero, and zero padding are rejected. This function does not
+    generate identifiers or inspect the filesystem.
+
+    Node usage scope: Shared - Used by root and worker path builders.
+    """
+    if not value or value[0] not in "123456789" or any(character not in "0123456789" for character in value[1:]):
+        raise ValueError(
+            f"{field} must be canonical positive decimal text beginning at 1 "
+            f"with no sign or zero padding; got {value!r}."
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class RootStorageLayout:
     """Collect the semantic paths belonging to one root storage directory.
@@ -498,3 +590,51 @@ class BundlePublicationPaths:
 
     staging: Path
     final: Path
+
+
+def build_root_storage_layout(root: PathInput, /) -> RootStorageLayout:
+    """Build the semantic storage paths for one root directory.
+
+    Parameters
+    ----------
+    root
+        Absolute or relative root storage path.
+
+    Returns
+    -------
+    RootStorageLayout
+        Immutable collection of canonical root storage paths.
+
+    Raises
+    ------
+    TypeError
+        If ``root`` is not a string-producing path-like value.
+    ValueError
+        If the root path contains an embedded NUL character.
+    StorageError
+        If the root path cannot be physically resolved.
+
+    Notes
+    -----
+    This function creates no filesystem entries and validates no artifact
+    contents. Protected-location and dataset-source ownership validation remain
+    separate caller boundaries.
+
+    Node usage scope: Root - Defines the root persistence layout.
+    """
+    canonical_root = resolve_physical_path(root)
+    logs = canonical_root / "logs"
+
+    return RootStorageLayout(
+        root=canonical_root,
+        metadata_csv=canonical_root / "cocoonet_metadata.csv",
+        root_data_reference_xlsx=(canonical_root / "root_data_reference.xlsx"),
+        partition_schedules_xlsx=(canonical_root / "partition_schedules.xlsx"),
+        execution_configuration_csv=(canonical_root / "execution_configuration.csv"),
+        execution_state_csv=canonical_root / "execution_state.csv",
+        models_for_transfer=canonical_root / "models_for_transfer",
+        attempt_results=canonical_root / "attempt_results",
+        logs=logs,
+        root_running_log=logs / "root_running.log",
+        root_error_log=logs / "root_error.log",
+    )

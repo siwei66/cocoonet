@@ -16,6 +16,7 @@ Approved. Implement the proposed changes directly. Do not introduce other change
 ---
 
 Pass the dedicated pytest, mypy, black and ruff.
+- Use venv `cocoonet` for all tests.
 - Do not try to solve the pytest error automatically, report the pytest error with analysis and recommendation of solution instead.
 - If the implementation does not pass mypy: 1. Verify the implementation first; 2. If the mypy error is limited to typing issue only, try to solve the typing issue without changing code logic, do not use cast or skip the error to solve it; 3. If the mypy error indicates any real type or variable mismatch risk, report instead of forcibly solving; 4. If you failed to solve it with one trial, give up and report the mypy error and its analysis in your final reply instead of trying to solve it again.
 - Use black to solve black error found directly without changing the code or docstring content.
