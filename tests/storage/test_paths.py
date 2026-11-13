@@ -1,11 +1,15 @@
 """Tests for immutable Cocoonet storage path records."""
 
 import os
+import site
+import sys
+import sysconfig
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
 
 import pytest
 
+import cocoonet._storage.paths as storage_paths
 from cocoonet._storage.paths import (
     BundlePublicationPaths,
     RootStorageLayout,
@@ -13,7 +17,10 @@ from cocoonet._storage.paths import (
     WorkerStorageLayout,
     _is_path_within,
     _paths_equal,
+    _validate_managed_root_against,
+    discover_protected_locations,
     resolve_physical_path,
+    validate_managed_root,
 )
 
 
@@ -24,10 +31,7 @@ def test_path_records_preserve_exact_immutable_slotted_schemas(
     candidate = tmp_path / "candidate"
 
     records: tuple[
-        RootStorageLayout
-        | WorkerStorageLayout
-        | WorkerParentStorageLayout
-        | BundlePublicationPaths,
+        RootStorageLayout | WorkerStorageLayout | WorkerParentStorageLayout | BundlePublicationPaths,
         ...,
     ] = (
         RootStorageLayout(
@@ -195,3 +199,139 @@ def test_canonical_path_comparisons_follow_platform_case_rules(
 
         assert _paths_equal(case_alias, canonical)
         assert _is_path_within(case_alias / "child", canonical)
+
+
+def test_discover_protected_locations_includes_runtime_categories() -> None:
+    """Include interpreter, package, Cocoonet, and anchor locations."""
+    protected = discover_protected_locations()
+    expected_runtime_paths = (
+        sys.prefix,
+        sys.exec_prefix,
+        sys.base_prefix,
+        sys.base_exec_prefix,
+        sysconfig.get_path("purelib"),
+        sysconfig.get_path("platlib"),
+        *site.getsitepackages(),
+        site.getusersitepackages(),
+    )
+
+    for expected in expected_runtime_paths:
+        canonical = resolve_physical_path(expected)
+
+        assert any(_paths_equal(canonical, protected_path) for protected_path in protected)
+
+    module_file = storage_paths.__file__
+    assert module_file is not None
+    package_directory = resolve_physical_path(Path(module_file).parent.parent)
+
+    assert any(_paths_equal(package_directory, protected_path) for protected_path in protected)
+
+    for protected_path in protected:
+        anchor = resolve_physical_path(Path(protected_path.anchor))
+
+        assert any(_paths_equal(anchor, candidate) for candidate in protected)
+
+
+def test_discover_protected_locations_includes_source_checkout() -> None:
+    """Protect the complete repository when imported from its source tree."""
+    module_file = storage_paths.__file__
+    assert module_file is not None
+    package_directory = resolve_physical_path(Path(module_file).parent.parent)
+    source_root = package_directory.parent.parent
+
+    if package_directory.parent.name != "src" or not (source_root / "pyproject.toml").is_file():
+        pytest.skip("Cocoonet is not imported from a source checkout.")
+
+    protected = discover_protected_locations()
+
+    assert any(_paths_equal(source_root, protected_path) for protected_path in protected)
+
+
+def test_discover_protected_locations_is_deterministic_and_unique() -> None:
+    """Return stable canonical paths without physical duplicates."""
+    first = discover_protected_locations()
+    second = discover_protected_locations()
+
+    assert first == second
+    assert all(path.is_absolute() for path in first)
+
+    for index, candidate in enumerate(first):
+        assert not any(_paths_equal(candidate, previous) for previous in first[:index])
+
+
+def test_managed_root_matrix_rejects_only_anchor_equality(
+    tmp_path: Path,
+) -> None:
+    """Allow ordinary descendants while rejecting an anchor itself."""
+    anchor = resolve_physical_path(Path(tmp_path.anchor))
+    candidate = resolve_physical_path(tmp_path / "candidate")
+
+    _validate_managed_root_against(candidate, (anchor,))
+
+    with pytest.raises(
+        ValueError,
+        match=r"must not equal filesystem anchor",
+    ):
+        _validate_managed_root_against(anchor, (anchor,))
+
+
+def test_managed_root_matrix_rejects_risky_containment_directions(
+    tmp_path: Path,
+) -> None:
+    """Reject equality and both containment directions for risky paths."""
+    protected = resolve_physical_path(tmp_path / "protected")
+    equal = protected
+    descendant = protected / "child"
+    ancestor = protected.parent
+    disjoint = protected.parent / "protected_elsewhere"
+
+    for candidate in (equal, descendant, ancestor):
+        with pytest.raises(
+            ValueError,
+            match=(r"Managed root .* must not equal, contain, or be contained " r"within protected location"),
+        ):
+            _validate_managed_root_against(candidate, (protected,))
+
+    _validate_managed_root_against(disjoint, (protected,))
+
+
+def test_validate_managed_root_accepts_safe_absolute_user_path(
+    tmp_path: Path,
+) -> None:
+    """Return a canonical safe absolute user-specified path without creating it."""
+    candidate = tmp_path / "safe_root"
+
+    validated = validate_managed_root(candidate)
+
+    assert validated == resolve_physical_path(candidate)
+    assert not candidate.exists()
+
+
+def test_validate_managed_root_resolves_safe_relative_user_path(
+    tmp_path: Path,
+) -> None:
+    """Resolve a relative user path from the current working directory."""
+    original_working_directory = Path.cwd()
+
+    try:
+        os.chdir(tmp_path)
+        validated = validate_managed_root(Path("relative_root"))
+    finally:
+        os.chdir(original_working_directory)
+
+    expected = resolve_physical_path(tmp_path / "relative_root")
+    assert validated == expected
+    assert not expected.exists()
+
+
+def test_validate_managed_root_uses_discovered_protections() -> None:
+    """Reject the loaded Cocoonet package through production discovery."""
+    module_file = storage_paths.__file__
+    assert module_file is not None
+    package_directory = resolve_physical_path(Path(module_file).parent.parent)
+
+    with pytest.raises(
+        ValueError,
+        match=r"protected location",
+    ):
+        validate_managed_root(package_directory)

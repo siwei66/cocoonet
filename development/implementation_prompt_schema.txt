@@ -15,6 +15,14 @@ Approved. Implement the proposed changes directly. Do not introduce other change
 
 ---
 
+Pass the dedicated pytest, mypy, black and ruff.
+- Do not try to solve the pytest error automatically, report the pytest error with analysis and recommendation of solution instead.
+- If the implementation does not pass mypy: 1. Verify the implementation first; 2. If the mypy error is limited to typing issue only, try to solve the typing issue without changing code logic, do not use cast or skip the error to solve it; 3. If the mypy error indicates any real type or variable mismatch risk, report instead of forcibly solving; 4. If you failed to solve it with one trial, give up and report the mypy error and its analysis in your final reply instead of trying to solve it again.
+- Use black to solve black error found directly without changing the code or docstring content.
+- Do not try to solve the ruff error automatically, report the ruff error with analysis and recommendation of solution instead.
+
+---
+
 After finishing：
 - Verify the compliance of current implementation to the development requirement of `AGENTS.md`, delivery a compliance report.
 - Verify the over-engineering risk specifically i.e. verify the risk of too many layer of nesting, over-complicated logic, over-defensive for a light-weight python module and functional or coding redundancy in the context of `roadmap.md` and the phase roadmap. Considering whether a demand is really needed in the real implementation of current step and current phase, instead of view all roadmap demands as ground truth to follow. Deliver a over-engineering risk report.
@@ -25,7 +33,7 @@ After finishing：
 
 Then, if there is no violation or major over-engineering risk or risk of unnecessary required functionalities, continue with the next unit.
 
-Propose only. The proposal requirements are same:
+Propose only. The proposal requirements are:
 
 - Prepare only the next planned change unit.
 - Show me the exact proposed implementation and corresponding tests, with a concise explanation of the change and any relevant implementation decision.
