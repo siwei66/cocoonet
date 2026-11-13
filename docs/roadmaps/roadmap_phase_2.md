@@ -1,6 +1,6 @@
 # Phase 2: Filesystem ownership and durable persistence foundations
 
-Status: revised proposal; Phase 2 implementation is not authorized and is blocked by Section 12.1.
+Status: revised proposal; Phase 2 implementation is not authorized.
 
 ## 1. Authority and purpose
 
@@ -70,7 +70,6 @@ Later phases call the Phase 2 mechanisms but retain ownership of their domain sc
 
 Implementation may begin only when:
 
-- the blocking ambiguity in Section 12.1 is resolved in `AGENTS.md`, `docs/architecture.md`, and `docs/roadmap.md`;
 - this revised roadmap is approved;
 - Phase 1 contract tests pass unchanged; and
 - the implementation unit under consideration receives its separate approval.
@@ -104,6 +103,10 @@ Phase 2 is complete only when:
 Resolution must also work for a missing final path: resolve the nearest existing ancestor physically, then append the
 missing lexical suffix without creating it.
 
+Managed-root specifications may be absolute or relative. Resolve an absolute root directly. Resolve a relative root to
+a location inside `<current console working directory>/cocoonet/<parent_id>/` and reject traversal outside that
+parent-specific directory. An otherwise safe absolute path remains valid.
+
 Containment comparisons use platform-normalized canonical components, not string prefixes. Equality is handled
 explicitly. On case-insensitive filesystems, aliases that differ only by case compare as the same physical path.
 
@@ -134,9 +137,9 @@ Protected locations comprise:
 - the installed Cocoonet package directory; and
 - the complete Cocoonet source repository tree when running from a source checkout.
 
-The candidate root is validated against canonical physical locations before any write. Exact containment behavior for
-filesystem anchors is blocked by Section 12.1. Once resolved, `validate_managed_root()` must implement the approved
-matrix exactly and report the candidate root and protected location.
+The candidate root is validated against canonical physical locations before any write. Reject equality with a
+filesystem anchor. For every other listed risky location, reject equality, a candidate ancestor, or a candidate
+descendant. Report the candidate root and protected location; do not reject a path solely because it is absolute.
 
 ### 4.4 Root preparation and opening
 
@@ -489,7 +492,9 @@ attributes.
 def resolve_physical_path(path: PathInput, /) -> Path
 ~~~
 
-Return the canonical physical path without mutation, including for a missing suffix.
+Return the canonical physical path without mutation, including for a missing suffix. Managed-root callers preserve an
+absolute input and resolve a relative input inside the current console working directory's
+`cocoonet/<parent_id>/` location.
 
 ~~~python
 def discover_protected_locations() -> tuple[Path, ...]
@@ -502,9 +507,9 @@ installed Cocoonet package, source checkout, and relevant filesystem anchors. It
 def validate_managed_root(root: PathInput, /) -> Path
 ~~~
 
-Canonicalize and validate one root against every discovered protected location using the approved matrix. A private
-pure containment helper accepts explicit canonical paths for direct tests; production validation cannot replace or
-omit discovered protections.
+Canonicalize and validate one absolute or relative root against every discovered protected location using the approved
+matrix. Reject relative traversal outside its parent-specific base. A private pure containment helper accepts explicit
+canonical paths for direct tests; production validation cannot replace or omit discovered protections.
 
 ~~~python
 def validate_dataset_source_ownership(
@@ -733,8 +738,11 @@ filesystem calls merely to force operating-system failures.
 Test:
 
 - existing and missing-suffix canonical resolution;
+- direct absolute-root resolution, relative-root resolution under `cocoonet/<parent_id>/`, and relative escape
+  rejection;
 - alias, symlink, case-normalization, equality, and component-aware containment;
-- each protected-location category and its approved containment matrix;
+- direct filesystem-anchor rejection, each risky protected-location containment direction, and acceptance of an
+  otherwise safe absolute path;
 - source equal to root, source below root, root below source, and disjoint paths;
 - validation of all sources before any mutation;
 - non-string path-like values and embedded NUL rejection;
@@ -824,7 +832,7 @@ Each numbered item is one approval unit unless the user explicitly approves a sm
 2. Add path/layout records with no I/O.
 3. Implement `resolve_physical_path()` and containment primitives.
 4. Implement protected-location discovery.
-5. Implement managed-root validation after Section 12.1 is resolved.
+5. Implement managed-root validation.
 6. Implement dataset-source and aggregate ownership validation.
 7. Implement semantic identifier validators.
 8. Implement root layout construction.
@@ -888,24 +896,15 @@ serializes them but does not add transitions or scientific behavior.
 The Phase 1 roadmap uses the current `run()` and result-bundle terminology. Its implemented field shapes and invariants
 remain usable: `ArtifactId` identifies the immutable result bundle, and Phase 2 does not add general dill persistence.
 
-## 12. Blocking ambiguity and consistency report
+## 12. Consistency report
 
-### 12.1 Blocking protected-anchor rule
+### 12.1 Resolved protected-root rule
 
-Current `AGENTS.md`, Architecture Section 2.2, and the Phase 2 project-roadmap text require rejecting a candidate root
-that “equals, contains, or is contained within” a filesystem anchor. Applied literally, every absolute path is contained
-within its filesystem anchor, so no managed root can ever be valid. This contradicts the required user-selected working
-directory and makes Phase 2 implementation impossible.
-
-No implementation assumption is authorized. The minimal recommended governing rule is:
-
-- for a filesystem anchor, reject equality with the anchor; and
-- for Python installation/package-installation directories, the installed Cocoonet package directory, and the complete
-  source repository, reject equality, a candidate ancestor, or a candidate descendant.
-
-This preserves the intended protection against selecting or clearing a filesystem root while allowing ordinary
-absolute working directories. Phase 2 implementation must wait until the user approves a resolution and the three
-governing documents are corrected consistently.
+Absolute and relative managed-root specifications are permitted. Absolute paths resolve directly. Relative paths
+resolve inside `<current console working directory>/cocoonet/<parent_id>/` and cannot escape that parent-specific
+directory. Reject a filesystem anchor itself. For Python installation/package-installation directories, the installed
+Cocoonet package directory, and the complete source repository, reject equality, a candidate ancestor, or a candidate
+descendant. This protects risky locations without rejecting otherwise safe absolute paths.
 
 ### 12.2 Other inconsistencies
 
@@ -917,6 +916,5 @@ implemented Phase 1 contracts, and the Phase 2 scope.
 This revision replaces the obsolete hidden-store, hashed-filename, general-dill-container, JSON-metadata, and
 single-result-file plan with the current visible CSV/XLSX and immutable-bundle architecture.
 
-No source code, test, dependency, or governing document is modified by this roadmap revision. After reviewing it,
-approve or request changes to this roadmap and separately resolve Section 12.1. Phase 2 implementation must not begin
-before both actions are complete.
+No source code, test, or dependency is modified by this roadmap revision. Phase 2 implementation must not begin until
+this roadmap is approved.

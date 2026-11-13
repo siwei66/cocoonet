@@ -14,13 +14,17 @@ workers use synchronized datasets. Scientific auditability, transparency, and re
   reject a nonempty directory
   with `overwrite=False`. With explicit `overwrite=True`, clear its contents and prepare it for fresh execution.
   Successful construction/initialization sets `state = initialized`. Initialization is distinct from recovery.
+  Accept absolute and relative working-directory specifications. Resolve an absolute path directly. Resolve a relative
+  path to a location inside `<current console working directory>/cocoonet/<parent_id>/`; it must not escape that
+  parent-specific directory.
   The root working directory is Cocoonet-managed persistent storage; configured user-owned dataset source paths must
   remain outside it. Validate this ownership boundary before preparing or clearing the directory.
 - Reject an unsafe managed root before creating, changing, or deleting any persistent file. Protected locations include
   filesystem anchors, Python installation and package-installation directories, the installed Cocoonet package
-  directory, and the complete Cocoonet source repository tree. Reject a proposed root that equals, contains, or is
-  contained within a protected location. Apply the check to canonical physical locations so path aliases cannot bypass
-  it.
+  directory, and the complete Cocoonet source repository tree. Reject a filesystem anchor itself. For the other listed
+  risky locations, reject a proposed root that equals, contains, or is contained within the location. Do not reject an
+  otherwise safe path merely because it is absolute. Apply the checks to canonical physical locations so path aliases
+  cannot bypass them.
 - Reject a dataset source path equal to or contained within the root working directory. Enforce this configuration
   invariant in both directions: validate dataset addition/path changes against the current root, and validate root
   initialization/change/reassignment against every existing configured dataset source path, including paths retained

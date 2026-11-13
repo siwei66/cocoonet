@@ -23,9 +23,13 @@ After finishing：
 
 ---
 
-Then, if there is no violation or major over-engineering risk or risk of unnecessary required functionalities, continue with the next unit. Propose only. The proposal requirements are same:
+Then, if there is no violation or major over-engineering risk or risk of unnecessary required functionalities, continue with the next unit.
+
+Propose only. The proposal requirements are same:
+
 - Prepare only the next planned change unit.
 - Show me the exact proposed implementation and corresponding tests, with a concise explanation of the change and any relevant implementation decision.
+- Deliver the proposal in python code block with filename and the number of the line in the file to add the block.
 - Read only the relevant `AGENTS.md` rules, the relevant `architecture.md` design, and the applicable section of the detailed phase roadmap of the current phase, and the directly affected code/tests.
 - Do not perform a broad repository audit unless required by a detected dependency.
 - Propose the exact change only.
@@ -63,7 +67,8 @@ Or revise the proposal before approval and continuing with the next unit.
 Requirements:
 - Prepare only the next planned change unit.
 - Show me the exact proposed implementation and corresponding tests, with a concise explanation of the change and any relevant implementation decision.
-- Read only the relevant AGENTS.md rules, the applicable section of roadmap_phase_1.md, and the directly affected code/tests.
+- Deliver the proposal in python code block with filename and the number of the line in the file to add the block.
+- Read only the relevant `AGENTS.md` rules, the relevant `architecture.md` design, and the applicable section of the detailed phase roadmap of the current phase, and the directly affected code/tests.
 - Do not perform a broad repository audit unless required by a detected dependency.
 - Propose the exact change only.
 - Do not modify files for next unit.
