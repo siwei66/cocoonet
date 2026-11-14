@@ -252,15 +252,20 @@ All Phase 2 CSV:
 
 - is UTF-8 without a byte-order mark;
 - uses the standard-library `csv` module, comma delimiter, RFC-compatible quoting, and `\n` line endings;
-- includes one exact header row;
-- encodes enums by `.value`, booleans as `0` or `1`, integers as canonical decimal, and finite floats with
-  `repr()` round-trip semantics;
+- uses exactly two physical columns with the exact header `field,value`;
+- places one canonical metadata key in `field` and its scalar value or schema-defined text representation in `value`;
+- encodes nested records and repeated values through schema-defined hierarchical field keys, explicit collection counts,
+  and zero-based indices rather than additional physical columns;
+- encodes enums by `.value`, booleans as `0` or `1`, integers as canonical decimal, and finite floats with `repr()`
+  round-trip semantics;
 - never accepts `NaN` or infinity in lifecycle metadata;
-- rejects unknown, duplicate, missing, or out-of-order columns and invalid row types; and
+- rejects unknown, duplicate, missing, or out-of-order field keys, noncontiguous indices, count mismatches, and invalid
+  values; and
 - emits deterministic row ordering.
 
-Empty text and absent values must not be conflated. Nullable columns therefore have an explicit companion presence
-column where empty text is otherwise valid.
+Empty text and absent values must not be conflated. A nullable field therefore uses an explicit hierarchical
+`<field>.present` key. A present nullable scalar is followed by `<field>.value`; an absent value omits that value row.
+A nullable nested record uses `<field>.present` followed, when present, by its schema-defined nested field keys.
 
 ## 5. Planned modules and records
 
@@ -402,56 +407,47 @@ Validation:
 
 ### 5.5 Execution-state CSV schema
 
-`execution_state.csv` uses one normalized table so it remains directly inspectable while preserving nested records.
+`execution_state.csv` uses the exact two-column header:
 
-The exact ordered columns are:
-
-~~~python
-EXECUTION_STATE_COLUMNS = (
-    "schema_version", "record_type", "position", "subposition", "node_role",
-    "parent_id", "model_id", "attempt_id", "worker_id",
-    "execution_status", "attempt_status", "stop_status",
-    "stop_reason_present", "stop_reason", "first_started_at_present", "first_started_at",
-    "result_artifact_id_present", "result_artifact_id",
-    "worker_availability", "worker_process_status", "ownership_status", "compatibility_status",
-    "dataset_ready", "evaluation_ready", "partition_ready",
-    "attempt_capacity_present", "attempt_capacity",
-    "selected_attempt_id_present", "selected_attempt_id",
-    "receipt_status", "persistence_status", "accepted",
-    "operation_id", "operation_kind", "attempt_limit", "attempts_made", "operation_status",
-    "stage", "fold_id_present", "fold_id", "sample_id_present", "sample_id",
-    "class_label_present", "class_label", "report_name_present", "report_name",
-    "failure_id_present", "failure_id", "failure_scope_present", "failure_scope",
-    "exception_type_present", "exception_type", "message_present", "message",
-    "traceback_present", "traceback", "origin_failure_id_present", "origin_failure_id",
-)
+~~~text
+field,value
 ~~~
 
-The CSV writer emits these names as one physical header row.
+The `field` column is a canonical hierarchical path through `ExecutionStateSnapshot`. The `value` column contains the
+corresponding scalar value or schema-defined text representation.
 
-Exact `record_type` values and ordering are:
+Rows are emitted depth-first in the declared `ExecutionStateSnapshot` field order. Nested dataclass fields append their
+declared field name with `.`. Tuple fields first emit `<field>.count`, followed by elements in tuple order using
+zero-based indices. A tuple of scalar identities therefore uses keys such as `model_ids.0`; a tuple of records uses keys
+such as `attempts.0.inputs.attempt_id`.
 
-1. one `snapshot` row carrying `node_role` and `parent_id`;
-2. one `model_unit` row per `model_ids` order;
-3. one `parent_progress` row;
-4. `attempt` rows in tuple order;
-5. `worker` rows in tuple order;
-6. each worker's `worker_parent_readiness` rows in tuple order;
-7. each worker's `worker_active_attempt` rows in tuple order;
-8. `reception` rows in tuple order; and
-9. `operation` rows in tuple order.
+The top-level order is:
 
-`position` is the zero-based outer tuple position; `subposition` is the zero-based nested position and is empty when
-not applicable. Fields not owned by a row type are empty. Presence columns are `0`/`1` and are mandatory for nullable
-fields whose present value may be empty text. An `operation` row includes its `TraceContext` and optional complete
-`FailureRecord`; a missing last failure leaves all failure-presence columns `0`.
+1. `storage_schema_version`;
+2. `node_role`;
+3. `parent_id`;
+4. `model_ids.count`, then `model_ids.<index>`;
+5. `progress.<field>`;
+6. `attempts.count`, then `attempts.<index>.<field>`;
+7. `workers.count`, then `workers.<index>.<field>`;
+8. `receptions.count`, then `receptions.<index>.<field>`; and
+9. `operations.count`, then `operations.<index>.<field>`.
 
-The decoder reconstructs the exact tuple order and Phase 1 nominal types, then validates the complete snapshot. It
-rejects extra rows, missing required row types, gaps or duplicates in positions, values in inapplicable columns, or
-noncanonical encodings. CSV row order is evidence; filesystem enumeration order is never used.
+Nested tuples use the same count-and-index rule. Examples include
+`workers.<index>.parent_readiness.count`, `workers.<index>.parent_readiness.<subindex>.parent_id`,
+`workers.<index>.active_attempt_ids.count`, and `workers.<index>.active_attempt_ids.<subindex>`.
 
-This Phase 2 schema persists the fixed parent association and known unit identities needed to interpret mutable state.
-The complete scientific execution configuration remains solely owned by Phase 3's `execution_configuration.csv`.
+Nullable scalar fields use an exact `<field>.present` row. When present, the next row is `<field>.value`; when absent,
+the value row is omitted. Optional nested records, including `operations.<index>.last_failure`, use
+`<field>.present`, followed when present by the nested record's declared fields.
+
+The decoder reconstructs exact tuple order and Phase 1 nominal types from these canonical keys, then validates the
+complete snapshot. It rejects unknown, missing, duplicate, or reordered keys; noncontiguous indices; count mismatches;
+unexpected value rows for absent fields; and noncanonical encodings. CSV row order is evidence; filesystem enumeration
+order is never used.
+
+This schema persists fixed parent association and known unit identities needed to interpret mutable state. The complete
+scientific execution configuration remains solely owned by Phase 3's `execution_configuration.csv`.
 
 ### 5.6 Structured log record
 
@@ -797,15 +793,16 @@ Test:
 
 Build complete root and worker snapshots from real Phase 1 contract records. Test:
 
-- exact header and row ordering;
-- round-trip equality for every row type and enum;
-- empty text versus absent optional values;
-- non-ASCII labels, embedded commas, quotes, and newlines;
+- exact `field,value` header and hierarchical key ordering;
+- round-trip equality for every nested record and enum;
+- exact tuple counts, zero-based indices, and nested tuple ordering;
+- empty text versus absent optional values through `.present` and `.value` keys;
+- non-ASCII text, embedded commas, quotes, and newlines;
 - fixed parent association and ordered model-unit identities without duplicated scientific configuration;
 - root selected-reception, acceptance, and remaining-operation-budget evidence;
 - worker-local state excluding root-wide reception;
 - invalid nested Phase 1 records and cross-record references;
-- duplicate/gapped positions and unknown/inapplicable values;
+- missing, duplicate, reordered, or unknown keys, noncontiguous indices, and count mismatches;
 - malformed encodings, nonfinite numbers, BOM, and schema-version mismatch;
 - asynchronous initial write and repeated atomic replacement;
 - loader ignoring stale `.partial`; and
@@ -906,7 +903,13 @@ directory. Reject a filesystem anchor itself. For Python installation/package-in
 Cocoonet package directory, and the complete source repository, reject equality, a candidate ancestor, or a candidate
 descendant. This protects risky locations without rejecting otherwise safe absolute paths.
 
-### 12.2 Other inconsistencies
+### 12.2 Metadata persistence format
+
+Persisted metadata-oriented CSV tables and result-workbook metadata worksheets use exactly two columns named `field`
+and `value`. The earlier wide normalized `execution_state.csv` schema conflicted with this consistent metadata
+persistence contract and has been replaced by canonical hierarchical field keys.
+
+### 12.3 Other inconsistencies
 
 No other blocking inconsistency was found among current `AGENTS.md`, `docs/architecture.md`, `docs/roadmap.md`, the
 implemented Phase 1 contracts, and the Phase 2 scope.

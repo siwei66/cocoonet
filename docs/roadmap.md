@@ -35,11 +35,14 @@ Throughout every phase:
 
 - Follow Python 3.12 through the latest stable release, excluding prereleases, and the existing dependency/tool
   configuration. Use asyncio/aiofiles for asynchronous I/O. Use schema-controlled UTF-8 CSV for Cocoonet metadata,
-  model references, execution configuration, and execution state; schema-controlled XLSX for root/worker data
-  references, partition schedules, and two-sheet result workbooks; and dill only for designated trusted model payloads,
-  root-local IPC messages, and standardized visualization data. Online selected-result delivery uses `.tar.zst`;
-  dataset and model transfer preparation follows its separate Parquet and archive contracts. Applicable pytest, mypy,
-  Black, and Ruff checks must pass for approved implementation work; use targeted tests, not unrelated suites.
+  model references, execution configuration, and execution state. Their metadata-oriented tables use exactly two
+  columns named `field` and `value`; nested and repeated values use schema-defined hierarchical field keys and
+  zero-based indices rather than additional columns. Use schema-controlled XLSX for root/worker data references,
+  partition schedules, and two-sheet result workbooks; every result metadata worksheet uses the same exact
+  `field,value` contract. Dill remains limited to designated trusted model payloads, root-local IPC messages, and
+  standardized visualization data. Online selected-result delivery uses `.tar.zst`; dataset and model transfer
+  preparation follows its separate Parquet and archive contracts. Applicable pytest, mypy, Black, and Ruff checks must
+  pass for approved implementation work; use targeted tests, not unrelated suites.
   Validate documentation accessibility and version switching when documentation is rebuilt.
 - Provide NumPy-style source docstrings for public and internal components, public-only API documentation, useful
   examples, and comments explaining non-obvious logic. Preserve the typing, narrow suppression, decomposition,
@@ -299,8 +302,9 @@ Architecture Section 4.6. Conventional metric details are documented with their 
 variations remain unchanged.
 
 Every result table is represented for persistence as a separate XLSX workbook with one result-data worksheet and one
-schema-controlled metadata worksheet. Finite values remain numeric; `Inf`, `-Inf`, `NaN`, and `NA` are deliberate text
-tokens. Visualization components return standardized rendering data rather than plotting objects or rendered images.
+schema-controlled metadata worksheet. The metadata worksheet contains exactly two columns named `field` and `value`.
+Finite values remain numeric; `Inf`, `-Inf`, `NaN`, and `NA` are deliberate text tokens. Visualization components
+return standardized rendering data rather than plotting objects or rendered images.
 
 Each report runs only when its prerequisites are available. A report failure preserves other reports, identities,
 successful values, and detailed failure provenance. Components return report data and do not independently persist

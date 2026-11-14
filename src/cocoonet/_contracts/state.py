@@ -401,50 +401,34 @@ def _validate_attempt_progress_fields(value: AttemptProgress) -> None:
         )
 
 
-def validate_attempt_progress(  # noqa: C901
-    value: AttemptProgress,
-    *,
-    parent: ParentEvaluation,
-) -> None:
-    """Validate one attempt's routing and worker-observed progress.
+def _validate_attempt_progress_state(value: AttemptProgress) -> None:
+    """Validate attempt processing state independently of parent routing.
 
     Parameters
     ----------
-    value : AttemptProgress
-        Attempt routing, processing, stop, start, and result observations.
-    parent : ParentEvaluation
-        Fixed parent task against which the attempt is resolved.
+    value
+        Attempt processing, stop, start, and result observations.
 
     Raises
     ------
     TypeError
-        If a record or field has an incorrect runtime type.
+        If the record or an observation field has an incorrect runtime type.
     ValueError
-        If routing, timestamp, artifact, stop, or lifecycle relationships are
-        invalid.
+        If timestamp, artifact, stop, or lifecycle relationships are invalid.
 
     Notes
     -----
-    This validator checks one supplied observation. It does not perform state
-    transitions, acquire timestamps, publish or inspect result files, select
-    or accept a result, reserve worker capacity, or infer worker availability.
+    This validates status, stop disposition, start timestamp, result artifact,
+    and their relationships. It validates neither parent/model membership nor
+    the complete scientific parent configuration.
 
     Node usage scope: Shared - Used by both root and worker nodes.
     """
-    # Validate the outer record before accessing its fields.
     if not isinstance(value, AttemptProgress):
         validate_declared_types(value, expected_type=AttemptProgress)
 
-    # Validate direct scalar fields before applying lifecycle relationships.
     _validate_attempt_progress_fields(value)
 
-    # Resolve the attempt's fixed routing against its complete parent context.
-    try:
-        validate_attempt_inputs(value.inputs, parent=parent)
-    except (TypeError, ValueError) as error:
-        raise type(error)(f"inputs is invalid: {error}") from error
-
-    # Validate the independent stop observation before composing it with status.
     try:
         validate_stop_disposition(value.stop)
     except (TypeError, ValueError) as error:
@@ -501,6 +485,42 @@ def validate_attempt_progress(  # noqa: C901
         raise ValueError(
             f"{error_context}\n" "  expected: stop.status not to be observed\n" "  got: stop.status is observed"
         )
+
+
+def validate_attempt_progress(
+    value: AttemptProgress,
+    *,
+    parent: ParentEvaluation,
+) -> None:
+    """Validate one attempt against its complete fixed parent context.
+
+    Parameters
+    ----------
+    value
+        Attempt routing and worker-observed progress.
+    parent
+        Fixed parent task against which routing is resolved.
+
+    Raises
+    ------
+    TypeError
+        If a record or field has an incorrect runtime type.
+    ValueError
+        If routing or attempt-progress relationships are invalid.
+
+    Notes
+    -----
+    This function retains the complete Phase 1 validation contract. It adds
+    parent/model routing validation to the reusable observation validation.
+
+    Node usage scope: Shared - Used by both root and worker nodes.
+    """
+    _validate_attempt_progress_state(value)
+
+    try:
+        validate_attempt_inputs(value.inputs, parent=parent)
+    except (TypeError, ValueError) as error:
+        raise type(error)(f"inputs is invalid: {error}") from error
 
 
 class WorkerAvailability(StrEnum):

@@ -957,10 +957,11 @@ and the explicit project variations below.
 ### 4.4 Fold outputs shared by both task types
 
 Every result table is a separate XLSX workbook with exactly two worksheets. The first contains result data. The second
-is a schema-controlled key/value metadata table containing at least `creation_datetime`, `parent_id`, `attempt_id`,
-`model_id`, `model_label`, and `worker_id`, plus applicable dataset, partition, fold, artifact-kind, and schema
-identities. Finite values are numeric cells. `Inf`, `-Inf`, `NaN`, and `NA` are deliberate text tokens under
-Section 9.3;
+is a schema-controlled metadata table containing exactly two columns named `field` and `value`. The `field` column
+contains the canonical metadata key, and `value` contains its scalar value or schema-defined text representation.
+The table contains at least `creation_datetime`, `parent_id`, `attempt_id`, `model_id`, `model_label`, and `worker_id`,
+plus applicable dataset, partition, fold, artifact-kind, and schema identities.
+Finite values are numeric cells. `Inf`, `-Inf`, `NaN`, and `NA` are deliberate text tokens under Section 9.3;
 spreadsheet-library missing-value inference is not authoritative.
 
 Classification result workbooks use the applicable model's fixed class-label order. Preserve that exact order in every
@@ -1971,8 +1972,14 @@ pending-delivery, retry-limit, stop, and recovery rules. Other eligible free slo
 ### 7.2 Serialization ownership and compatibility
 
 - Use schema-controlled UTF-8 CSV for Cocoonet metadata, model-reference files, execution configuration, and execution
-  state. Use schema-controlled XLSX for root/worker data references, authoritative/worker partition schedules, and
-  two-sheet result workbooks. Do not rely on automatic type or missing-value inference.
+  state. Each metadata-oriented CSV table contains exactly two columns named `field` and `value`. `field` is the
+  canonical metadata key; `value` contains its scalar value or schema-defined text representation. Nested records and
+  repeated values use schema-defined hierarchical keys, explicit collection counts, and zero-based indices in the
+  `field` column rather than additional physical columns.
+- Use schema-controlled XLSX for root/worker data references, authoritative/worker partition schedules, and two-sheet
+  result workbooks. Every result-workbook metadata worksheet follows the same exact two-column `field,value` contract.
+  Domain data/reference worksheets retain their owning row-and-column schemas. Do not rely on automatic type or
+  missing-value inference.
 - Use dill only for trusted root-local/private model payloads, trusted root-local IPC messages, and standardized
   visualization data; do not introduce a parallel direct `pickle` path.
 - Dataset table inputs and generated CSV/Parquet transfer artifacts follow Sections 3.1 and 3.5. Their formats are
