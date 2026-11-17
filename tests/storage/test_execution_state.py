@@ -15,6 +15,7 @@ from cocoonet._contracts.identity import (
 from cocoonet._contracts.state import AttemptStatus
 from cocoonet._storage.execution_state import (
     ExecutionStateRecord,
+    encode_execution_state_csv,
     validate_execution_state_records,
 )
 
@@ -185,3 +186,78 @@ def test_validate_execution_state_records_rejects_model_association_change(
     """Preserve the one-to-one model identity and label association."""
     with pytest.raises(ValueError):
         validate_execution_state_records((_record(), second))
+
+
+def test_encode_execution_state_csv_encodes_empty_sequence() -> None:
+    """Encode an empty state sequence as the exact header."""
+    assert encode_execution_state_csv(()) == (
+        b"parent_id,worker_id,model_label,model_id,attempt_id," b"attempt_status\n"
+    )
+
+
+def test_encode_execution_state_csv_encodes_unassigned_attempt() -> None:
+    """Encode an undefined worker identity as an empty CSV field."""
+    assert encode_execution_state_csv((_record(),)) == (
+        b"parent_id,worker_id,model_label,model_id,attempt_id,"
+        b"attempt_status\n"
+        b"aaaaaaaaaaaaaaaa,,model-a,1,attempt-1,not_allocated\n"
+    )
+
+
+def test_encode_execution_state_csv_preserves_order_and_status_values() -> None:
+    """Preserve supplied row order and encode exact enum values."""
+    records = tuple(
+        _record(
+            worker_id=(
+                None
+                if status
+                in (
+                    AttemptStatus.NOT_ALLOCATED,
+                    AttemptStatus.ALLOCATION_FAILED,
+                )
+                else _WORKER_ID
+            ),
+            attempt_id=AttemptId(f"attempt-{index}"),
+            attempt_status=status,
+        )
+        for index, status in enumerate(AttemptStatus)
+    )
+    expected_rows = "".join(
+        (
+            f"aaaaaaaaaaaaaaaa,"
+            f"{'' if record.worker_id is None else record.worker_id},"
+            f"model-a,1,{record.attempt_id},{record.attempt_status.value}\n"
+        )
+        for record in records
+    )
+    expected = ("parent_id,worker_id,model_label,model_id,attempt_id," f"attempt_status\n{expected_rows}").encode(
+        "utf-8"
+    )
+
+    assert encode_execution_state_csv(records) == expected
+
+
+def test_encode_execution_state_csv_quotes_non_ascii_text() -> None:
+    """Encode non-ASCII labels and RFC-compatible special characters."""
+    record = _record(
+        worker_id=_WORKER_ID,
+        model_label='模型,"alpha"\nnext',
+        attempt_status=AttemptStatus.RUNNING,
+    )
+
+    expected = (
+        "parent_id,worker_id,model_label,model_id,attempt_id,"
+        "attempt_status\n"
+        'aaaaaaaaaaaaaaaa,worker-1,"模型,""alpha""\nnext",'
+        "1,attempt-1,running\n"
+    ).encode("utf-8")
+
+    assert encode_execution_state_csv((record,)) == expected
+
+
+def test_encode_execution_state_csv_validates_before_encoding() -> None:
+    """Reject inconsistent records before producing CSV bytes."""
+    duplicate = _record()
+
+    with pytest.raises(ValueError, match="attempt_id"):
+        encode_execution_state_csv((_record(), duplicate))

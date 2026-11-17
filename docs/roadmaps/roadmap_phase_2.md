@@ -709,7 +709,8 @@ record or retry failures according to their own lifecycle rules.
 - `bool` is rejected where an integer is required.
 - Timestamps are exact nonnegative integers for nanoseconds or finite nonnegative floats where the Phase 1 record uses
   seconds.
-- Empty identifiers and strings containing NUL are rejected.
+- Empty identifiers are rejected. Cocoonet must not produce NUL characters in lifecycle metadata strings; Phase 2
+  does not require redundant persistence-boundary NUL validation for internally produced record values.
 - CSV decoders reject a UTF-8 BOM, invalid UTF-8, alternate newlines in unquoted fields, and trailing nonempty data
   outside the schema.
 - NewType identities are reconstructed explicitly rather than left as untyped strings.

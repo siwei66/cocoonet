@@ -1,5 +1,7 @@
 """Minimal durable execution-state record contracts."""
 
+import csv
+import io
 from dataclasses import dataclass
 
 from cocoonet._contracts.identity import (
@@ -17,6 +19,15 @@ from cocoonet._storage.paths import (
     _validate_positive_decimal_identifier,
 )
 from cocoonet._type_validation import validate_declared_types
+
+EXECUTION_STATE_COLUMNS: tuple[str, ...] = (
+    "parent_id",
+    "worker_id",
+    "model_label",
+    "model_id",
+    "attempt_id",
+    "attempt_status",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,3 +166,65 @@ def validate_execution_state_records(
 
         labels_by_model_id[record.model_id] = record.model_label
         model_ids_by_label[record.model_label] = record.model_id
+
+
+def encode_execution_state_csv(
+    value: tuple[ExecutionStateRecord, ...],
+    /,
+) -> bytes:
+    """Encode ordered execution-state records as deterministic UTF-8 CSV.
+
+    Parameters
+    ----------
+    value
+        Execution-state records to validate and encode in their supplied order.
+
+    Returns
+    -------
+    bytes
+        UTF-8 CSV containing the exact six-column header and one row per
+        supplied record.
+
+    Raises
+    ------
+    TypeError
+        If the record sequence or one of its fields has an incorrect type.
+    ValueError
+        If record identities or associations are invalid.
+
+    Notes
+    -----
+    ``worker_id=None`` is encoded as an empty field. Attempt status is encoded
+    by its exact enum value. The standard-library CSV writer provides
+    RFC-compatible quoting, and every physical record uses ``\n`` line
+    endings.
+
+    This function performs no decoding, file I/O, state transition, sorting,
+    persistence, or result inference.
+
+    Node usage scope: Shared - Used by root and worker storage.
+    """
+    validate_execution_state_records(value)
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(
+        output,
+        delimiter=",",
+        lineterminator="\n",
+        quoting=csv.QUOTE_MINIMAL,
+    )
+    writer.writerow(EXECUTION_STATE_COLUMNS)
+
+    for record in value:
+        writer.writerow(
+            (
+                record.parent_id,
+                "" if record.worker_id is None else record.worker_id,
+                record.model_label,
+                record.model_id,
+                record.attempt_id,
+                record.attempt_status.value,
+            )
+        )
+
+    return output.getvalue().encode("utf-8")
