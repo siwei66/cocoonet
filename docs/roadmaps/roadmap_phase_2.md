@@ -848,7 +848,7 @@ Each numbered item is one approval unit unless the user explicitly approves a sm
 18. Implement compatibility metadata capture and CSV codec.
 19. Implement fresh root preparation.
 20. Implement non-destructive root opening.
-21. Revise the shared `AttemptStatus`, then add `ExecutionStateRecord` and record-sequence validation.
+21. Add `ExecutionStateRecord` and record-sequence validation using the established Phase 1 `AttemptStatus`.
 22. Implement deterministic six-column execution-state CSV encoding.
 23. Implement strict six-column execution-state CSV decoding.
 24. Implement serialized asynchronous state replacement and loading.
@@ -887,9 +887,9 @@ non-authority.
 
 ### 11.1 Phase 1 dependencies used without redesign
 
-Phase 2 reuses Phase 1 identities and `CompatibilityMetadata`, and revises the shared `AttemptStatus` vocabulary before
-adding its persistence consumer. It persists attempt observations without performing transitions. Phase 2 adds only
-the storage-owned `ExecutionStateRecord` representation and no scientific behavior.
+Phase 2 reuses Phase 1 identities, `ScalarLabel`, `CompatibilityMetadata`, and the established `AttemptStatus`
+vocabulary without redesign. It persists minimal attempt-state observations without performing transitions. Phase 2
+adds only the storage-owned `ExecutionStateRecord` representation and no scientific behavior.
 
 ### 11.2 Phase 1 terminology alignment
 

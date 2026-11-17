@@ -1,306 +1,187 @@
-"""Tests for durable execution-state snapshot validation."""
+"""Tests for minimal durable execution-state record validation."""
 
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError
+from typing import cast
 
 import pytest
 
-from cocoonet._contracts.execution import AttemptInputs
-from cocoonet._contracts.failure import (
-    FailureRecord,
-    FailureScope,
-    TraceContext,
-)
 from cocoonet._contracts.identity import (
     AttemptId,
-    FailureId,
     ModelId,
-    OperationId,
     ParentId,
+    ScalarLabel,
     WorkerId,
 )
-from cocoonet._contracts.state import (
-    AttemptProgress,
-    AttemptStatus,
-    BoundedOperation,
-    CompatibilityStatus,
-    ExecutionStatus,
-    OperationKind,
-    OperationStatus,
-    OwnershipStatus,
-    ParentProgress,
-    PersistenceStatus,
-    ReceiptStatus,
-    ReceptionRecord,
-    StopDisposition,
-    StopStatus,
-    WorkerAvailability,
-    WorkerObservation,
-    WorkerProcessStatus,
-)
+from cocoonet._contracts.state import AttemptStatus
 from cocoonet._storage.execution_state import (
-    ExecutionStateSnapshot,
-    validate_execution_state_snapshot,
+    ExecutionStateRecord,
+    validate_execution_state_records,
 )
-from cocoonet._storage.metadata import NodeRole
 
 _PARENT_ID = ParentId("a" * 16)
 _MODEL_ID = ModelId("1")
+_MODEL_LABEL = "model-a"
 _ATTEMPT_ID = AttemptId("attempt-1")
 _WORKER_ID = WorkerId("worker-1")
 
 
-def _attempt(
+def _record(
     *,
     parent_id: ParentId = _PARENT_ID,
+    worker_id: WorkerId | None = None,
+    model_label: ScalarLabel = _MODEL_LABEL,
     model_id: ModelId = _MODEL_ID,
-    worker_id: WorkerId = _WORKER_ID,
-) -> AttemptProgress:
-    """Build one valid allocated attempt observation."""
-    return AttemptProgress(
-        inputs=AttemptInputs(
-            attempt_id=_ATTEMPT_ID,
-            parent_id=parent_id,
-            model_id=model_id,
-            worker_id=worker_id,
-        ),
-        status=AttemptStatus.ALLOCATED,
-        stop=StopDisposition(
-            status=StopStatus.NONE,
-            reason=None,
-        ),
-        first_started_at=None,
-        result_artifact_id=None,
-    )
-
-
-def _worker(
-    *,
-    worker_id: WorkerId = _WORKER_ID,
-    active_attempt_ids: tuple[AttemptId, ...] = (),
-) -> WorkerObservation:
-    """Build one valid worker observation."""
-    return WorkerObservation(
+    attempt_id: AttemptId = _ATTEMPT_ID,
+    attempt_status: AttemptStatus = AttemptStatus.NOT_ALLOCATED,
+) -> ExecutionStateRecord:
+    """Build one valid minimal execution-state record."""
+    return ExecutionStateRecord(
+        parent_id=parent_id,
         worker_id=worker_id,
-        availability=WorkerAvailability.UNAVAILABLE,
-        process_status=WorkerProcessStatus.UNKNOWN,
-        ownership=OwnershipStatus.UNKNOWN,
-        compatibility=CompatibilityStatus.UNCHECKED,
-        parent_readiness=(),
-        attempt_capacity=None,
-        active_attempt_ids=active_attempt_ids,
+        model_label=model_label,
+        model_id=model_id,
+        attempt_id=attempt_id,
+        attempt_status=attempt_status,
     )
 
 
-def _snapshot(
-    *,
-    node_role: NodeRole = NodeRole.ROOT,
-) -> ExecutionStateSnapshot:
-    """Build one valid root or worker snapshot."""
-    receptions: tuple[ReceptionRecord, ...] = (
-        ReceptionRecord(
-            parent_id=_PARENT_ID,
-            model_id=_MODEL_ID,
-            selected_attempt_id=None,
-            receipt=ReceiptStatus.NOT_RECEIVED,
-            persistence=PersistenceStatus.NOT_STARTED,
-            result_artifact_id=None,
-            accepted=False,
-        ),
-    )
-    if node_role is NodeRole.WORKER:
-        receptions = ()
+def test_execution_state_record_preserves_fields_and_is_immutable() -> None:
+    """Preserve the six approved fields and prevent reassignment."""
+    record = _record()
 
-    return ExecutionStateSnapshot(
-        storage_schema_version=1,
-        node_role=node_role,
-        parent_id=_PARENT_ID,
-        model_ids=(_MODEL_ID,),
-        progress=ParentProgress(
-            parent_id=_PARENT_ID,
-            execution_status=ExecutionStatus.NOT_STARTED,
-        ),
-        attempts=(_attempt(),),
-        workers=(_worker(),),
-        receptions=receptions,
-        operations=(),
-    )
-
-
-@pytest.mark.parametrize("node_role", tuple(NodeRole))
-def test_validate_execution_state_snapshot_accepts_each_node_role(
-    node_role: NodeRole,
-) -> None:
-    """Accept complete root and worker observation snapshots."""
-    validate_execution_state_snapshot(_snapshot(node_role=node_role))
-
-
-def test_execution_state_snapshot_is_immutable() -> None:
-    """Prevent reassignment of persisted snapshot fields."""
-    snapshot = _snapshot()
+    assert record.parent_id == _PARENT_ID
+    assert record.worker_id is None
+    assert record.model_label == _MODEL_LABEL
+    assert record.model_id == _MODEL_ID
+    assert record.attempt_id == _ATTEMPT_ID
+    assert record.attempt_status is AttemptStatus.NOT_ALLOCATED
 
     with pytest.raises(FrozenInstanceError):
-        snapshot.__setattr__("storage_schema_version", 2)
+        record.__setattr__("attempt_status", AttemptStatus.RUNNING)
 
 
-@pytest.mark.parametrize(
-    "snapshot",
-    (
-        replace(_snapshot(), storage_schema_version=2),
-        replace(_snapshot(), parent_id=ParentId("invalid")),
-        replace(_snapshot(), model_ids=(ModelId("01"),)),
-        replace(_snapshot(), model_ids=(_MODEL_ID, _MODEL_ID)),
-        replace(_snapshot(), model_ids=()),
-    ),
-)
-def test_validate_execution_state_snapshot_rejects_invalid_schema_or_ids(
-    snapshot: ExecutionStateSnapshot,
-) -> None:
-    """Reject schema mismatch and invalid managed identity sets."""
-    with pytest.raises(ValueError):
-        validate_execution_state_snapshot(snapshot)
+def test_validate_execution_state_records_accepts_empty_sequence() -> None:
+    """Accept an empty worker-side state sequence."""
+    validate_execution_state_records(())
 
 
-def test_validate_execution_state_snapshot_rejects_progress_parent_mismatch() -> None:
-    """Require parent progress to describe the snapshot parent."""
-    snapshot = replace(
-        _snapshot(),
-        progress=ParentProgress(
-            parent_id=ParentId("b" * 16),
-            execution_status=ExecutionStatus.NOT_STARTED,
-        ),
-    )
-
-    with pytest.raises(ValueError, match=r"progress\.parent_id"):
-        validate_execution_state_snapshot(snapshot)
-
-
-def test_validate_execution_state_snapshot_rejects_invalid_nested_attempt() -> None:
-    """Apply Phase 1 attempt-observation validation."""
-    attempt = replace(
-        _attempt(),
-        status=AttemptStatus.RUNNING,
-        first_started_at=None,
-    )
-    snapshot = replace(_snapshot(), attempts=(attempt,))
-
-    with pytest.raises(ValueError, match=r"first_started_at"):
-        validate_execution_state_snapshot(snapshot)
-
-
-@pytest.mark.parametrize(
-    "attempt",
-    (
-        _attempt(parent_id=ParentId("b" * 16)),
-        _attempt(model_id=ModelId("2")),
-    ),
-)
-def test_validate_execution_state_snapshot_rejects_attempt_routing(
-    attempt: AttemptProgress,
-) -> None:
-    """Require every attempt to reference the fixed parent and listed unit."""
-    snapshot = replace(_snapshot(), attempts=(attempt,))
-
-    with pytest.raises(ValueError):
-        validate_execution_state_snapshot(snapshot)
-
-
-def test_validate_execution_state_snapshot_rejects_duplicate_attempt_id() -> None:
-    """Require stored attempt identities to be unique."""
-    snapshot = replace(
-        _snapshot(),
-        attempts=(_attempt(), _attempt()),
-    )
-
-    with pytest.raises(ValueError, match=r"attempt identity"):
-        validate_execution_state_snapshot(snapshot)
-
-
-def test_validate_execution_state_snapshot_rejects_invalid_active_attempt() -> None:
-    """Resolve active reservations to attempts assigned to that worker."""
-    snapshot = replace(
-        _snapshot(),
-        workers=(
-            _worker(
-                active_attempt_ids=(AttemptId("unknown-attempt"),),
+def test_validate_execution_state_records_accepts_every_status() -> None:
+    """Accept every established Phase 1 attempt status."""
+    records = tuple(
+        _record(
+            worker_id=(
+                None
+                if status
+                in (
+                    AttemptStatus.NOT_ALLOCATED,
+                    AttemptStatus.ALLOCATION_FAILED,
+                )
+                else _WORKER_ID
             ),
+            attempt_id=AttemptId(f"attempt-{index}"),
+            attempt_status=status,
+        )
+        for index, status in enumerate(AttemptStatus)
+    )
+
+    validate_execution_state_records(records)
+
+
+def test_validate_execution_state_records_accepts_repeated_model_attempts() -> None:
+    """Accept distinct attempts belonging to the same model unit."""
+    records = (
+        _record(),
+        _record(
+            worker_id=_WORKER_ID,
+            attempt_id=AttemptId("attempt-2"),
+            attempt_status=AttemptStatus.MODEL_SYNCHRONIZING,
         ),
     )
 
-    with pytest.raises(ValueError, match=r"unknown active attempt"):
-        validate_execution_state_snapshot(snapshot)
+    validate_execution_state_records(records)
 
 
-def test_validate_execution_state_snapshot_rejects_worker_root_state() -> None:
-    """Exclude root reception state from worker snapshots."""
-    snapshot = replace(
-        _snapshot(node_role=NodeRole.WORKER),
-        receptions=_snapshot().receptions,
-    )
-
-    with pytest.raises(ValueError, match=r"must not contain"):
-        validate_execution_state_snapshot(snapshot)
+def test_validate_execution_state_records_rejects_wrong_outer_type() -> None:
+    """Reject a non-tuple record collection."""
+    with pytest.raises(TypeError):
+        validate_execution_state_records(cast(tuple[ExecutionStateRecord, ...], []))
 
 
-def test_validate_execution_state_snapshot_requires_one_worker_identity() -> None:
-    """Require worker snapshots to contain exactly one worker observation."""
-    snapshot = replace(
-        _snapshot(node_role=NodeRole.WORKER),
-        workers=(),
-    )
-
-    with pytest.raises(ValueError, match=r"exactly one"):
-        validate_execution_state_snapshot(snapshot)
+def test_validate_execution_state_records_rejects_wrong_record_type() -> None:
+    """Reject a tuple member that is not an execution-state record."""
+    with pytest.raises(TypeError, match=r"records\[0\]"):
+        validate_execution_state_records((cast(ExecutionStateRecord, None),))
 
 
-def test_validate_execution_state_snapshot_rejects_duplicate_operation_id() -> None:
-    """Require bounded operation identities to be unique."""
-    operation = BoundedOperation(
-        operation_id=OperationId("operation-1"),
-        kind=OperationKind.TRANSFER,
-        context=TraceContext(
-            stage="result_transfer",
-            operation_id=OperationId("operation-1"),
+@pytest.mark.parametrize(
+    "record",
+    (
+        _record(parent_id=ParentId("invalid")),
+        _record(model_id=ModelId("01")),
+        _record(attempt_id=AttemptId("")),
+        _record(worker_id=WorkerId("")),
+    ),
+)
+def test_validate_execution_state_records_rejects_invalid_identifier(
+    record: ExecutionStateRecord,
+) -> None:
+    """Reject invalid managed or opaque identities."""
+    with pytest.raises(ValueError):
+        validate_execution_state_records((record,))
+
+
+def test_validate_execution_state_records_rejects_invalid_label_type() -> None:
+    """Reject a model label outside the standardized string family."""
+    record = _record(model_label=cast(ScalarLabel, 1))
+
+    with pytest.raises(TypeError, match="model_label"):
+        validate_execution_state_records((record,))
+
+
+def test_validate_execution_state_records_rejects_invalid_status_type() -> None:
+    """Reject a raw string in place of an AttemptStatus member."""
+    record = _record(attempt_status=cast(AttemptStatus, "not_allocated"))
+
+    with pytest.raises(TypeError, match="attempt_status"):
+        validate_execution_state_records((record,))
+
+
+def test_validate_execution_state_records_rejects_parent_mismatch() -> None:
+    """Require every row in one file to identify the same parent."""
+    records = (
+        _record(),
+        _record(
+            parent_id=ParentId("b" * 16),
+            attempt_id=AttemptId("attempt-2"),
         ),
-        attempt_limit=2,
-        attempts_made=0,
-        status=OperationStatus.PENDING,
-        last_failure=None,
-    )
-    snapshot = replace(
-        _snapshot(),
-        operations=(operation, operation),
     )
 
-    with pytest.raises(ValueError, match=r"operation_id must be unique"):
-        validate_execution_state_snapshot(snapshot)
+    with pytest.raises(ValueError, match="parent_id"):
+        validate_execution_state_records(records)
 
 
-def test_validate_execution_state_snapshot_checks_operation_failure_links() -> None:
-    """Require stored operation-failure origins to resolve."""
-    operation_id = OperationId("operation-1")
-    context = TraceContext(
-        stage="result_transfer",
-        operation_id=operation_id,
-    )
-    failure = FailureRecord(
-        failure_id=FailureId("failure-1"),
-        scope=FailureScope.RESULT_TRANSFER,
-        context=context,
-        exception_type="TransferError",
-        message="Transfer failed.",
-        traceback="",
-        origin_failure_id=FailureId("missing-origin"),
-    )
-    operation = BoundedOperation(
-        operation_id=operation_id,
-        kind=OperationKind.TRANSFER,
-        context=context,
-        attempt_limit=2,
-        attempts_made=1,
-        status=OperationStatus.FAILED,
-        last_failure=failure,
-    )
-    snapshot = replace(_snapshot(), operations=(operation,))
+def test_validate_execution_state_records_rejects_duplicate_attempt_id() -> None:
+    """Require attempt identities to be unique within the parent."""
+    with pytest.raises(ValueError, match="attempt_id"):
+        validate_execution_state_records((_record(), _record()))
 
-    with pytest.raises(ValueError, match=r"origin_failure_id"):
-        validate_execution_state_snapshot(snapshot)
+
+@pytest.mark.parametrize(
+    "second",
+    (
+        _record(
+            model_label="different-label",
+            attempt_id=AttemptId("attempt-2"),
+        ),
+        _record(
+            model_id=ModelId("2"),
+            attempt_id=AttemptId("attempt-2"),
+        ),
+    ),
+)
+def test_validate_execution_state_records_rejects_model_association_change(
+    second: ExecutionStateRecord,
+) -> None:
+    """Preserve the one-to-one model identity and label association."""
+    with pytest.raises(ValueError):
+        validate_execution_state_records((_record(), second))
