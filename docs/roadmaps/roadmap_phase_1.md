@@ -611,8 +611,9 @@ and checked against that result when loaded. It is not another authoritative sta
   The envelope's failure list describes scientific computation, not later data preparation, data synchronization,
   worker management, result transfer, result persistence, configuration, startup, or worker-process incidents.
   Those failures remain at their owning boundaries.
-- Interruption/cancellation is not a fabricated reconstruction or primary-validation failure or complete result. A
-  stopped attempt is represented by Section 7's state; this phase does not define a new cancelled result bundle.
+- Parent interruption, connection loss, duplicate abortion, and operational attempt failures are not fabricated
+  reconstruction or primary-validation failures and do not create scientific result outcomes. Their attempt-state
+  observations belong to Section 7. This phase does not define a cancelled result bundle.
 - One envelope describes one attempt; result-bundle files, completion publication, report loading, and user-facing
   rendering are later component responsibilities. At most one accepted result per unit is a separate root invariant.
 
@@ -631,17 +632,18 @@ the notation does not authorize bundling helpers with their caller.
 
 ## 7. Orthogonal state and bounded-operation records
 
-These are immutable observations owned by the indicated component. Phase 1 validators check internally consistent
-snapshots; they do not implement events, permitted-transition tables, allocation policy, stop delivery, readiness
-probes, result arbitration, retry loops, or recovery. Later components replace snapshots under their own authority.
+These are immutable internal observations owned by the indicated component. Phase 1 validators check internally
+consistent snapshots; they do not implement events, permitted-transition tables, allocation policy, stop delivery,
+readiness probes, result arbitration, retry loops, persistence, or recovery. Later components replace snapshots under
+their own authority.
 
-Identify each observation’s owner and whether it is an independent fact or a derived summary, especially for parent
-progress and worker availability. Derive convenience summaries where practical and validate intentionally stored
-summaries against their source facts.
+The shared `AttemptStatus` vocabulary covers the approved root-observed attempt workflow and the applicable
+worker-observed stages. The later minimal `execution_state.csv` representation does not replace or remove the internal
+stop, process, readiness, bounded-operation, reception, persistence, acceptance, and detailed failure records defined
+here.
 
-Preserve independent stop, process, readiness, selection, receipt, persistence, and acceptance observations. These
-shared contracts remain in Phase 1; durable mechanisms belong to Phase 2, and runtime transitions and scheduling belong
-to their later phases.
+Identify each observation’s owner and whether it is an independent fact or a derived summary. Derive convenience
+summaries where practical and validate intentionally stored summaries against their source facts.
 
 ### 7.1 Vocabulary and fields
 
@@ -649,9 +651,9 @@ to their later phases.
 | --- | --- |
 | `ExecutionStatus` | `not_started`, `running`, `interrupted`, `settled` |
 | `ParentProgress` | `parent_id: ParentId`, `execution_status: ExecutionStatus` |
-| `AttemptStatus` | `allocated`, `running`, `result_ready`, `stopped` |
+| `AttemptStatus` | `not_allocated`, `allocation_failed`, `model_synchronizing`, `model_synchronized`, `model_synchronizing_failed`, `running`, `attempt_finished_without_error`, `attempt_finished_with_error`, `attempt_failed`, `result_synchronizing`, `result_synchronized`, `result_synchronization_failed`, `interrupted`, `connection_loss`, `aborted` |
 | `StopStatus` | `none`, `requested`, `observed` |
-| `StopReason` | `parent_interrupted`, `parent_cancelled`, `parent_superseded`, `duplicate_accepted` |
+| `StopReason` | `parent_interrupted`, `duplicate_accepted` |
 | `StopDisposition` | `status: StopStatus`, `reason: StopReason | None` |
 | `AttemptProgress` | `inputs: AttemptInputs`, `status: AttemptStatus`, `stop: StopDisposition`, `first_started_at: float | None`, `result_artifact_id: ArtifactId | None` |
 | `WorkerAvailability` | `unavailable`, `available`; usability is separate from occupied capacity. |
@@ -667,20 +669,26 @@ to their later phases.
 | `PersistenceStatus` | `not_started`, `incomplete`, `complete` |
 | `ReceptionRecord` | `parent_id: ParentId`, `model_id: ModelId`, `selected_attempt_id: AttemptId | None`, `receipt: ReceiptStatus`, `persistence: PersistenceStatus`, `result_artifact_id: ArtifactId | None`, `accepted: bool` |
 
-`first_started_at` is a finite, nonnegative UTC Unix timestamp in seconds describing an observed execution start;
-it is not used as a timer here. The coordinator later derives a unit's first execution start from its attempts for
-oldest-running duplicate selection. Clock acquisition, ordering ties, and scheduling remain later algorithms.
+`first_started_at` is a finite, nonnegative UTC Unix timestamp in seconds describing the first observed start of
+attempt-specific model synchronization or local handoff; it is not used as a timer here.
 
-Parent dataset/configuration/partition readiness and reusable root-side model-artifact preparation precede attempt
-allocation and are outside the attempt lifecycle. `allocated` fixes the attempt identity, unit, and worker but has
-no start timestamp because attempt-specific model synchronization or processing has not begun. `running` begins
-when the worker starts attempt-specific model synchronization or local handoff; `first_started_at` records that
-boundary. Synchronization may transfer the prepared model input, reuse an already available valid representation,
-or establish applicable local access without retransmitting the parent dataset. Running continues through model
-loading/reconstruction, evaluation, report and optional influence computation, and publication of the complete
-worker-side result artifact. Publication changes the status to `result_ready`. Reception selection, delivery,
-persistence acknowledgement, and bounded resend remain part of the attempt lifecycle but are represented by the
-separate reception, persistence, and bounded-operation records rather than another attempt status.
+`not_allocated` and `allocation_failed` are root-side pre-assignment states. They belong to the shared status vocabulary
+but cannot appear in `AttemptProgress`, whose `AttemptInputs` requires an established worker identity.
+
+After assignment, model synchronization begins at `model_synchronizing`; there is no separate allocated state.
+`model_synchronized` records completion of that stage, and `running` covers reconstruction, evaluation, reporting, and
+worker-side bundle construction. `model_synchronizing_failed` and `attempt_failed` terminate the attempt without a
+complete result artifact.
+
+`attempt_finished_without_error` and `attempt_finished_with_error` require a complete worker-side result artifact.
+The latter records a complete valid bundle containing scientific failure information. `result_synchronizing`,
+`result_synchronized`, and `result_synchronization_failed` retain that artifact reference while describing result
+delivery and publication.
+
+`interrupted`, `connection_loss`, and `aborted` may be observed before or after processing starts and may therefore
+have no start timestamp or result artifact. Their status does not prove worker cleanup. Detailed failures remain in
+`FailureRecord`, result provenance, bounded-operation records, and logs rather than being encoded into additional
+attempt-status values.
 
 The operation vocabulary includes only the architecturally required bounded operations. Add another kind only when
 its owning phase needs it and approves that contract amendment; do not make scientific fitting retryable by treating
@@ -690,15 +698,18 @@ it as an operation of these kinds.
 
 - Root control owns consolidation and parent execution observations. `settled` describes execution handling, not an
   alternate acceptance bit; an exhausted delivery may leave an unaccepted unit. Worker inactivity is a separate fact.
-- Worker control owns attempt execution/stop observations. Running requires a start timestamp; allocated has none.
-  Result-ready requires a start timestamp and a completed result artifact reference. Stopped attempts may have
-  started or may have been stopped before execution; stopping does not imply a result bundle or stopped worker process.
-  Result artifacts are allowed only for result-ready or stopped attempts with an already completed result and
-  a start timestamp.
-- Stop `none` has no reason; requested/observed requires a reason. `stopped` requires observed stop. Result-ready may
-  coexist with requested/observed stop because a terminal attempt needs no new evaluation loop to end unnecessary
-  handling. Allocated/running attempts may have no stop or a requested stop, but not an observed stop. Active work can
-  be marked requested while still running; edits elsewhere do not alter its inputs.
+- `AttemptProgress` describes only an attempt with an established worker assignment. It rejects `not_allocated` and
+  `allocation_failed`. Model synchronization, execution, completion, and result-synchronization states require a start
+  timestamp where specified by Section 7.1.
+- `attempt_finished_without_error`, `attempt_finished_with_error`, `result_synchronizing`, `result_synchronized`, and
+  `result_synchronization_failed` require a completed result artifact. Model synchronization, `running`,
+  `model_synchronizing_failed`, and `attempt_failed` must not claim one.
+- `interrupted`, `connection_loss`, and `aborted` may retain an already published artifact, but any artifact requires
+  an established start timestamp.
+- Stop `none` has no reason; requested or observed stop requires a reason. Parent interruption and duplicate acceptance
+  are the only cooperative-stop reasons. Stop disposition remains a more detailed internal observation than the
+  attempt-status value. An active model-synchronization, running, or result-synchronization state cannot coexist with
+  an already observed stop.
 - Configured worker membership is separate from availability. Disconnection makes the worker
   unavailable for new allocations but preserves its assigned attempt identities. Unknown
   process status after lost contact is not proof of process failure.
@@ -776,7 +787,7 @@ Root coordination owns one `ReceptionRecord` per `(parent_id, model_id)` pair, c
 | --- | --- | --- |
 | `validate_parent_progress(value: ParentProgress) -> None` | Validate parent identity and execution tag, independently of consolidation. | All tags; invalid tag; no inferred acceptance/consolidation transition. |
 | `validate_stop_disposition(value: StopDisposition) -> None` | Check stop status/reason pairing. | None without reason; requested/observed with each reason; invalid pairs. |
-| `validate_attempt_progress(value: AttemptProgress, *, parent: ParentEvaluation) -> None` | Check attempt context, status/start/artifact/stop consistency. | Allocated/running/result-ready; stop while running; stopped before start; terminal handling stop; invalid timestamp; no result created. |
+| `validate_attempt_progress(value: AttemptProgress, *, parent: ParentEvaluation) -> None` | Check assigned-attempt context, approved status/start/artifact relationships, and independent stop consistency. | Every assigned-attempt status category; reject pre-assignment states; missing required start/artifact; premature artifact; artifact without start; observed stop during active processing; invalid timestamp; no transition, persistence, or result inference. |
 | `validate_worker_observation(value: WorkerObservation) -> None` | Check usability prerequisites, known/unknown positive capacity, unique valid reserved-attempt IDs, and unique parent readiness. | Available worker with zero, some, or all slots occupied; unavailable worker retaining multiple attempts; unknown capacity; invalid/bool capacity; duplicate attempt IDs; reservations exceeding a prospectively lowered limit; no scheduling or mutation. |
 | `validate_bounded_operation(value: BoundedOperation) -> None` | Check count bounds, status, last-error context, and operation kind. | Zero/past-limit counts; bool rejected; success after retries; failed/exhausted; cancelled; distinct connection round identity; no budget reset or reevaluation. |
 | `validate_reception_record(value: ReceptionRecord, *, attempts: tuple[AttemptInputs, ...]) -> None` | Validate parent/model identifiers, selected-attempt identity and parent/model agreement, and receipt/persistence/acceptance prerequisites. | Invalid parent/model IDs even before selection; unknown selected attempt; mismatched parent or model; incomplete bundle reception; complete persistence before acceptance; accepted failure outcome uses same facts; absent result artifact; no persistence I/O. |
@@ -872,7 +883,7 @@ approved unit. Generated dataclass methods do not imply planned custom methods.
 | 4 | `FailureScope`; `TraceContext`; `FailureRecord` | `validate_trace_context`; `validate_failure_record`; `validate_failure_links` | `tests/contracts/test_failure.py` |
 | 5 | `RegressionPredictions`; `ClassificationPredictions`; `PredictionBatch` | `validate_regression_predictions`; `validate_classification_predictions` | `tests/contracts/test_prediction.py` |
 | 6 | `ReportStatus`; `ReportOutcome`; `EvaluationOutcome`; `AttemptResult` | `validate_report_outcome`; `validate_attempt_result`; `derive_evaluation_outcome` | `tests/contracts/test_result.py` |
-| 7 | Execution/attempt/stop enums; `ParentProgress`; `StopDisposition`; `AttemptProgress` | `validate_parent_progress`; `validate_stop_disposition`; `validate_attempt_progress` | `tests/contracts/test_state.py` |
+| 7 | Execution/attempt/stop enums with the approved attempt vocabulary; `ParentProgress`; `StopDisposition`; `AttemptProgress` | `validate_parent_progress`; `validate_stop_disposition`; `validate_attempt_progress` | `tests/contracts/test_state.py` |
 | 8 | Worker/ownership/compatibility enums; `ParentContextReadiness`; `WorkerObservation` | `validate_worker_observation` | `tests/contracts/test_state.py` |
 | 9 | Operation enums; `BoundedOperation` | `validate_bounded_operation` | `tests/contracts/test_state.py` |
 | 10 | Receipt/persistence enums; `ReceptionRecord` | `validate_reception_record`; `validate_reception_set` | `tests/contracts/test_state.py` |
@@ -976,6 +987,10 @@ Plan approval and implementation-unit approval are separate requirements.
    version-switching checks, but the inspected `pyproject.toml` has dependencies and quality settings without those
    explicit commands. This is not a contradiction in Phase 1's scientific or record contracts and does not block this
    no-rebuild plan. Resolve the actual commands before an authorized documentation rebuild.
+3. **Stale attempt-state vocabulary:** Unit 7 still described the earlier `allocated`, `result_ready`, and `stopped`
+   model and cancellation/supersession stop reasons. This revision replaces only that vocabulary and its directly
+   dependent invariants. It retains the internal observation, stop, failure, operation, and reception records; the
+   later six-column persistence schema does not replace those internal contracts.
 
 No conflicting behavioral requirement was found among root `AGENTS.md`, the architecture, and the Phase 1 scope.
 Their broad deferred-mechanism wording is compatible with choosing the minimal internal contracts here: Phase 1

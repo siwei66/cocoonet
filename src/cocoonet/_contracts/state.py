@@ -126,45 +126,87 @@ def validate_parent_progress(value: ParentProgress) -> None:
 
 
 class AttemptStatus(StrEnum):
-    """Identify the worker-observed processing state of an execution attempt.
+    """Identify the current workflow state of an execution attempt.
 
     Attributes
     ----------
-    ALLOCATED : str
-        The attempt identity, unit task, and worker are fixed, but
-        attempt-specific model synchronization or processing has not begun.
+    NOT_ALLOCATED : str
+        The root has created the attempt identity but has not established a
+        worker assignment.
+    ALLOCATION_FAILED : str
+        Worker allocation failed before an assignment was established.
+    MODEL_SYNCHRONIZING : str
+        Attempt-specific model synchronization or local handoff is active.
+    MODEL_SYNCHRONIZED : str
+        The attempt-specific model input is available on the worker.
+    MODEL_SYNCHRONIZING_FAILED : str
+        Model synchronization terminated without preparing a usable model
+        input.
     RUNNING : str
-        Attempt processing has begun with model synchronization or local
-        handoff and continues through reconstruction, evaluation, report
-        generation, and worker-side result publication.
-    RESULT_READY : str
-        The complete worker-side ``AttemptResult`` artifact has been
-        published and is ready for reception and persistence handling.
-    STOPPED : str
-        The worker has observed the requested cooperative stop for the
-        attempt.
+        Reconstruction, evaluation, reporting, or result construction is
+        active.
+    ATTEMPT_FINISHED_WITHOUT_ERROR : str
+        Scientific processing produced a complete valid result artifact
+        without recorded scientific failures.
+    ATTEMPT_FINISHED_WITH_ERROR : str
+        Scientific processing produced a complete valid result artifact
+        containing recorded scientific failures.
+    ATTEMPT_FAILED : str
+        Attempt processing terminated without a complete valid result
+        artifact.
+    RESULT_SYNCHRONIZING : str
+        Synchronization of the completed result artifact to root storage is
+        active.
+    RESULT_SYNCHRONIZED : str
+        The completed result artifact has been synchronized and atomically
+        published in root storage.
+    RESULT_SYNCHRONIZATION_FAILED : str
+        Result synchronization exhausted its permitted retries.
+    INTERRUPTED : str
+        Parent interruption terminated this attempt.
+    CONNECTION_LOSS : str
+        The parent-worker connection was lost while the attempt remained
+        unfinished or unreconciled.
+    ABORTED : str
+        Another attempt of the same model first published the authoritative
+        result bundle.
 
     Notes
     -----
-    These states describe worker-side attempt processing. Dataset and parent
-    context readiness precede allocation. Result reception, persistence,
-    acceptance, and bounded resend use separate records and do not introduce
-    additional attempt states.
+    These values identify workflow stages and terminal dispositions. They do
+    not contain detailed failure information. Failure causes and provenance
+    remain in ``FailureRecord``, result records, bounded-operation records, and
+    logs.
 
-    ``STOPPED`` may describe an attempt stopped before processing begins or
-    after it has produced a result. It does not imply that the worker process
-    is unavailable.
+    The vocabulary is shared by root and worker contracts. ``AttemptProgress``
+    contains assigned ``AttemptInputs`` and therefore cannot represent the
+    pre-assignment ``NOT_ALLOCATED`` or ``ALLOCATION_FAILED`` states.
 
-    This enum records observations only. It does not perform transitions or
-    define stop-disposition invariants.
+    ``StopDisposition`` independently records requested and observed
+    cooperative-stop handling. An attempt status does not prove worker-process
+    termination, artifact deletion, or cleanup.
+
+    This enum records observations only. It does not perform transitions,
+    retries, result arbitration, persistence, or recovery.
 
     Node usage scope: Shared - Used by both root and worker nodes.
     """
 
-    ALLOCATED = "allocated"
+    NOT_ALLOCATED = "not_allocated"
+    ALLOCATION_FAILED = "allocation_failed"
+    MODEL_SYNCHRONIZING = "model_synchronizing"
+    MODEL_SYNCHRONIZED = "model_synchronized"
+    MODEL_SYNCHRONIZING_FAILED = "model_synchronizing_failed"
     RUNNING = "running"
-    RESULT_READY = "result_ready"
-    STOPPED = "stopped"
+    ATTEMPT_FINISHED_WITHOUT_ERROR = "attempt_finished_without_error"
+    ATTEMPT_FINISHED_WITH_ERROR = "attempt_finished_with_error"
+    ATTEMPT_FAILED = "attempt_failed"
+    RESULT_SYNCHRONIZING = "result_synchronizing"
+    RESULT_SYNCHRONIZED = "result_synchronized"
+    RESULT_SYNCHRONIZATION_FAILED = "result_synchronization_failed"
+    INTERRUPTED = "interrupted"
+    CONNECTION_LOSS = "connection_loss"
+    ABORTED = "aborted"
 
 
 class StopStatus(StrEnum):
@@ -212,17 +254,10 @@ class StopReason(StrEnum):
     Attributes
     ----------
     PARENT_INTERRUPTED : str
-        The root interrupted the parent task. The fixed parent may later be
-        resumed under the established recovery rules.
-    PARENT_CANCELLED : str
-        The root cancelled the parent task, so its remaining attempt work is
-        no longer required.
-    PARENT_SUPERSEDED : str
-        A later parent replaced the earlier parent, so the earlier attempt
-        cannot contribute to the later parent's result set.
+        The root interrupted the parent task.
     DUPLICATE_ACCEPTED : str
-        Another attempt of the same parent/model unit produced the result
-        accepted by the root, so this duplicate is no longer required.
+        Another attempt of the same parent/model unit published the
+        authoritative result, so this attempt is no longer required.
 
     Notes
     -----
@@ -230,9 +265,9 @@ class StopReason(StrEnum):
     ``StopStatus`` separately records whether that request is pending or has
     been applied.
 
-    Connection loss, reconnection-round exhaustion, worker-process failure,
-    result retention, and cleanup are separate operational facts and are not
-    cooperative-stop reasons.
+    Connection loss is an attempt status and transport observation, not a
+    cooperative-stop reason. Cancellation and supersession are not separate
+    lifecycle operations.
 
     A reason does not imply worker-process termination, artifact deletion,
     dataset cleanup, or public-worker release.
@@ -241,8 +276,6 @@ class StopReason(StrEnum):
     """
 
     PARENT_INTERRUPTED = "parent_interrupted"
-    PARENT_CANCELLED = "parent_cancelled"
-    PARENT_SUPERSEDED = "parent_superseded"
     DUPLICATE_ACCEPTED = "duplicate_accepted"
 
 
@@ -334,30 +367,39 @@ def validate_stop_disposition(value: StopDisposition) -> None:
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class AttemptProgress:
-    """Record the worker-observed processing state of one execution attempt.
+    """Record internal progress observations for one assigned attempt.
 
     Parameters
     ----------
     inputs : AttemptInputs
         Fixed attempt, parent task, model unit, and assigned-worker identities.
     status : AttemptStatus
-        Current worker-observed attempt-processing state.
+        Current assigned-attempt workflow state or terminal disposition.
     stop : StopDisposition
         Independent cooperative-stop observation for the attempt.
     first_started_at : float | None
         Finite, nonnegative UTC Unix timestamp in seconds when attempt-specific
-        model synchronization or local handoff first began. It is ``None``
-        before processing starts.
+        model synchronization or local handoff first began. It is ``None`` if
+        processing never began.
     result_artifact_id : ArtifactId | None
         Identity of the completed worker-side result artifact, when one has
         been published for the attempt.
 
     Notes
     -----
-    This immutable record preserves attempt progress observations. It does not
-    validate their relationships, perform a transition, acquire a timestamp,
-    publish an artifact, deliver a result, or infer root-side acceptance.
-    Contract validation belongs to ``validate_attempt_progress``.
+    This record requires an established worker identity through
+    ``AttemptInputs``. It therefore does not represent the pre-assignment
+    ``NOT_ALLOCATED`` or ``ALLOCATION_FAILED`` statuses.
+
+    The record retains detailed start, artifact, and cooperative-stop
+    observations independently of the minimal persisted attempt-state table.
+    Detailed errors remain in their failure, result, operation, and logging
+    records.
+
+    Construction does not validate relationships, perform a transition,
+    acquire a timestamp, publish or synchronize an artifact, arbitrate
+    duplicates, or infer root-side completion. Contract validation belongs to
+    ``validate_attempt_progress``.
 
     Node usage scope: Shared - Used by both root and worker nodes.
     """
@@ -402,25 +444,29 @@ def _validate_attempt_progress_fields(value: AttemptProgress) -> None:
 
 
 def _validate_attempt_progress_state(value: AttemptProgress) -> None:
-    """Validate attempt processing state independently of parent routing.
+    """Validate assigned-attempt state independently of parent routing.
 
     Parameters
     ----------
     value
-        Attempt processing, stop, start, and result observations.
+        Assigned-attempt status, stop, start, and result observations.
 
     Raises
     ------
     TypeError
         If the record or an observation field has an incorrect runtime type.
     ValueError
-        If timestamp, artifact, stop, or lifecycle relationships are invalid.
+        If assignment scope, timestamp, artifact, stop, or lifecycle
+        relationships are invalid.
 
     Notes
     -----
     This validates status, stop disposition, start timestamp, result artifact,
     and their relationships. It validates neither parent/model membership nor
     the complete scientific parent configuration.
+
+    Detailed failure provenance remains owned by failure, result, operation,
+    and logging records rather than being inferred from a failure status.
 
     Node usage scope: Shared - Used by both root and worker nodes.
     """
@@ -436,54 +482,95 @@ def _validate_attempt_progress_state(value: AttemptProgress) -> None:
 
     error_context = f"Invalid attempt progress:\n  status: {value.status.value}"
 
-    # Allocation precedes attempt-specific model synchronization or processing.
-    if value.status is AttemptStatus.ALLOCATED and value.first_started_at is not None:
+    # AttemptProgress embeds a required worker identity and cannot represent
+    # root-side states that precede an established assignment.
+    if value.status in (
+        AttemptStatus.NOT_ALLOCATED,
+        AttemptStatus.ALLOCATION_FAILED,
+    ):
         raise ValueError(
             f"{error_context}\n"
-            "  expected: first_started_at to be None before processing begins\n"
-            f"  got: first_started_at is {value.first_started_at!r}"
+            "  expected: status to describe an attempt with an established "
+            "worker assignment\n"
+            f"  got: {value.status.value}"
         )
 
-    # Running and result-ready observations require an established start.
-    if value.status in (AttemptStatus.RUNNING, AttemptStatus.RESULT_READY) and value.first_started_at is None:
+    statuses_requiring_start = (
+        AttemptStatus.MODEL_SYNCHRONIZING,
+        AttemptStatus.MODEL_SYNCHRONIZED,
+        AttemptStatus.MODEL_SYNCHRONIZING_FAILED,
+        AttemptStatus.RUNNING,
+        AttemptStatus.ATTEMPT_FINISHED_WITHOUT_ERROR,
+        AttemptStatus.ATTEMPT_FINISHED_WITH_ERROR,
+        AttemptStatus.ATTEMPT_FAILED,
+        AttemptStatus.RESULT_SYNCHRONIZING,
+        AttemptStatus.RESULT_SYNCHRONIZED,
+        AttemptStatus.RESULT_SYNCHRONIZATION_FAILED,
+    )
+
+    # Processing and result-handling stages after assignment require evidence
+    # that attempt-specific work began.
+    if value.status in statuses_requiring_start and value.first_started_at is None:
         raise ValueError(
             f"{error_context}\n" "  expected: first_started_at to be present\n" "  got: first_started_at is None"
         )
 
-    # Result-ready means that a completed worker-side artifact was published.
-    if value.status is AttemptStatus.RESULT_READY and value.result_artifact_id is None:
+    statuses_requiring_artifact = (
+        AttemptStatus.ATTEMPT_FINISHED_WITHOUT_ERROR,
+        AttemptStatus.ATTEMPT_FINISHED_WITH_ERROR,
+        AttemptStatus.RESULT_SYNCHRONIZING,
+        AttemptStatus.RESULT_SYNCHRONIZED,
+        AttemptStatus.RESULT_SYNCHRONIZATION_FAILED,
+    )
+
+    # Finished scientific processing and every result-synchronization stage
+    # require the complete worker-side artifact they refer to.
+    if value.status in statuses_requiring_artifact and value.result_artifact_id is None:
         raise ValueError(
             f"{error_context}\n" "  expected: result_artifact_id to be present\n" "  got: result_artifact_id is None"
         )
 
-    # Allocated or running attempts cannot claim a completed result artifact.
-    if value.status in (AttemptStatus.ALLOCATED, AttemptStatus.RUNNING) and value.result_artifact_id is not None:
+    statuses_without_artifact = (
+        AttemptStatus.MODEL_SYNCHRONIZING,
+        AttemptStatus.MODEL_SYNCHRONIZED,
+        AttemptStatus.MODEL_SYNCHRONIZING_FAILED,
+        AttemptStatus.RUNNING,
+        AttemptStatus.ATTEMPT_FAILED,
+    )
+
+    # These stages precede a complete artifact or explicitly terminate without
+    # one.
+    if value.status in statuses_without_artifact and value.result_artifact_id is not None:
         raise ValueError(
             f"{error_context}\n"
             "  expected: result_artifact_id to be None\n"
             f"  got: result_artifact_id is {value.result_artifact_id!r}"
         )
 
-    # Any completed result artifact requires evidence that processing started.
+    # A retained artifact in an interrupted, disconnected, or aborted attempt
+    # still requires evidence that attempt processing began.
     if value.result_artifact_id is not None and value.first_started_at is None:
         raise ValueError(
             f"{error_context}\n"
             "  expected: first_started_at to accompany result_artifact_id\n"
-            f"  got: result_artifact_id is {value.result_artifact_id!r} and first_started_at is None"
+            f"  got: result_artifact_id is {value.result_artifact_id!r} "
+            "and first_started_at is None"
         )
 
-    # Stopped processing requires the worker to have applied the stop request.
-    if value.status is AttemptStatus.STOPPED and value.stop.status is not StopStatus.OBSERVED:
+    active_statuses = (
+        AttemptStatus.MODEL_SYNCHRONIZING,
+        AttemptStatus.MODEL_SYNCHRONIZED,
+        AttemptStatus.RUNNING,
+        AttemptStatus.RESULT_SYNCHRONIZING,
+    )
+
+    # An observed cooperative stop ends active handling; requested stops may
+    # coexist with active work until the next cooperative boundary.
+    if value.status in active_statuses and value.stop.status is StopStatus.OBSERVED:
         raise ValueError(
             f"{error_context}\n"
-            "  expected: stop.status to be observed\n"
-            f"  got: stop.status is {value.stop.status.value}"
-        )
-
-    # Active or not-yet-started processing cannot already have observed a stop.
-    if value.status in (AttemptStatus.ALLOCATED, AttemptStatus.RUNNING) and value.stop.status is StopStatus.OBSERVED:
-        raise ValueError(
-            f"{error_context}\n" "  expected: stop.status not to be observed\n" "  got: stop.status is observed"
+            "  expected: stop.status not to be observed during active handling\n"
+            "  got: stop.status is observed"
         )
 
 

@@ -328,17 +328,41 @@ def test_validate_parent_progress_rejects_wrong_outer_record() -> None:
 
 
 def test_attempt_status_has_exact_string_vocabulary() -> None:
-    """Expose only the planned worker-side attempt-processing states."""
+    """Expose only the approved attempt workflow states."""
     assert tuple(AttemptStatus) == (
-        AttemptStatus.ALLOCATED,
+        AttemptStatus.NOT_ALLOCATED,
+        AttemptStatus.ALLOCATION_FAILED,
+        AttemptStatus.MODEL_SYNCHRONIZING,
+        AttemptStatus.MODEL_SYNCHRONIZED,
+        AttemptStatus.MODEL_SYNCHRONIZING_FAILED,
         AttemptStatus.RUNNING,
-        AttemptStatus.RESULT_READY,
-        AttemptStatus.STOPPED,
+        AttemptStatus.ATTEMPT_FINISHED_WITHOUT_ERROR,
+        AttemptStatus.ATTEMPT_FINISHED_WITH_ERROR,
+        AttemptStatus.ATTEMPT_FAILED,
+        AttemptStatus.RESULT_SYNCHRONIZING,
+        AttemptStatus.RESULT_SYNCHRONIZED,
+        AttemptStatus.RESULT_SYNCHRONIZATION_FAILED,
+        AttemptStatus.INTERRUPTED,
+        AttemptStatus.CONNECTION_LOSS,
+        AttemptStatus.ABORTED,
     )
-    assert AttemptStatus.ALLOCATED == "allocated"
-    assert AttemptStatus.RUNNING == "running"
-    assert AttemptStatus.RESULT_READY == "result_ready"
-    assert AttemptStatus.STOPPED == "stopped"
+    assert tuple(status.value for status in AttemptStatus) == (
+        "not_allocated",
+        "allocation_failed",
+        "model_synchronizing",
+        "model_synchronized",
+        "model_synchronizing_failed",
+        "running",
+        "attempt_finished_without_error",
+        "attempt_finished_with_error",
+        "attempt_failed",
+        "result_synchronizing",
+        "result_synchronized",
+        "result_synchronization_failed",
+        "interrupted",
+        "connection_loss",
+        "aborted",
+    )
 
 
 def test_stop_status_has_exact_string_vocabulary() -> None:
@@ -354,16 +378,12 @@ def test_stop_status_has_exact_string_vocabulary() -> None:
 
 
 def test_stop_reason_has_exact_string_vocabulary() -> None:
-    """Expose only the planned reasons for cooperative attempt stopping."""
+    """Expose only the approved cooperative-stop reasons."""
     assert tuple(StopReason) == (
         StopReason.PARENT_INTERRUPTED,
-        StopReason.PARENT_CANCELLED,
-        StopReason.PARENT_SUPERSEDED,
         StopReason.DUPLICATE_ACCEPTED,
     )
     assert StopReason.PARENT_INTERRUPTED == "parent_interrupted"
-    assert StopReason.PARENT_CANCELLED == "parent_cancelled"
-    assert StopReason.PARENT_SUPERSEDED == "parent_superseded"
     assert StopReason.DUPLICATE_ACCEPTED == "duplicate_accepted"
 
 
@@ -392,7 +412,7 @@ def test_stop_disposition_rejects_field_mutation() -> None:
     """Prevent reassignment of a cooperative-stop observation."""
     disposition = StopDisposition(
         status=StopStatus.REQUESTED,
-        reason=StopReason.PARENT_CANCELLED,
+        reason=StopReason.PARENT_INTERRUPTED,
     )
 
     with pytest.raises(FrozenInstanceError):
@@ -439,13 +459,13 @@ def test_validate_stop_disposition_accepts_stop_with_each_reason(
         (
             StopDisposition(
                 status=StopStatus.NONE,
-                reason=StopReason.PARENT_CANCELLED,
+                reason=StopReason.PARENT_INTERRUPTED,
             ),
             (
                 "Invalid stop disposition:\n"
                 "  status: none\n"
                 "  expected: reason to be None\n"
-                "  got: reason is parent_cancelled"
+                "  got: reason is parent_interrupted"
             ),
         ),
         (
@@ -546,21 +566,21 @@ def test_attempt_progress_preserves_attempt_observation() -> None:
     )
     progress = AttemptProgress(
         inputs=inputs,
-        status=AttemptStatus.RESULT_READY,
+        status=AttemptStatus.ATTEMPT_FINISHED_WITHOUT_ERROR,
         stop=stop,
         first_started_at=1_700_000_000.5,
         result_artifact_id=ArtifactId("artifact-a"),
     )
     same = AttemptProgress(
         inputs=inputs,
-        status=AttemptStatus.RESULT_READY,
+        status=AttemptStatus.ATTEMPT_FINISHED_WITHOUT_ERROR,
         stop=stop,
         first_started_at=1_700_000_000.5,
         result_artifact_id=ArtifactId("artifact-a"),
     )
 
     assert progress.inputs == inputs
-    assert progress.status is AttemptStatus.RESULT_READY
+    assert progress.status is AttemptStatus.ATTEMPT_FINISHED_WITHOUT_ERROR
     assert progress.stop == stop
     assert progress.first_started_at == 1_700_000_000.5
     assert progress.result_artifact_id == ArtifactId("artifact-a")
@@ -576,12 +596,12 @@ def test_attempt_progress_rejects_field_mutation() -> None:
             model_id=ModelId("model-a"),
             worker_id=WorkerId("worker-a"),
         ),
-        status=AttemptStatus.ALLOCATED,
+        status=AttemptStatus.MODEL_SYNCHRONIZING,
         stop=StopDisposition(
             status=StopStatus.NONE,
             reason=None,
         ),
-        first_started_at=None,
+        first_started_at=1.0,
         result_artifact_id=None,
     )
 
@@ -596,9 +616,21 @@ def test_attempt_progress_rejects_field_mutation() -> None:
     ("status", "stop", "first_started_at", "result_artifact_id"),
     (
         (
-            AttemptStatus.ALLOCATED,
+            AttemptStatus.MODEL_SYNCHRONIZING,
             StopDisposition(status=StopStatus.NONE, reason=None),
+            1.0,
             None,
+        ),
+        (
+            AttemptStatus.MODEL_SYNCHRONIZED,
+            StopDisposition(status=StopStatus.NONE, reason=None),
+            1.0,
+            None,
+        ),
+        (
+            AttemptStatus.MODEL_SYNCHRONIZING_FAILED,
+            StopDisposition(status=StopStatus.NONE, reason=None),
+            1.0,
             None,
         ),
         (
@@ -607,34 +639,67 @@ def test_attempt_progress_rejects_field_mutation() -> None:
                 status=StopStatus.REQUESTED,
                 reason=StopReason.PARENT_INTERRUPTED,
             ),
-            1_700_000_000.0,
+            1.0,
             None,
         ),
         (
-            AttemptStatus.RESULT_READY,
-            StopDisposition(
-                status=StopStatus.OBSERVED,
-                reason=StopReason.DUPLICATE_ACCEPTED,
-            ),
-            1_700_000_000.0,
+            AttemptStatus.ATTEMPT_FINISHED_WITHOUT_ERROR,
+            StopDisposition(status=StopStatus.NONE, reason=None),
+            1.0,
             ArtifactId("artifact-a"),
         ),
         (
-            AttemptStatus.STOPPED,
+            AttemptStatus.ATTEMPT_FINISHED_WITH_ERROR,
+            StopDisposition(status=StopStatus.NONE, reason=None),
+            1.0,
+            ArtifactId("artifact-a"),
+        ),
+        (
+            AttemptStatus.ATTEMPT_FAILED,
+            StopDisposition(status=StopStatus.NONE, reason=None),
+            1.0,
+            None,
+        ),
+        (
+            AttemptStatus.RESULT_SYNCHRONIZING,
+            StopDisposition(status=StopStatus.NONE, reason=None),
+            1.0,
+            ArtifactId("artifact-a"),
+        ),
+        (
+            AttemptStatus.RESULT_SYNCHRONIZED,
+            StopDisposition(status=StopStatus.NONE, reason=None),
+            1.0,
+            ArtifactId("artifact-a"),
+        ),
+        (
+            AttemptStatus.RESULT_SYNCHRONIZATION_FAILED,
+            StopDisposition(status=StopStatus.NONE, reason=None),
+            1.0,
+            ArtifactId("artifact-a"),
+        ),
+        (
+            AttemptStatus.INTERRUPTED,
             StopDisposition(
                 status=StopStatus.OBSERVED,
-                reason=StopReason.PARENT_CANCELLED,
+                reason=StopReason.PARENT_INTERRUPTED,
             ),
             None,
             None,
         ),
         (
-            AttemptStatus.STOPPED,
+            AttemptStatus.CONNECTION_LOSS,
+            StopDisposition(status=StopStatus.NONE, reason=None),
+            1.0,
+            None,
+        ),
+        (
+            AttemptStatus.ABORTED,
             StopDisposition(
                 status=StopStatus.OBSERVED,
                 reason=StopReason.DUPLICATE_ACCEPTED,
             ),
-            1_700_000_000.0,
+            1.0,
             ArtifactId("artifact-a"),
         ),
     ),
@@ -645,7 +710,7 @@ def test_validate_attempt_progress_accepts_valid_observations(
     first_started_at: float | None,
     result_artifact_id: ArtifactId | None,
 ) -> None:
-    """Accept planned attempt states without creating or changing evidence."""
+    """Accept assigned-attempt states without creating or changing evidence."""
     parent = _valid_parent_evaluation()
     progress = _attempt_progress(
         parent=parent,
@@ -667,35 +732,56 @@ def test_validate_attempt_progress_accepts_valid_observations(
     ("status", "stop", "first_started_at", "result_artifact_id", "expected"),
     (
         (
-            AttemptStatus.ALLOCATED,
+            AttemptStatus.NOT_ALLOCATED,
             StopDisposition(status=StopStatus.NONE, reason=None),
-            1.0,
             None,
-            "first_started_at to be None",
+            None,
+            "established worker assignment",
         ),
         (
-            AttemptStatus.RUNNING,
+            AttemptStatus.ALLOCATION_FAILED,
+            StopDisposition(status=StopStatus.NONE, reason=None),
+            None,
+            None,
+            "established worker assignment",
+        ),
+        (
+            AttemptStatus.MODEL_SYNCHRONIZING,
             StopDisposition(status=StopStatus.NONE, reason=None),
             None,
             None,
             "first_started_at to be present",
         ),
         (
-            AttemptStatus.RESULT_READY,
+            AttemptStatus.ATTEMPT_FINISHED_WITHOUT_ERROR,
             StopDisposition(status=StopStatus.NONE, reason=None),
             1.0,
             None,
             "result_artifact_id to be present",
         ),
         (
-            AttemptStatus.STOPPED,
+            AttemptStatus.RESULT_SYNCHRONIZING,
+            StopDisposition(status=StopStatus.NONE, reason=None),
+            1.0,
+            None,
+            "result_artifact_id to be present",
+        ),
+        (
+            AttemptStatus.RUNNING,
+            StopDisposition(status=StopStatus.NONE, reason=None),
+            1.0,
+            ArtifactId("artifact-a"),
+            "result_artifact_id to be None",
+        ),
+        (
+            AttemptStatus.ABORTED,
             StopDisposition(
-                status=StopStatus.REQUESTED,
-                reason=StopReason.PARENT_CANCELLED,
+                status=StopStatus.OBSERVED,
+                reason=StopReason.DUPLICATE_ACCEPTED,
             ),
             None,
-            None,
-            "stop.status to be observed",
+            ArtifactId("artifact-a"),
+            "first_started_at to accompany result_artifact_id",
         ),
         (
             AttemptStatus.RUNNING,
@@ -705,24 +791,7 @@ def test_validate_attempt_progress_accepts_valid_observations(
             ),
             1.0,
             None,
-            "stop.status not to be observed",
-        ),
-        (
-            AttemptStatus.ALLOCATED,
-            StopDisposition(status=StopStatus.NONE, reason=None),
-            None,
-            ArtifactId("artifact-a"),
-            "result_artifact_id to be None",
-        ),
-        (
-            AttemptStatus.STOPPED,
-            StopDisposition(
-                status=StopStatus.OBSERVED,
-                reason=StopReason.PARENT_CANCELLED,
-            ),
-            None,
-            ArtifactId("artifact-a"),
-            "first_started_at to accompany result_artifact_id",
+            "stop.status not to be observed during active handling",
         ),
     ),
 )
@@ -733,7 +802,7 @@ def test_validate_attempt_progress_rejects_inconsistent_observation(
     result_artifact_id: ArtifactId | None,
     expected: str,
 ) -> None:
-    """Reject inconsistent attempt-status evidence without performing a transition."""
+    """Reject inconsistent attempt-status evidence without a transition."""
     parent = _valid_parent_evaluation()
     progress = _attempt_progress(
         parent=parent,
@@ -830,7 +899,7 @@ def test_validate_attempt_progress_rejects_empty_result_artifact_identity() -> N
     parent = _valid_parent_evaluation()
     progress = _attempt_progress(
         parent=parent,
-        status=AttemptStatus.RESULT_READY,
+        status=AttemptStatus.ATTEMPT_FINISHED_WITHOUT_ERROR,
         stop=StopDisposition(status=StopStatus.NONE, reason=None),
         first_started_at=1.0,
         result_artifact_id=ArtifactId(""),
@@ -852,9 +921,9 @@ def test_validate_attempt_progress_rejects_invalid_routing_context() -> None:
             model_id=parent.models[0].model_id,
             worker_id=WorkerId("worker-a"),
         ),
-        status=AttemptStatus.ALLOCATED,
+        status=AttemptStatus.MODEL_SYNCHRONIZING,
         stop=StopDisposition(status=StopStatus.NONE, reason=None),
-        first_started_at=None,
+        first_started_at=1.0,
         result_artifact_id=None,
     )
 
@@ -872,12 +941,12 @@ def test_validate_attempt_progress_rejects_invalid_stop_context() -> None:
     parent = _valid_parent_evaluation()
     progress = _attempt_progress(
         parent=parent,
-        status=AttemptStatus.ALLOCATED,
+        status=AttemptStatus.MODEL_SYNCHRONIZING,
         stop=StopDisposition(
             status=StopStatus.NONE,
-            reason=StopReason.PARENT_CANCELLED,
+            reason=StopReason.PARENT_INTERRUPTED,
         ),
-        first_started_at=None,
+        first_started_at=1.0,
         result_artifact_id=None,
     )
 
