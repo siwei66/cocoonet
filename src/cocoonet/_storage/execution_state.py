@@ -228,3 +228,139 @@ def encode_execution_state_csv(
         )
 
     return output.getvalue().encode("utf-8")
+
+
+def decode_execution_state_csv(  # noqa: C901
+    data: bytes,
+    /,
+) -> tuple[ExecutionStateRecord, ...]:
+    """Decode strict UTF-8 CSV into ordered execution-state records.
+
+    Parameters
+    ----------
+    data
+        Complete execution-state CSV bytes.
+
+    Returns
+    -------
+    tuple[ExecutionStateRecord, ...]
+        Validated records in their persisted order.
+
+    Raises
+    ------
+    TypeError
+        If ``data`` is not bytes.
+    ValueError
+        If UTF-8, header, newline, row, field, identity, status, uniqueness, or
+        model-association validation fails.
+
+    Notes
+    -----
+    The decoder accepts only the exact six-column schema. Empty ``worker_id``
+    fields reconstruct as ``None``; every other field remains required by its
+    owning validator.
+
+    This function performs no file I/O, transition, sorting, recovery, result
+    inspection, or model-completion inference.
+
+    Node usage scope: Shared - Used by root and worker storage.
+    """
+    validate_declared_types(
+        data,
+        expected_type=bytes,
+        field="data",
+    )
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("Execution-state CSV must not contain a UTF-8 BOM.")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError("Execution-state CSV must contain valid UTF-8.") from error
+
+    if not text:
+        raise ValueError("Execution-state CSV must contain the exact header.")
+    if not text.endswith("\n"):
+        raise ValueError("Execution-state CSV must end with a newline.")
+
+    # Reject carriage returns used as physical record endings while permitting
+    # them inside correctly quoted field content.
+    in_quotes = False
+    at_field_start = True
+    index = 0
+    while index < len(text):
+        character = text[index]
+
+        if in_quotes:
+            if character == '"':
+                if index + 1 < len(text) and text[index + 1] == '"':
+                    index += 2
+                    continue
+                in_quotes = False
+        elif character == '"' and at_field_start:
+            in_quotes = True
+            at_field_start = False
+        elif character == ",":
+            at_field_start = True
+        elif character == "\n":
+            at_field_start = True
+        elif character == "\r":
+            raise ValueError("Execution-state CSV physical records must use LF line endings.")
+        else:
+            at_field_start = False
+
+        index += 1
+
+    try:
+        rows = list(
+            csv.reader(
+                io.StringIO(text, newline=""),
+                delimiter=",",
+                strict=True,
+            )
+        )
+    except csv.Error as error:
+        raise ValueError("Execution-state CSV contains malformed CSV.") from error
+
+    if not rows or tuple(rows[0]) != EXECUTION_STATE_COLUMNS:
+        raise ValueError("Execution-state CSV must contain the exact six-column header.")
+
+    records: list[ExecutionStateRecord] = []
+    for row_index, row in enumerate(rows[1:], start=2):
+        if len(row) != len(EXECUTION_STATE_COLUMNS):
+            raise ValueError(
+                f"Execution-state CSV row {row_index} must contain exactly "
+                f"{len(EXECUTION_STATE_COLUMNS)} fields; got {len(row)}."
+            )
+
+        (
+            parent_id,
+            worker_id,
+            model_label,
+            model_id,
+            attempt_id,
+            attempt_status,
+        ) = row
+
+        try:
+            status = AttemptStatus(attempt_status)
+        except ValueError as error:
+            raise ValueError(
+                f"Execution-state CSV row {row_index} has unknown " f"attempt_status {attempt_status!r}."
+            ) from error
+
+        records.append(
+            ExecutionStateRecord(
+                parent_id=ParentId(parent_id),
+                worker_id=None if worker_id == "" else WorkerId(worker_id),
+                model_label=model_label,
+                model_id=ModelId(model_id),
+                attempt_id=AttemptId(attempt_id),
+                attempt_status=status,
+            )
+        )
+
+    result = tuple(records)
+    validate_execution_state_records(result)
+    return result

@@ -15,6 +15,7 @@ from cocoonet._contracts.identity import (
 from cocoonet._contracts.state import AttemptStatus
 from cocoonet._storage.execution_state import (
     ExecutionStateRecord,
+    decode_execution_state_csv,
     encode_execution_state_csv,
     validate_execution_state_records,
 )
@@ -241,14 +242,14 @@ def test_encode_execution_state_csv_quotes_non_ascii_text() -> None:
     """Encode non-ASCII labels and RFC-compatible special characters."""
     record = _record(
         worker_id=_WORKER_ID,
-        model_label='模型,"alpha"\nnext',
+        model_label='model—,"alpha"\nnext',
         attempt_status=AttemptStatus.RUNNING,
     )
 
     expected = (
         "parent_id,worker_id,model_label,model_id,attempt_id,"
         "attempt_status\n"
-        'aaaaaaaaaaaaaaaa,worker-1,"模型,""alpha""\nnext",'
+        'aaaaaaaaaaaaaaaa,worker-1,"model—,""alpha""\nnext",'
         "1,attempt-1,running\n"
     ).encode("utf-8")
 
@@ -261,3 +262,109 @@ def test_encode_execution_state_csv_validates_before_encoding() -> None:
 
     with pytest.raises(ValueError, match="attempt_id"):
         encode_execution_state_csv((_record(), duplicate))
+
+
+def test_decode_execution_state_csv_round_trips_ordered_records() -> None:
+    """Reconstruct typed records while preserving supplied row order."""
+    records = (
+        _record(),
+        _record(
+            worker_id=_WORKER_ID,
+            model_label='model—,"alpha"\nnext',
+            model_id=ModelId("2"),
+            attempt_id=AttemptId("attempt-2"),
+            attempt_status=AttemptStatus.RUNNING,
+        ),
+    )
+
+    assert decode_execution_state_csv(encode_execution_state_csv(records)) == records
+
+
+def test_decode_execution_state_csv_decodes_header_only() -> None:
+    """Decode the exact header as an empty record sequence."""
+    data = b"parent_id,worker_id,model_label,model_id,attempt_id," b"attempt_status\n"
+
+    assert decode_execution_state_csv(data) == ()
+
+
+def test_decode_execution_state_csv_rejects_wrong_input_type() -> None:
+    """Reject text supplied instead of encoded bytes."""
+    with pytest.raises(TypeError, match="data"):
+        decode_execution_state_csv(cast(bytes, "not-bytes"))
+
+
+@pytest.mark.parametrize(
+    "data",
+    (
+        b"",
+        (b"\xef\xbb\xbf" b"parent_id,worker_id,model_label,model_id,attempt_id," b"attempt_status\n"),
+        b"\xff",
+        (b"parent_id,worker_id,model_label,model_id,attempt_id," b"attempt_status"),
+        (b"parent_id,worker_id,model_label,model_id,attempt_id," b"attempt_status\r\n"),
+        (b"worker_id,parent_id,model_label,model_id,attempt_id," b"attempt_status\n"),
+    ),
+)
+def test_decode_execution_state_csv_rejects_invalid_document(
+    data: bytes,
+) -> None:
+    """Reject invalid encoding, BOM, newline, or header boundaries."""
+    with pytest.raises(ValueError):
+        decode_execution_state_csv(data)
+
+
+@pytest.mark.parametrize(
+    "row",
+    (
+        b"aaaaaaaaaaaaaaaa,,model-a,1,attempt-1\n",
+        (b"aaaaaaaaaaaaaaaa,,model-a,1,attempt-1," b"not_allocated,extra\n"),
+        b'aaaaaaaaaaaaaaaa,,"unclosed,1,attempt-1,not_allocated\n',
+    ),
+)
+def test_decode_execution_state_csv_rejects_malformed_row(
+    row: bytes,
+) -> None:
+    """Reject rows with invalid field counts or quoting."""
+    header = b"parent_id,worker_id,model_label,model_id,attempt_id," b"attempt_status\n"
+
+    with pytest.raises(ValueError):
+        decode_execution_state_csv(header + row)
+
+
+def test_decode_execution_state_csv_rejects_unknown_status() -> None:
+    """Reject a status outside the established Phase 1 vocabulary."""
+    data = (
+        b"parent_id,worker_id,model_label,model_id,attempt_id,"
+        b"attempt_status\n"
+        b"aaaaaaaaaaaaaaaa,,model-a,1,attempt-1,unknown\n"
+    )
+
+    with pytest.raises(ValueError, match="unknown attempt_status"):
+        decode_execution_state_csv(data)
+
+
+@pytest.mark.parametrize(
+    "rows",
+    (
+        b"invalid,,model-a,1,attempt-1,not_allocated\n",
+        (
+            b"aaaaaaaaaaaaaaaa,,model-a,1,attempt-1,not_allocated\n"
+            b"aaaaaaaaaaaaaaaa,worker-1,model-a,1,attempt-1,running\n"
+        ),
+        (
+            b"aaaaaaaaaaaaaaaa,,model-a,1,attempt-1,not_allocated\n"
+            b"aaaaaaaaaaaaaaaa,worker-1,different,1,attempt-2,running\n"
+        ),
+        (
+            b"aaaaaaaaaaaaaaaa,,model-a,1,attempt-1,not_allocated\n"
+            b"aaaaaaaaaaaaaaaa,worker-1,model-a,2,attempt-2,running\n"
+        ),
+    ),
+)
+def test_decode_execution_state_csv_rejects_invalid_records(
+    rows: bytes,
+) -> None:
+    """Apply Unit 21 identity, uniqueness, and association validation."""
+    header = b"parent_id,worker_id,model_label,model_id,attempt_id," b"attempt_status\n"
+
+    with pytest.raises(ValueError):
+        decode_execution_state_csv(header + rows)
