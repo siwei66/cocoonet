@@ -1,6 +1,8 @@
 """Tests for minimal durable execution-state record validation."""
 
-from dataclasses import FrozenInstanceError
+import asyncio
+from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -17,8 +19,11 @@ from cocoonet._storage.execution_state import (
     ExecutionStateRecord,
     decode_execution_state_csv,
     encode_execution_state_csv,
+    load_execution_state,
+    replace_execution_state,
     validate_execution_state_records,
 )
+from cocoonet._storage.publication import staged_file_path
 
 _PARENT_ID = ParentId("a" * 16)
 _MODEL_ID = ModelId("1")
@@ -368,3 +373,161 @@ def test_decode_execution_state_csv_rejects_invalid_records(
 
     with pytest.raises(ValueError):
         decode_execution_state_csv(header + rows)
+
+
+def test_replace_execution_state_writes_and_replaces_atomically(
+    tmp_path: Path,
+) -> None:
+    """Write initial state and replace mutable fields without reordering."""
+
+    async def exercise() -> None:
+        path = tmp_path / "execution_state.csv"
+        initial = _record()
+
+        await replace_execution_state(path, (initial,))
+        assert await load_execution_state(path) == (initial,)
+
+        assigned = replace(
+            initial,
+            worker_id=_WORKER_ID,
+            attempt_status=AttemptStatus.MODEL_SYNCHRONIZING,
+        )
+        appended = _record(
+            model_id=ModelId("2"),
+            model_label="model-b",
+            attempt_id=AttemptId("attempt-2"),
+        )
+
+        await replace_execution_state(path, (assigned, appended))
+
+        assert await load_execution_state(path) == (assigned, appended)
+        assert not staged_file_path(path).exists()
+
+    asyncio.run(exercise())
+
+
+def test_replace_execution_state_preserves_concurrently_appended_rows(
+    tmp_path: Path,
+) -> None:
+    """Serialize competing append proposals without losing either attempt."""
+
+    async def exercise() -> None:
+        path = tmp_path / "execution_state.csv"
+        initial = _record()
+        second = _record(
+            model_id=ModelId("2"),
+            model_label="model-b",
+            attempt_id=AttemptId("attempt-2"),
+        )
+        third = _record(
+            model_id=ModelId("3"),
+            model_label="model-c",
+            attempt_id=AttemptId("attempt-3"),
+        )
+
+        await replace_execution_state(path, (initial,))
+        await asyncio.gather(
+            replace_execution_state(path, (initial, second)),
+            replace_execution_state(path, (initial, third)),
+        )
+
+        assert await load_execution_state(path) == (
+            initial,
+            second,
+            third,
+        )
+
+    asyncio.run(exercise())
+
+
+def test_replace_execution_state_rejects_worker_reassignment(
+    tmp_path: Path,
+) -> None:
+    """Prevent an established worker identity from changing or becoming empty."""
+
+    async def exercise() -> None:
+        path = tmp_path / "execution_state.csv"
+        assigned = _record(
+            worker_id=_WORKER_ID,
+            attempt_status=AttemptStatus.RUNNING,
+        )
+        await replace_execution_state(path, (assigned,))
+
+        changed = replace(
+            assigned,
+            worker_id=WorkerId("worker-2"),
+        )
+        with pytest.raises(ValueError, match="worker_id"):
+            await replace_execution_state(path, (changed,))
+
+        cleared = replace(assigned, worker_id=None)
+        with pytest.raises(ValueError, match="worker_id"):
+            await replace_execution_state(path, (cleared,))
+
+        assert await load_execution_state(path) == (assigned,)
+
+    asyncio.run(exercise())
+
+
+def test_replace_execution_state_rejects_existing_row_reordering(
+    tmp_path: Path,
+) -> None:
+    """Reject a proposal that changes the published attempt identity order."""
+
+    async def exercise() -> None:
+        path = tmp_path / "execution_state.csv"
+        first = _record()
+        second = _record(
+            model_id=ModelId("2"),
+            model_label="model-b",
+            attempt_id=AttemptId("attempt-2"),
+        )
+        await replace_execution_state(path, (first, second))
+
+        with pytest.raises(ValueError, match="identity order"):
+            await replace_execution_state(path, (second, first))
+
+        assert await load_execution_state(path) == (first, second)
+
+    asyncio.run(exercise())
+
+
+def test_load_execution_state_ignores_stale_partial_file(
+    tmp_path: Path,
+) -> None:
+    """Read only final state and leave an unrelated stale staging file intact."""
+
+    async def exercise() -> None:
+        path = tmp_path / "execution_state.csv"
+        record = _record(
+            worker_id=_WORKER_ID,
+            attempt_status=AttemptStatus.RESULT_SYNCHRONIZED,
+        )
+        await replace_execution_state(path, (record,))
+
+        staging = staged_file_path(path)
+        staging.write_bytes(b"stale incomplete state")
+
+        assert await load_execution_state(path) == (record,)
+        assert staging.read_bytes() == b"stale incomplete state"
+
+    asyncio.run(exercise())
+
+
+def test_load_execution_state_does_not_require_result_bundle(
+    tmp_path: Path,
+) -> None:
+    """Return informational status without treating it as completion evidence."""
+
+    async def exercise() -> None:
+        path = tmp_path / "execution_state.csv"
+        record = _record(
+            worker_id=_WORKER_ID,
+            attempt_status=AttemptStatus.RESULT_SYNCHRONIZED,
+        )
+        await replace_execution_state(path, (record,))
+
+        assert not (tmp_path / "model_1").exists()
+        assert await load_execution_state(path) == (record,)
+
+    asyncio.run(exercise())

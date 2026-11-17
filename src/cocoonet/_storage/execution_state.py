@@ -1,8 +1,13 @@
 """Minimal durable execution-state record contracts."""
 
+import asyncio
 import csv
 import io
 from dataclasses import dataclass
+from pathlib import Path
+from weakref import WeakKeyDictionary
+
+import aiofiles
 
 from cocoonet._contracts.identity import (
     AttemptId,
@@ -15,8 +20,14 @@ from cocoonet._contracts.identity import (
 )
 from cocoonet._contracts.state import AttemptStatus
 from cocoonet._storage.paths import (
+    PathInput,
     _validate_parent_id,
     _validate_positive_decimal_identifier,
+    resolve_physical_path,
+)
+from cocoonet._storage.publication import (
+    publish_staged_file,
+    staged_file_path,
 )
 from cocoonet._type_validation import validate_declared_types
 
@@ -28,6 +39,11 @@ EXECUTION_STATE_COLUMNS: tuple[str, ...] = (
     "attempt_id",
     "attempt_status",
 )
+
+_EXECUTION_STATE_LOCKS: WeakKeyDictionary[
+    asyncio.AbstractEventLoop,
+    dict[Path, asyncio.Lock],
+] = WeakKeyDictionary()
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,3 +380,222 @@ def decode_execution_state_csv(  # noqa: C901
     result = tuple(records)
     validate_execution_state_records(result)
     return result
+
+
+def _execution_state_lock(path: Path, /) -> asyncio.Lock:
+    """Return the event-loop-local writer lock for one physical state file.
+
+    Parameters
+    ----------
+    path
+        Canonical physical path of the final execution-state file.
+
+    Returns
+    -------
+    asyncio.Lock
+        Lock shared by state replacements for this path in the current event
+        loop.
+
+    Notes
+    -----
+    Each root or worker owns one asynchronous writer event loop. Separating
+    locks by path prevents unrelated root and worker state files from blocking
+    one another.
+
+    Node usage scope: Shared - Used by root and worker state writers.
+    """
+    loop = asyncio.get_running_loop()
+    locks = _EXECUTION_STATE_LOCKS.get(loop)
+
+    if locks is None:
+        locks = {}
+        _EXECUTION_STATE_LOCKS[loop] = locks
+
+    lock = locks.get(path)
+    if lock is None:
+        lock = asyncio.Lock()
+        locks[path] = lock
+
+    return lock
+
+
+def _merge_execution_state_records(
+    current: tuple[ExecutionStateRecord, ...],
+    proposed: tuple[ExecutionStateRecord, ...],
+    /,
+) -> tuple[ExecutionStateRecord, ...]:
+    """Merge one proposed state revision without losing existing attempt rows.
+
+    Parameters
+    ----------
+    current
+        Currently published records in their preserved identity order.
+    proposed
+        Validated records supplied for the next state revision.
+
+    Returns
+    -------
+    tuple[ExecutionStateRecord, ...]
+        Updated existing rows followed by any newly proposed attempts.
+
+    Raises
+    ------
+    ValueError
+        If an existing identity is reordered or changed, an established worker
+        assignment is removed or changed, or the merged records violate the
+        execution-state record contract.
+
+    Notes
+    -----
+    Existing rows omitted from a stale concurrent proposal remain unchanged.
+    New attempt identities are appended after every already published row.
+    Attempt-status changes are accepted without applying transition policy.
+
+    Node usage scope: Shared - Used by root and worker state writers.
+    """
+    merged = list(current)
+    current_positions = {record.attempt_id: position for position, record in enumerate(current)}
+    next_current_position = 0
+    saw_new_attempt = False
+
+    for proposed_record in proposed:
+        current_position = current_positions.get(proposed_record.attempt_id)
+
+        if current_position is None:
+            saw_new_attempt = True
+            merged.append(proposed_record)
+            continue
+
+        if saw_new_attempt or current_position != next_current_position:
+            raise ValueError("Existing execution-state attempts must preserve their " "published identity order.")
+
+        current_record = current[current_position]
+        if (
+            proposed_record.parent_id != current_record.parent_id
+            or proposed_record.model_label != current_record.model_label
+            or proposed_record.model_id != current_record.model_id
+        ):
+            raise ValueError(
+                f"Existing attempt {proposed_record.attempt_id!r} must " "preserve its parent and model identity."
+            )
+
+        if current_record.worker_id is not None and proposed_record.worker_id != current_record.worker_id:
+            raise ValueError(
+                f"Existing attempt {proposed_record.attempt_id!r} must "
+                f"preserve assigned worker_id {current_record.worker_id!r}."
+            )
+
+        merged[current_position] = proposed_record
+        next_current_position += 1
+
+    result = tuple(merged)
+    validate_execution_state_records(result)
+    return result
+
+
+async def replace_execution_state(
+    path: PathInput,
+    records: tuple[ExecutionStateRecord, ...],
+    /,
+) -> None:
+    """Atomically replace one serialized execution-state CSV file.
+
+    Parameters
+    ----------
+    path
+        Final ``execution_state.csv`` path.
+    records
+        Proposed records containing existing rows in published order and any
+        new attempts after them.
+
+    Raises
+    ------
+    TypeError
+        If the path, sequence, record, or field has an incorrect type.
+    ValueError
+        If the path does not identify ``execution_state.csv`` or the proposed
+        revision violates schema, identity, ordering, or worker-assignment
+        requirements.
+    OSError
+        If asynchronous staging-file I/O fails.
+
+    Notes
+    -----
+    Validation and encoding finish before the staging file is opened. Updates
+    to the same physical path are serialized in the owning event loop.
+    Publication uses the focused mutable staged-file helper.
+
+    This function does not validate status transitions, inspect result bundles,
+    or infer model completion.
+
+    Node usage scope: Shared - Used by root and worker state writers.
+    """
+    staging = staged_file_path(path)
+    final = staging.with_name(staging.name.removesuffix(".partial"))
+
+    if final.name != "execution_state.csv":
+        raise ValueError(
+            "Execution-state replacement requires a final file named " f"'execution_state.csv'; got {str(final)!r}."
+        )
+
+    encoded = encode_execution_state_csv(records)
+    lock = _execution_state_lock(resolve_physical_path(final))
+
+    async with lock:
+        if final.exists():
+            current = await load_execution_state(final)
+            records = _merge_execution_state_records(current, records)
+            encoded = encode_execution_state_csv(records)
+
+        async with aiofiles.open(staging, "wb") as staging_handle:
+            await staging_handle.write(encoded)
+
+        publish_staged_file(final, replace=True)
+
+
+async def load_execution_state(
+    path: PathInput,
+    /,
+) -> tuple[ExecutionStateRecord, ...]:
+    """Load and decode one final execution-state CSV file.
+
+    Parameters
+    ----------
+    path
+        Final ``execution_state.csv`` path.
+
+    Returns
+    -------
+    tuple[ExecutionStateRecord, ...]
+        Validated records in persisted order.
+
+    Raises
+    ------
+    TypeError
+        If the path is not a supported string-producing path value.
+    ValueError
+        If the path does not identify ``execution_state.csv`` or the final
+        file does not contain a valid execution-state document.
+    OSError
+        If reading the final file fails.
+
+    Notes
+    -----
+    Only the final file is read. A sibling ``.partial`` file is ignored and
+    remains untouched. Loaded status claims do not establish result-bundle
+    existence or model completion.
+
+    Node usage scope: Shared - Used by root and worker state readers.
+    """
+    staging = staged_file_path(path)
+    final = staging.with_name(staging.name.removesuffix(".partial"))
+
+    if final.name != "execution_state.csv":
+        raise ValueError(
+            "Execution-state loading requires a final file named " f"'execution_state.csv'; got {str(final)!r}."
+        )
+
+    async with aiofiles.open(final, "rb") as final_handle:
+        data = await final_handle.read()
+
+    return decode_execution_state_csv(data)
