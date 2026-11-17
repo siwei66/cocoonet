@@ -1,0 +1,668 @@
+Ambiguities:
+
+The model is substantially cleaner. It treats `execution_state.csv` as a current attempt-state table rather than a general persistence container for worker health, retry operations, diagnostics, and result metadata.
+
+A root table could look like:
+
+```csv
+parent_id,worker_id,model_label,model_id,attempt_id,attempt_status
+parent-1,worker-1,Random Forest,model-1,attempt-1,result_synchronized
+parent-1,worker-2,Random Forest,model-1,attempt-2,aborted
+parent-1,worker-1,Neural Network,model-2,attempt-3,running
+```
+
+From this, the root can derive:
+
+```text
+model-1 = finished
+    because attempt-1 reached result_synchronized
+
+model-2 = unfinished
+    because no attempt reached result_synchronized
+
+parent-1 = unfinished
+    because at least one configured model remains unfinished
+```
+
+`model_label` is useful user-facing redundancy, while `model_id` remains the stable internal association. Duplicate attempts share the same model pair and are distinguished by `attempt_id`.
+
+## What is now clearly unnecessary
+
+Under this model, the earlier columns for parent status, worker availability, reception, persistence, operations, presence flags, and failure diagnostics are unnecessary.
+
+The six approved fields are sufficient for current attempt progress:
+
+```python
+EXECUTION_STATE_COLUMNS = (
+    "parent_id",
+    "worker_id",
+    "model_label",
+    "model_id",
+    "attempt_id",
+    "attempt_status",
+)
+```
+
+Detailed errors can remain in attempt-associated logs. A persisted result is identified through its model and attempt metadata, so a separate result-artifact identity is not required in this table.
+
+## Ambiguities that remain
+
+### 1. How many `not_allocated` attempts initially exist?
+
+“States of all attempts are recorded with `not_allocated`” requires the attempt identities to exist before allocation.
+
+For example:
+
+```csv
+parent-1,,Random Forest,model-1,attempt-1,not_allocated
+```
+
+This raises two questions:
+
+- How many initial attempt IDs are created for each model?
+- Is `worker_id` empty until a worker is selected?
+
+Future duplicate attempts cannot all be known initially unless a fixed number is pre-created. The simplest interpretation is:
+
+```text
+Create one initial attempt per model as not_allocated.
+Create an additional not_allocated attempt only when a retry or duplicate is requested.
+```
+
+Thus, “all attempts” means all attempts created so far, not every attempt that might ever be created.
+
+### 2. Meaning of `allocated`
+
+The ordering must be defined. Worker-specific data synchronization requires a worker to have already been selected, but the proposed statuses include synchronization before `allocated`.
+
+The coherent ordering is:
+
+```text
+not_allocated
+→ allocated
+→ data_synchronizing
+→ data_synchronized
+→ model_synchronizing
+→ model_synchronized
+→ running
+```
+
+Here, `allocated` means:
+
+```text
+The attempt has a fixed worker assignment.
+```
+
+If `allocated` instead means that a compute slot is reserved only after synchronization, another state such as `worker_assigned` would be required. Adding that state would be less minimal, so allocation-before-synchronization is preferable.
+
+### 3. Shared data synchronization
+
+Data synchronization is specific to `(parent_id, worker_id)`, while the table stores it on each attempt.
+
+Suppose two attempts use the same worker:
+
+```text
+attempt-1 → worker-1
+attempt-2 → worker-1
+```
+
+If `attempt-1` synchronizes the parent data successfully, must `attempt-2` also pass through:
+
+```text
+data_synchronizing → data_synchronized
+```
+
+or may it reuse the worker’s existing data and transition directly from:
+
+```text
+allocated → model_synchronizing
+```
+
+I recommend allowing the latter. The state then describes the work actually performed for that attempt. Reused worker data does not require a fabricated synchronization transition.
+
+### 4. Failure-state retry behavior
+
+It must be established whether these states are terminal for one attempt:
+
+```text
+data_synchronizing_failed
+model_synchronizing_failed
+allocation_failed
+attempt_failed
+result_synchronization_failed
+```
+
+The simplest rule is:
+
+```text
+Every *_failed state is terminal for that attempt.
+A retry creates a new attempt_id beginning at not_allocated.
+```
+
+This avoids backward transitions such as:
+
+```text
+result_synchronization_failed → result_synchronizing
+```
+
+and produces an unambiguous attempt history.
+
+If result transfer should be retried under the same attempt ID, then `result_synchronization_failed` cannot be terminal and permitted retry transitions must be specified.
+
+### 5. `attempt_finished_with_error` versus `attempt_failed`
+
+These require exact definitions:
+
+```text
+attempt_finished_with_error
+    A complete valid result was produced, but it contains recorded scientific
+    errors or unavailable results. It proceeds to result synchronization.
+
+attempt_failed
+    No complete valid result was produced. It cannot proceed to result
+    synchronization.
+```
+
+Without this distinction, users and recovery code cannot know whether a result should still be synchronized.
+
+### 6. Meaning of `result_synchronized`
+
+Under the approved interpretation, it must mean all of the following:
+
+```text
+The root received the complete result.
+The root successfully persisted it.
+The persisted result is authoritative for that model unit.
+```
+
+No separate receipt, persistence, or acceptance state is then needed.
+
+For duplicates:
+
+```text
+attempt-1 = result_synchronized
+attempt-2 = aborted
+```
+
+`attempt-1` determines completion for the model unit.
+
+### 7. Worker and root disagreement after an acknowledgement loss
+
+If the root persists a result but its acknowledgement does not reach the worker:
+
+```text
+Root record:
+    result_synchronized
+
+Worker record:
+    result_synchronizing
+```
+
+The root must be authoritative. On reconnection, the worker accepts the root’s status and does not retransmit or replace the persisted result.
+
+### 8. Crash behavior
+
+“Crash will not have any record” is workable if it means no new failure status is fabricated.
+
+For example, if a worker crashes while running, the root may retain:
+
+```text
+attempt_status = running
+```
+
+The root then observes:
+
+```text
+no synchronized result
+no active worker connection
+```
+
+and creates another attempt. It must not rewrite the old attempt as `attempt_failed` unless an actual failure status was received.
+
+This means the table contains the last durably observed state, not necessarily the worker’s unknowable final physical state.
+
+### 9. `stopped` versus `aborted`
+
+The distinction is clear:
+
+```text
+stopped
+    Work ended because the parent was interrupted or the worker lost its
+    parent connection.
+
+aborted
+    Work became unnecessary because another duplicate attempt was accepted.
+```
+
+One remaining behavioral distinction is resumption:
+
+- A `stopped` attempt may be resumed or replaced after the parent resumes or reconnects.
+- An `aborted` attempt is terminal and must never resume or contribute a late result.
+
+### 10. Physical CSV format
+
+Previous discussion required exactly two physical columns:
+
+```csv
+field,value
+```
+
+The new list calls the six names “columns.” It must be clarified whether they are:
+
+1. Actual wide CSV columns:
+
+```csv
+parent_id,worker_id,model_label,model_id,attempt_id,attempt_status
+```
+
+or:
+
+2. Logical items written as repeated fixed `field,value` blocks:
+
+```csv
+field,value
+parent_id,parent-1
+worker_id,worker-1
+model_label,Random Forest
+model_id,model-1
+attempt_id,attempt-1
+attempt_status,running
+```
+
+The data model works either way, but the physical encoding and decoder are different. Based on the earlier approved metadata persistence rule, the second interpretation appears intended.
+
+## Existing specification conflict
+
+The approved model conflicts with current repository contracts in several places:
+
+- Current `AttemptStatus` only has `allocated`, `running`, `result_ready`, and `stopped`.
+- Current Phase 2 snapshot combines parent, attempts, workers, receptions, and operations.
+- Current `AGENTS.md` explicitly mentions cancellation and supersession.
+- Current architecture separates result receipt, persistence, and acceptance.
+- Current Phase 2 roadmap specifies hierarchical `field,value` keys.
+
+Therefore, the approved model is internally reasonable, but the governing documentation and Phase 1 contracts must be revised before implementation. The primary design ambiguities to resolve are the creation of `not_allocated` attempts, whether failed states are terminal, the exact meaning/order of `allocated`, and the physical CSV encoding.
+
+
+==================================================================================================
+
+
+For the ambiguities:
+1. For ambiguity 1, there should only be one attempt for each model initially, if in the final stage, one model is sent to more than one worker for speeding up finishing, duplicated attempts for a model is created. Or if user choose to retry attempt for failed attempt among all workers, multiple attempts for a model can be created after attempt failure.
+
+2. I must revise the complete workflow because I currently think attempt allocation must happen after complete and successful data synchronization of a worker, or the attempt will remain not_allocated, so the complete workflow stage state without any failure is: not_allocated -> model_synchronizing -> model_synchronized -> running -> attempt_finished_without_error -> result_synchronizing -> result_synchronized; and the 3 data related states data_synchronizing, data_synchronizing_failed, data_synchronized must be removed. So this also answers the ambiguity 3.
+
+3. For ambiguity 2, there is no state called allocated but only not_allocated, as the complete workflow stage state without any failure shows. Once the worker is assigned, it immediately enter the next step like model_synchronizing.
+
+4. For ambiguity 4, all of the four excluding data one are terminal for one attempt. They are for the sequential steps of an attempt so one fail must terminate the attempt.
+
+5. For ambiguity 5, attempt may finished with computation failure etc. like required in dev docs, and these failures are allowed, producing missing value in a report or missing report in the result bundle, which does not lead to the failure of the entire attempt. So the attempt_failed means the failure of the entire attempt that blocking the later step like result synchronization.
+
+6. result_synchronized is a final state for a completed attempt. Aborted attempt will not send result or the root will not receive or persist result.
+
+7. Worker should receive the synchronized signal to change the state, the disagreement of synchronization state in disconnection you mentioned is expected, the worker will retry synchronization after some time until the re-connection is never established and retry limit uses up and worker stop the attempt.
+
+8. A completely crash of worker will not update the state of execution on the worker, and the root will finally lose the worker and send the unfinished task to another workable worker. The attempt on the root side will finally be set to aborted.
+
+9. A stopped attempt will not be resumed. The basic working unit of the module is attempt. A aborted attempt will remove all the file persistence on the worker side, so it is impossible to contribute any result.
+
+10. We are now discussing the original design before revising dev docs to field,value, so the original uses EXECUTION_STATE_COLUMNS. So the planned columns are the table columns, each row is an attempt.
+
+---
+
+Please revise your interpretation according to my above answers to your ambiguities. If there is any remaining ambiguity, please report.
+
+If there is no ambiguity, please propose revisions to the 4 dev docs (`AGENTS.md`, `architecture.md` and `roadmap.md` and `roadmap_phase_2.md`) file by file to update the excution_state related parts and other parts that is inconsistent with this excution_state design.
+
+The proposal of revisions should:
+- make minimal necessary changes
+- solve all blocking conflicts you found
+- verify the files assuming you have implemented the revision as you proposed for any inconsistency among the 4 dev docs, report inconsistencies you found even when you implement the revision as you proposed
+- Propose only, do not modify any file.
+
+
+==================================================================================================
+
+
+I understand the revised model as follows.
+
+## Revised execution-state model
+
+`execution_state.csv` is a wide table with exactly these physical columns:
+
+```python
+EXECUTION_STATE_COLUMNS = (
+    "parent_id",
+    "worker_id",
+    "model_label",
+    "model_id",
+    "attempt_id",
+    "attempt_status",
+)
+```
+
+The root file contains one row for every attempt created so far.
+
+At parent creation:
+
+- Create exactly one attempt for every configured model.
+- Give each initial attempt an `attempt_id`.
+- Set its status to `not_allocated`.
+- Do not assign it to a worker until that worker has successfully synchronized the parent dataset and partition.
+
+Additional attempts are created only:
+
+- As late duplicate attempts to reduce completion time.
+- After an explicit user request to retry a terminal failed attempt.
+
+Dataset synchronization is worker-parent preparation outside the attempt-state table. After a ready worker is selected, assignment is represented directly by entering `model_synchronizing`; there is no separate `allocated` state.
+
+The resulting status set is:
+
+```python
+class AttemptStatus(StrEnum):
+    NOT_ALLOCATED = "not_allocated"
+    ALLOCATION_FAILED = "allocation_failed"
+
+    MODEL_SYNCHRONIZING = "model_synchronizing"
+    MODEL_SYNCHRONIZED = "model_synchronized"
+    MODEL_SYNCHRONIZING_FAILED = "model_synchronizing_failed"
+
+    RUNNING = "running"
+    ATTEMPT_FINISHED_WITHOUT_ERROR = "attempt_finished_without_error"
+    ATTEMPT_FINISHED_WITH_ERROR = "attempt_finished_with_error"
+    ATTEMPT_FAILED = "attempt_failed"
+
+    RESULT_SYNCHRONIZING = "result_synchronizing"
+    RESULT_SYNCHRONIZED = "result_synchronized"
+    RESULT_SYNCHRONIZATION_FAILED = "result_synchronization_failed"
+
+    STOPPED = "stopped"
+    ABORTED = "aborted"
+```
+
+Normal execution:
+
+```text
+not_allocated
+→ model_synchronizing
+→ model_synchronized
+→ running
+→ attempt_finished_without_error | attempt_finished_with_error
+→ result_synchronizing
+→ result_synchronized
+```
+
+Terminal failure branches:
+
+```text
+not_allocated → allocation_failed
+model_synchronizing → model_synchronizing_failed
+running → attempt_failed
+result_synchronizing → result_synchronization_failed
+```
+
+Other terminal branches:
+
+```text
+active attempt → stopped
+duplicate attempt → aborted
+```
+
+A model unit is complete when one of its attempts reaches `result_synchronized`. All other attempts of that model are then aborted.
+
+## Remaining ambiguities
+
+Several points still need resolution before I can produce internally consistent revisions to the four documents.
+
+### 1. `worker_id` before or during failed allocation
+
+The initial row has an attempt ID but no assigned worker:
+
+```csv
+parent-1,,Model A,model-1,attempt-1,not_allocated
+```
+
+For `allocation_failed`, it is unclear whether `worker_id` must be:
+
+- Empty because allocation never succeeded; or
+- Populated with the worker to which allocation was attempted.
+
+Recommended interpretation:
+
+```text
+not_allocated:
+    worker_id is empty.
+
+allocation_failed:
+    worker_id contains the worker whose assignment failed, when a worker had
+    already been selected; otherwise it is empty.
+
+model_synchronizing and every subsequent worker-side state:
+    worker_id is required and immutable.
+```
+
+This makes `worker_id` nullable only in the two pre-assignment states.
+
+### 2. Meaning of `aborted` after worker loss
+
+Initially, `aborted` was defined as:
+
+```text
+Another duplicate attempt was accepted.
+```
+
+Your crash answer also says:
+
+```text
+The root eventually marks the lost worker’s unfinished attempt as aborted.
+```
+
+Therefore, `aborted` currently has two causes:
+
+1. Another duplicate completed successfully.
+2. The worker was irrecoverably lost and the root abandoned the attempt.
+
+That broader definition is workable, but it should be explicit:
+
+```text
+aborted = the root has permanently disqualified the attempt from contributing
+          a result, either because another duplicate completed or because the
+          worker was irrecoverably lost.
+```
+
+Otherwise, crash abandonment cannot use `aborted`.
+
+### 3. Whether `aborted` proves worker-side deletion
+
+You specified that an aborted attempt removes all worker-side persistence. That cannot always be guaranteed when the worker has crashed or remains unreachable.
+
+For example:
+
+```text
+Root:
+    attempt-1 = aborted
+
+Worker disk:
+    inaccessible; files may still exist
+```
+
+Recommended interpretation:
+
+```text
+aborted is a logical terminal state and commands worker-side deletion.
+It is not proof of physical deletion when the worker is unreachable.
+Deletion must occur when the worker reconnects or before that worker is reused
+or released.
+```
+
+If `aborted` must prove confirmed deletion, the root cannot mark a crashed worker’s attempt as aborted until cleanup is acknowledged. Those two requirements cannot both hold simultaneously.
+
+### 4. Final state after result-reconnection exhaustion
+
+You specified both:
+
+- `result_synchronization_failed` is terminal.
+- After connection retries are exhausted, the worker stops the attempt.
+
+It remains unclear whether retry exhaustion produces:
+
+```text
+result_synchronization_failed
+```
+
+or:
+
+```text
+stopped
+```
+
+Recommended distinction:
+
+```text
+result_synchronization_failed:
+    Result delivery or root persistence failed after its permitted retries,
+    while the parent relationship still existed.
+
+stopped:
+    The parent connection could not be re-established within its connection
+    limit, or the parent explicitly interrupted execution.
+```
+
+Transient synchronization failures do not change the status from `result_synchronizing`; only final exhaustion changes it.
+
+### 5. Root and worker file scope
+
+The root scope is clear: its file contains every attempt created for the parent.
+
+The worker scope is not yet explicit. Recommended interpretation:
+
+```text
+Root execution_state.csv:
+    Contains every attempt for every model in the parent, including
+    not_allocated attempts with no worker_id.
+
+Worker execution_state.csv:
+    Contains only attempts assigned to that worker.
+    It never contains not_allocated attempts that were not assigned there.
+```
+
+The root mirrors received worker status but remains authoritative for `aborted` and `result_synchronized`.
+
+### 6. Durable result selection
+
+With duplicate attempts, only one may enter root result synchronization. The model currently has no separate selected-attempt field, so `result_synchronizing` must serve as durable selection.
+
+The required invariant should therefore be:
+
+```text
+For one parent/model pair, at most one attempt may be result_synchronizing or
+result_synchronized.
+
+Once one attempt enters result_synchronizing, no other duplicate may enter
+result synchronization.
+
+After it reaches result_synchronized, all remaining attempts become aborted.
+```
+
+It is unclear whether a terminal `result_synchronization_failed` attempt permits another existing duplicate to be selected. Your explicit user-retry rule could instead require creation of a new attempt. This must be stated because it changes duplicate arbitration.
+
+### 7. Retry after `result_synchronization_failed`
+
+You allow the user to retry a failed attempt by creating another attempt. For result synchronization failure, two different actions are possible:
+
+- Create a new attempt and recompute the model.
+- Reuse the already completed worker result and retry only synchronization.
+
+Because the original attempt already completed its scientific work, recomputation is normally unnecessary.
+
+Recommended interpretation:
+
+```text
+While status is result_synchronizing:
+    Retry synchronization of the same result under the configured limit.
+
+After result_synchronization_failed:
+    That attempt is terminal and is never resumed.
+    An explicit user retry creates a new attempt and recomputes from the start.
+```
+
+This follows your rule that every failure status is terminal, but it should be explicitly accepted because it may repeat expensive scientific computation.
+
+### 8. Deterministic row ordering
+
+The root file gains duplicate and retry rows over time. Deterministic encoding needs an exact order.
+
+Recommended rule:
+
+```text
+Initial attempts follow the fixed model order in execution_configuration.csv.
+Later duplicate and retry attempts are appended in creation order.
+Atomic replacement preserves that order.
+```
+
+Rows should not be sorted by worker or current status because those values can change.
+
+Once these eight points—especially the conflicting `aborted` cleanup meaning and result-retry terminal state—are resolved, I can propose exact minimal revisions to [AGENTS.md](E:/swectral_new/cocoonet/AGENTS.md), [architecture.md](E:/swectral_new/cocoonet/docs/architecture.md), [roadmap.md](E:/swectral_new/cocoonet/docs/roadmap.md), and [roadmap_phase_2.md](E:/swectral_new/cocoonet/docs/roadmaps/roadmap_phase_2.md). I have not modified any file.
+
+
+==================================================================================================
+
+
+1. `worker_id` before or during failed allocation
+All undefined values are empty i.e. undefined initial values for state parameters are empty.
+
+2. Meaning of `aborted` after worker loss
+The original rule is:
+```text
+"aborted" is for acceptance of another duplicate attempt and "stopped" is for parent interruption and lost of parent connection.
+```
+
+For clarity, I think the rule can be updated to:
+```text
+"aborted" is for acceptance of another duplicate attempt, "stopped" is for parent interruption, and "connection_loss" is for loss of parent-worker connection.
+```
+
+When the root loses connection with a worker, the worker attempts are all marked as `connection_loss`, and the root reassign the tasks to other workers. New attempts for the corresponding models are created and re-assigned to other connected workers. There is no `aborted` after worker loss itself.
+If the lost worker reconnected in the same parent task, and try to synchronize the completed results, the result bundle of the attempts for a model that comes first is accepted, and the results of the attempts for the model that come later are aborted and marked as `aborted`. The `aborted` only happens in the competing scenarios with multiple attempts executing for one model.
+
+3. Whether aborted proves worker-side deletion
+The deletion is not performed by root side, but by the timeout settings of worker side, it can be deleted if the worker has configured result deletion when timeout. However, a complete crash will not perform any deletion, that is expected and accepted.
+
+4. Final state after result-reconnection exhaustion
+All connection loss scenarios lead to `connection_loss` state, `result_synchronization_failed` happens when the worker is still connected but failed in synchronization of results.
+
+5. Root and worker file scope
+Modified and approved:
+```text
+Root execution_state.csv:
+    Contains every attempt for every model in the parent, including
+    not_allocated attempts with no worker_id.
+
+Worker execution_state.csv:
+    Contains only attempts assigned to that worker. The length of the table is updated with new attempts when new attempts are assigned to that worker.
+```
+
+6. Durable result selection
+No, revise the rule or clarify the rule according to following answer:
+```text
+In competing terminal scenario, the first attempt for the model becoming `result_synchronized` is accepted, and the other attempts for the model are all marked `aborted`. The criterion is the successfully synchronized result bundle, once the root get one result bundle for the model, the other attempts for the model are aborted.
+```
+
+And for `result_synchronization_failed` as well as other failures, the retry rule is configured by the user, if user choose to retry one type of failures, then retry according to the rule. If no retry permitted at all, no new attempt is created after this failure. `terminal` state means the termination of an attempt, not a model, whether to terminate the attempt assignment for a model when the result bundle is not received is configured by the user.
+
+7. Retry after `result_synchronization_failed`
+Recommended interpretation approved.
+
+`Reuse the already completed worker result and retry only synchronization.` this should be tried before `result_synchronization_failed`. Once it enters `result_synchronization_failed`, it means the synchronization is failed after retry, so do not retry synchronization again but create new attempts.
+
+8. Deterministic row ordering
+```text
+Initial attempts follow the fixed model order in execution_configuration.csv.
+Later duplicate and retry attempts are appended in creation order.
+Atomic replacement preserves that order.
+```
+Approved. Use all atomic modification of the file on both worker and root, because the modification can be competing. The modification follows the safest rule, here preserving the order but only append a new state row at the end. Never sort it. The initial order can be arbitrary, the usage of the state file should not rely on the order.
+
+In addition, the progress observation should not rely on execution_state only, it must be based on actually persisted completed result bundle. The execution_state is for the informational usage for users especially after crash, instead of formal internal parent task progress monitoring and determination.
+

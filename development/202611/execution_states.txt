@@ -1,0 +1,35 @@
+It can be more aggressively simplified. The attempt state need only the following:
+`not_allocated`, `data_synchronizing`, `data_synchronizing_failed`, `data_synchronized`, `model_synchronizing`, `model_synchronized`, `model_synchronizing_failed`, `allocated`, `running`, `allocation_failed`, `attempt_finished_without_error`, `attempt_finished_with_error`, `attempt_failed`, `result_synchronizing`, ` result_synchronized`, `result_synchronization_failed`.
+
+Separating result synchronization and persistence is not necessary, because a successful synchronization means successful persistence. Some other states are also unnecessary. Above states keep a minimal state synchronization between worker and root node, and keep the basic record of the attempt execution state I think. Please verify whether this states can be simplified further i.e. whether any state is not independent or unnecessary for a light-weight scientific python module.
+
+
+=========================================
+
+
+The approved execution_state record only the attempt state, and for root node, the states of all attempts are recorded with state not_allocated.
+
+The approved attempt states include:
+
+`not_allocated`, `data_synchronizing`, `data_synchronizing_failed`, `data_synchronized`, `model_synchronizing`, `model_synchronized`, `model_synchronizing_failed`, `allocated`, `running`, `allocation_failed`, `attempt_finished_without_error`, `attempt_finished_with_error`, `attempt_failed`, `result_synchronizing`, ` result_synchronized`, `result_synchronization_failed`, `stopped`, `aborted`
+
+`aborted` is for acceptance of another duplicate attempt and `stopped` is for parent interruption and lost of parent connection.
+
+Still, crash will not have any record. And there is no so-called cancellation and supersession in addition to the above two stopping scenario.
+
+And the approved execution_state columns are:
+```
+"parent_id"
+"worker_id"
+"model_label"
+"model_id"
+"attempt_id"
+"attempt_status"
+```
+in which the 4 ids is for status identification only, and the model label is for user identification of the attempt. Then the user can identify the result via model_label or model_id and identify the error log via the attempt id.
+
+What do you think? Please analyze my approved execution_state model, and report any ambiguity about it if you have.
+
+
+=========================================
+

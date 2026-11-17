@@ -55,7 +55,7 @@ Phase 2 does not implement or decide:
 - `execution_configuration.csv` fields, which Phase 3 owns;
 - model persistence, model-reference schemas, model transfer, evaluation, reports, influence, or rendering;
 - result-bundle members, manifests, workbook metadata, package creation, `.tar.zst` settings, HMAC, or safe extraction;
-- scheduling, attempt allocation, reception selection, result acceptance, retry transitions, recovery transitions,
+- scheduling, attempt assignment, result synchronization, duplicate arbitration, retry transitions, recovery transitions,
   retention, cleanup, acknowledgements, IPC, or networking;
 - worker-work-directory creation or clearing;
 - a generic repository, transaction, serializer, artifact registry, content-addressed store, or filesystem abstraction;
@@ -86,8 +86,10 @@ Phase 2 is complete only when:
 - all constructed paths exactly match Architecture Section 6.2;
 - no hidden `.cocoonet` store, hashed artifact filename, or opaque path identity is introduced;
 - compatibility metadata and execution state round-trip through strict deterministic UTF-8 CSV;
-- the execution-state snapshot preserves fixed parent context, known model units, attempts, worker observations,
-  selected reception, acceptance, and bounded-operation retry evidence without performing transitions;
+- execution state uses the exact six-column attempt schema, with root state containing every created attempt and worker
+  state containing only attempts assigned to that worker;
+- empty fields preserve undefined values, existing rows preserve identity and order, and new attempts append in
+  creation order;
 - immutable files and bundles become authoritative only through their designated atomic publication operations;
 - mutable `execution_state.csv` uses staged atomic replacement;
 - stale `.partial` files and `.staging` directories are never loaded or promoted automatically;
@@ -252,20 +254,29 @@ All Phase 2 CSV:
 
 - is UTF-8 without a byte-order mark;
 - uses the standard-library `csv` module, comma delimiter, RFC-compatible quoting, and `\n` line endings;
-- uses exactly two physical columns with the exact header `field,value`;
-- places one canonical metadata key in `field` and its scalar value or schema-defined text representation in `value`;
-- encodes nested records and repeated values through schema-defined hierarchical field keys, explicit collection counts,
-  and zero-based indices rather than additional physical columns;
+- uses the schema-controlled physical columns owned by its table;
 - encodes enums by `.value`, booleans as `0` or `1`, integers as canonical decimal, and finite floats with `repr()`
   round-trip semantics;
 - never accepts `NaN` or infinity in lifecycle metadata;
-- rejects unknown, duplicate, missing, or out-of-order field keys, noncontiguous indices, count mismatches, and invalid
-  values; and
+- rejects schema-invalid values; and
 - emits deterministic row ordering.
 
-Empty text and absent values must not be conflated. A nullable field therefore uses an explicit hierarchical
-`<field>.present` key. A present nullable scalar is followed by `<field>.value`; an absent value omits that value row.
-A nullable nested record uses `<field>.present` followed, when present, by its schema-defined nested field keys.
+Metadata-oriented CSV uses exactly two physical columns with the exact header `field,value`, places one canonical
+metadata key in `field`, and places its scalar value or schema-defined text representation in `value`. Nested metadata
+records and repeated values use schema-defined hierarchical keys, explicit collection counts, zero-based indices, and
+explicit presence keys where required. Metadata decoders reject unknown, duplicate, missing, or out-of-order keys,
+noncontiguous indices, and count mismatches.
+
+`execution_state.csv` is the Phase 2 tabular exception. It has exactly this header:
+
+~~~text
+parent_id,worker_id,model_label,model_id,attempt_id,attempt_status
+~~~
+
+Undefined values use empty fields. The decoder rejects an incorrect header, malformed rows, unknown statuses, invalid
+identifiers, duplicate attempt IDs within a parent, inconsistent model identity/label associations, and a nonempty
+worker ID that changes after assignment. Encoding preserves supplied row order. Decoding preserves file order, but
+consumers must not assign semantic meaning to it.
 
 ## 5. Planned modules and records
 
@@ -364,90 +375,68 @@ python_release_level,alpha|beta|candidate|final
 
 Rows and order are exact. Unknown, missing, duplicate, or reordered fields are rejected.
 
-### 5.4 Execution-state snapshot
+### 5.4 Attempt execution-state record
 
 In `execution_state.py`:
 
 ~~~python
 @dataclass(frozen=True, slots=True)
-class ExecutionStateSnapshot:
-    storage_schema_version: int
-    node_role: NodeRole
+class ExecutionStateRecord:
     parent_id: ParentId
-    model_ids: tuple[ModelId, ...]
-    progress: ParentProgress
-    attempts: tuple[AttemptProgress, ...]
-    workers: tuple[WorkerObservation, ...]
-    receptions: tuple[ReceptionRecord, ...]
-    operations: tuple[BoundedOperation, ...]
+    worker_id: WorkerId | None
+    model_label: ScalarLabel
+    model_id: ModelId
+    attempt_id: AttemptId
+    attempt_status: AttemptStatus
 ~~~
 
-For a root snapshot, `model_ids` is the complete known ordered unit-task set; receptions may cover those units. For a
-worker snapshot, `model_ids` contains only units represented by that worker's local assignments, attempts and workers
-contain only that worker's observations, and `receptions` is empty because a worker must not persist root selection or
-acceptance state. The snapshot references fixed context by identity; it does not duplicate the scientific configuration
-owned by `execution_configuration.csv`.
+`worker_id=None` encodes as an empty CSV field. Other fields are required. `model_label` persists the exact fixed parent
+model label through the existing `ScalarLabel` type.
 
-The snapshot stores observations only. It does not allocate, select, accept, retry, recover, infer transitions, inspect
-the filesystem for completion, or manufacture missing records.
+`AttemptStatus` has exactly these values:
 
-Validation:
+~~~text
+not_allocated
+allocation_failed
+model_synchronizing
+model_synchronized
+model_synchronizing_failed
+running
+attempt_finished_without_error
+attempt_finished_with_error
+attempt_failed
+result_synchronizing
+result_synchronized
+result_synchronization_failed
+interrupted
+connection_loss
+aborted
+~~~
 
-- validates every nested Phase 1 record with its existing validator;
-- requires `storage_schema_version == 1`;
-- requires `progress.parent_id == parent_id`, a valid managed-path `parent_id`, valid unique managed-path `model_ids`,
-  and a nonempty root `model_ids` tuple;
-- requires unique attempt IDs, worker IDs, reception parent/model pairs, and operation IDs;
-- requires all attempts and receptions to reference `parent_id` and a listed model;
-- requires worker active-attempt IDs to resolve to stored attempts assigned to that worker;
-- requires root receptions only on `NodeRole.ROOT`;
-- requires one worker identity on `NodeRole.WORKER` and every stored attempt assigned to it;
-- validates failure-link integrity across operation failures; and
-- does not impose future scheduler or transition rules beyond Phase 1 contracts.
+A root state sequence contains every attempt created for one parent. A worker state sequence contains only attempts
+assigned to that worker. The persistence layer validates record structure and cross-row identity consistency; it does
+not perform lifecycle transitions, inspect result bundles, determine model completion, apply retry policy, or infer
+worker cleanup.
 
 ### 5.5 Execution-state CSV schema
 
-`execution_state.csv` uses the exact two-column header:
+The file contains one header followed by one row per attempt:
 
 ~~~text
-field,value
+parent_id,worker_id,model_label,model_id,attempt_id,attempt_status
 ~~~
 
-The `field` column is a canonical hierarchical path through `ExecutionStateSnapshot`. The `value` column contains the
-corresponding scalar value or schema-defined text representation.
+The root initially provides one `not_allocated` row per model. Later duplicate and retry attempts append rows.
+Assignments fill the existing empty `worker_id`; state transitions update only `attempt_status`. Existing attempt rows
+are not removed, duplicated, or reordered.
 
-Rows are emitted depth-first in the declared `ExecutionStateSnapshot` field order. Nested dataclass fields append their
-declared field name with `.`. Tuple fields first emit `<field>.count`, followed by elements in tuple order using
-zero-based indices. A tuple of scalar identities therefore uses keys such as `model_ids.0`; a tuple of records uses keys
-such as `attempts.0.inputs.attempt_id`.
+The root and each worker serialize updates to their own file through one writer. The writer stages and atomically
+replaces the complete CSV. Atomic replacement prevents partial publication; writer serialization prevents competing
+lost updates.
 
-The top-level order is:
-
-1. `storage_schema_version`;
-2. `node_role`;
-3. `parent_id`;
-4. `model_ids.count`, then `model_ids.<index>`;
-5. `progress.<field>`;
-6. `attempts.count`, then `attempts.<index>.<field>`;
-7. `workers.count`, then `workers.<index>.<field>`;
-8. `receptions.count`, then `receptions.<index>.<field>`; and
-9. `operations.count`, then `operations.<index>.<field>`.
-
-Nested tuples use the same count-and-index rule. Examples include
-`workers.<index>.parent_readiness.count`, `workers.<index>.parent_readiness.<subindex>.parent_id`,
-`workers.<index>.active_attempt_ids.count`, and `workers.<index>.active_attempt_ids.<subindex>`.
-
-Nullable scalar fields use an exact `<field>.present` row. When present, the next row is `<field>.value`; when absent,
-the value row is omitted. Optional nested records, including `operations.<index>.last_failure`, use
-`<field>.present`, followed when present by the nested record's declared fields.
-
-The decoder reconstructs exact tuple order and Phase 1 nominal types from these canonical keys, then validates the
-complete snapshot. It rejects unknown, missing, duplicate, or reordered keys; noncontiguous indices; count mismatches;
-unexpected value rows for absent fields; and noncanonical encodings. CSV row order is evidence; filesystem enumeration
-order is never used.
-
-This schema persists fixed parent association and known unit identities needed to interpret mutable state. The complete
-scientific execution configuration remains solely owned by Phase 3's `execution_configuration.csv`.
+The loader returns records in file order. Row order is preserved for stable inspection but has no lifecycle meaning.
+The file is informational and never establishes result-bundle existence or model completion. The complete scientific
+execution configuration remains solely owned by Phase 3's `execution_configuration.csv`.
 
 ### 5.6 Structured log record
 
@@ -649,25 +638,37 @@ It does not recover execution or create missing entries.
 ### 6.4 `execution_state.py`
 
 ~~~python
-def validate_execution_state_snapshot(value: ExecutionStateSnapshot, /) -> None
-def encode_execution_state_csv(value: ExecutionStateSnapshot, /) -> bytes
-def decode_execution_state_csv(data: bytes, /) -> ExecutionStateSnapshot
+def validate_execution_state_records(
+    value: tuple[ExecutionStateRecord, ...],
+    /,
+) -> None
+
+def encode_execution_state_csv(
+    value: tuple[ExecutionStateRecord, ...],
+    /,
+) -> bytes
+
+def decode_execution_state_csv(
+    data: bytes,
+    /,
+) -> tuple[ExecutionStateRecord, ...]
 
 async def replace_execution_state(
     path: PathInput,
-    snapshot: ExecutionStateSnapshot,
+    records: tuple[ExecutionStateRecord, ...],
     /,
 ) -> None
 
 async def load_execution_state(
     path: PathInput,
     /,
-) -> ExecutionStateSnapshot
+) -> tuple[ExecutionStateRecord, ...]
 ~~~
 
-The asynchronous writer validates and encodes before opening staging, writes with `aiofiles`, then calls the focused
-mutable publication helper. The loader reads only the final file. Neither function applies transitions or treats state
-as proof that a referenced bundle exists.
+The asynchronous writer validates and encodes before opening staging, preserves existing identity order, permits field
+updates within existing rows, permits newly created attempts only as appended rows, writes with `aiofiles`, then calls
+the focused mutable publication helper. One serialized writer owns updates to each file. The loader reads only the
+final file. Neither function applies transitions or treats state as proof that a result bundle exists.
 
 ### 6.5 `logging.py`
 
@@ -791,22 +792,24 @@ Test:
 
 ### 8.5 `tests/storage/test_execution_state.py`
 
-Build complete root and worker snapshots from real Phase 1 contract records. Test:
+Build root and worker attempt-state records from real Phase 1 identities. Test:
 
-- exact `field,value` header and hierarchical key ordering;
-- round-trip equality for every nested record and enum;
-- exact tuple counts, zero-based indices, and nested tuple ordering;
-- empty text versus absent optional values through `.present` and `.value` keys;
-- non-ASCII text, embedded commas, quotes, and newlines;
-- fixed parent association and ordered model-unit identities without duplicated scientific configuration;
-- root selected-reception, acceptance, and remaining-operation-budget evidence;
-- worker-local state excluding root-wide reception;
-- invalid nested Phase 1 records and cross-record references;
-- missing, duplicate, reordered, or unknown keys, noncontiguous indices, and count mismatches;
-- malformed encodings, nonfinite numbers, BOM, and schema-version mismatch;
-- asynchronous initial write and repeated atomic replacement;
+- exact six-column header and deterministic UTF-8 CSV encoding;
+- root initial records with empty `worker_id`;
+- worker records limited to their assigned attempts;
+- every exact status value;
+- non-ASCII model labels and RFC-compatible commas, quotes, and newlines;
+- round-trip preservation of row order;
+- assignment filling an empty worker ID;
+- immutable worker assignment after it is established;
+- in-place status updates without reordering;
+- duplicate and retry attempts appended in creation order;
+- duplicate attempt-ID and inconsistent model-ID/model-label rejection;
+- malformed rows, incorrect headers, BOM, unknown statuses, and invalid identifiers;
+- serialized competing updates without lost rows;
+- initial write and repeated atomic replacement;
 - loader ignoring stale `.partial`; and
-- a state claim never causing automatic bundle promotion or lifecycle action.
+- state claims never establishing result-bundle existence or model completion.
 
 ### 8.6 `tests/storage/test_logging.py`
 
@@ -845,10 +848,10 @@ Each numbered item is one approval unit unless the user explicitly approves a sm
 18. Implement compatibility metadata capture and CSV codec.
 19. Implement fresh root preparation.
 20. Implement non-destructive root opening.
-21. Add `ExecutionStateSnapshot` and cross-record validation.
-22. Implement deterministic execution-state CSV encoding.
-23. Implement strict execution-state CSV decoding.
-24. Implement asynchronous state replacement and loading.
+21. Revise the shared `AttemptStatus`, then add `ExecutionStateRecord` and record-sequence validation.
+22. Implement deterministic six-column execution-state CSV encoding.
+23. Implement strict six-column execution-state CSV decoding.
+24. Implement serialized asynchronous state replacement and loading.
 25. Add structured log records, validation, and one-line codec.
 26. Implement asynchronous root log routing and append.
 27. Run Phase 2 targeted tests, the full configured suite, static checks, documentation checks, and a final
@@ -869,7 +872,7 @@ network behavior.
 | Prediction/report/result workbook payloads | Phases 7–10 |
 | Result bundle contents and validation | Phase 10 |
 | Root-local process and IPC | Phase 13 |
-| Scheduling, reception selection, acceptance, retry transitions | Phases 14–15 |
+| Scheduling, result synchronization, duplicate arbitration, retry transitions | Phases 14–18 |
 | Recovery orchestration | Phase 15 |
 | Online protocol and reconnection | Phase 16 |
 | `.tar.zst` creation, compression parameters, HMAC, transfer | Phase 17 |
@@ -884,9 +887,9 @@ non-authority.
 
 ### 11.1 Phase 1 dependencies used without redesign
 
-Phase 2 reuses Phase 1 identities, `CompatibilityMetadata`, `ParentProgress`, `AttemptProgress`,
-`WorkerObservation`, `ReceptionRecord`, `BoundedOperation`, `TraceContext`, and `FailureRecord`. It validates and
-serializes them but does not add transitions or scientific behavior.
+Phase 2 reuses Phase 1 identities and `CompatibilityMetadata`, and revises the shared `AttemptStatus` vocabulary before
+adding its persistence consumer. It persists attempt observations without performing transitions. Phase 2 adds only
+the storage-owned `ExecutionStateRecord` representation and no scientific behavior.
 
 ### 11.2 Phase 1 terminology alignment
 
@@ -903,11 +906,15 @@ directory. Reject a filesystem anchor itself. For Python installation/package-in
 Cocoonet package directory, and the complete source repository, reject equality, a candidate ancestor, or a candidate
 descendant. This protects risky locations without rejecting otherwise safe absolute paths.
 
-### 12.2 Metadata persistence format
+### 12.2 CSV persistence formats
 
 Persisted metadata-oriented CSV tables and result-workbook metadata worksheets use exactly two columns named `field`
-and `value`. The earlier wide normalized `execution_state.csv` schema conflicted with this consistent metadata
-persistence contract and has been replaced by canonical hierarchical field keys.
+and `value`.
+
+`execution_state.csv` is intentionally not metadata-oriented. It is an attempt-state domain table and uses the exact
+six-column schema defined in Section 5.5. This exception avoids hierarchical snapshot serialization and persists only
+the minimal user-inspection state required for attempts. It does not change the approved `field,value` metadata schema
+for each XLSX result workbook.
 
 ### 12.3 Other inconsistencies
 

@@ -35,12 +35,13 @@ Throughout every phase:
 
 - Follow Python 3.12 through the latest stable release, excluding prereleases, and the existing dependency/tool
   configuration. Use asyncio/aiofiles for asynchronous I/O. Use schema-controlled UTF-8 CSV for Cocoonet metadata,
-  model references, execution configuration, and execution state. Their metadata-oriented tables use exactly two
-  columns named `field` and `value`; nested and repeated values use schema-defined hierarchical field keys and
-  zero-based indices rather than additional columns. Use schema-controlled XLSX for root/worker data references,
+  model references, execution configuration, and execution state. Metadata-oriented tables use exactly two columns
+  named `field` and `value`; nested and repeated values use schema-defined hierarchical field keys and zero-based
+  indices rather than additional columns. `execution_state.csv` is the explicit domain-table exception and uses the
+  exact six-column attempt schema. Use schema-controlled XLSX for root/worker data references,
   partition schedules, and two-sheet result workbooks; every result metadata worksheet uses the same exact
   `field,value` contract. Dill remains limited to designated trusted model payloads, root-local IPC messages, and
-  standardized visualization data. Online selected-result delivery uses `.tar.zst`; dataset and model transfer
+  standardized visualization data. Online candidate-result delivery uses `.tar.zst`; dataset and model transfer
   preparation follows its separate Parquet and archive contracts. Applicable pytest, mypy, Black, and Ruff checks must
   pass for approved implementation work; use targeted tests, not unrelated suites.
   Validate documentation accessibility and version switching when documentation is rebuilt.
@@ -80,7 +81,8 @@ complete Cocoonet versions must match exactly, while Python versions may differ 
 Compatibility metadata must be readable without loading executable model or report payloads.
 
 Establish the logical state needed for configuration consolidation, worker readiness/availability, immutable attempt
-inputs, stop disposition, report status, result selection, durable acceptance, and bounded-operation progress.
+identities, the approved attempt-status vocabulary, report status, and failure provenance. Result completion is
+established by the atomically published root bundle rather than a separate selection or acceptance record.
 Any report containing a computational failure has `failed` report status, even when successful results remain in its
 payload; no separate partial-report status is used.
 Define standardized prediction/class alignment and the logical one-attempt `AttemptResult` contract, including the
@@ -121,9 +123,11 @@ same-directory `<filename>.partial` staging, mutable `execution_state.csv` uses 
 content is never authoritative or automatically promoted. Establish the focused directory-publication foundation for
 later immutable result bundles without requiring future metric payloads.
 
-Define durable evidence for fixed parent context, the known task set, selected reception, acceptance, remaining retry
-budgets, and complete-versus-incomplete publication. Preserve asynchronous I/O and keep later online receive-path
-content processing outside the active event loop.
+Establish the exact six-column `execution_state.csv` codec and atomic replacement boundary. The table stores only
+current informational attempt rows. It does not store parent progress, worker health, result selection, acceptance,
+failure details, or retry-operation records. Root result bundles remain authoritative completion evidence. Phase 2
+validates record structure and atomic persistence but does not implement scheduling, assignment, transitions, result
+synchronization, duplicate arbitration, retry policy, interruption, connection handling, or recovery.
 
 The exit condition is a reliable, format-specific persistence interface with stable recovery evidence and focused file
 and bundle publication helpers. Phase 2 does not generate partitions, schedule tasks, accept results, run recovery
@@ -156,7 +160,7 @@ Worker removal is configuration-only
 and sends no stop, disconnect, cleanup, reset, or release instruction. Root reassignment must use Phase 2 validation.
 
 Before proceeding, configuration validation, copy semantics, mutation boundaries, and parent-snapshot preparation must
-be stable. Dataset registration becomes complete in Phase 4. Runnable `run()`, cancellation, resume, worker runtime
+be stable. Dataset registration becomes complete in Phase 4. Runnable `run()`, interruption, resume, worker runtime
 management, and external service operations remain deferred; no placeholder may silently perform those operations.
 
 ### 4. Dataset normalization and authoritative realized partitions
@@ -450,11 +454,14 @@ Complete `run()` prerequisite checks and persist `execution_configuration.csv` a
 Require one active dataset, at least one model, and a usable configured target. Capture `created_at_utc_ns` and generate
 `parent_id` exactly as specified by Architecture Section 3.4. Bind the validated saved partition before allocating work.
 
-Durably record the selected attempt before local handoff. The worker reports its validated published-bundle identity
-and managed path; the root copies only that selected bundle into root staging, adds its root model reference and final
-inventory, and publishes the model-keyed root directory atomically. Root-local handoff uses no archive, compression,
-HMAC, unpacking, or duplicate scientific/result validation. A scientific failure-only bundle is accepted on the same
-persistence basis as a successful bundle.
+Initialize one `not_allocated` attempt row per configured model. After worker-parent readiness, assign a worker and
+transition directly to `model_synchronizing`. Persist attempt-state updates through the Phase 2 atomic table writer.
+
+For local handoff, the first complete bundle successfully copied and atomically published in the root model directory
+becomes authoritative and produces `result_synchronized`. Do not add a separate selected-attempt, receipt,
+persistence, or acceptance record. Root-local handoff uses no archive, compression, HMAC, unpacking, or duplicate
+scientific/result validation. A scientific failure-only bundle is accepted on the same persistence basis as a
+successful bundle.
 
 Before proceeding, a full local evaluation must yield an atomically published root bundle and stable task/attempt
 progress. Worker completion alone does not establish acceptance, and sending the bundle identity does not release the
@@ -463,20 +470,14 @@ in their assigned later phases.
 
 ### 14. Bounded operations, delivery waits, and result retention
 
-Build normal-operation failure handling on Phase 13's persisted selection/acceptance state and Phase 12's completed
-worker bundle. Implement acknowledgement, retry, and wait behavior through the local boundary; online transport later
-uses the same operation semantics.
-
-A selected handoff or root-persistence failure retries the same published bundle within its remaining budget, without
-reevaluation or per-file retry. Retain that bundle and keep its producing attempt slot occupied until acceptance or
-retry exhaustion; other eligible slots remain usable. Exhaustion ends only that delivery operation. It does not accept
-or complete the logical task, authorize reevaluation or duplicate substitution, or terminate the worker. Persist enough
-state to prevent a restart from resetting the budget.
+Implement configurable retry policies around the attempt failure states. Retry the same completed bundle while its
+attempt remains `result_synchronizing`. Exhaustion produces terminal `result_synchronization_failed`; a configured
+subsequent retry creates a new `not_allocated` attempt rather than resuming the failed one. Persist retry configuration
+in its owning configuration scope rather than expanding `execution_state.csv`.
 
 Implement bundle-retention choices: deletion after confirmed acceptance, retention until all applicable root tasks
 finish, or no automatic deletion. Add configurable deletion on transition to a different parent for private and
-root-local workers; Phase 20 makes it mandatory for public workers. Never delete a bundle still required by selected
-delivery except under mandatory public-release cleanup.
+root-local workers; Phase 20 makes it mandatory for public workers. Attempt status does not prove worker-side deletion.
 
 Before proceeding, delivery status, scientific outcome, acceptance, and worker availability must be independently
 observable. Counts/timing and operation interfaces are settled here. Reconnection and periodic connection rounds do not
@@ -484,19 +485,20 @@ exist yet and must not be simulated by resetting delivery budgets.
 
 ### 15. Cooperative interruption, local reconciliation, and reuse
 
-With durable progress and bounded operations stable, complete break/cancel, prospective reconfiguration, and local
-resume/root-restart recovery. Workers stop model work at defined cooperative boundaries; already-terminal or unnecessary
-handling does not wait for another model loop. Stopping an attempt does not terminate the worker service.
+With durable progress and bounded operations stable, implement parent interruption as terminal `interrupted` attempt
+state, prospective reconfiguration, and local resume/root-restart recovery. Continuing the unchanged parent creates
+new attempts for unfinished models. Cancellation and supersession are not separate lifecycle operations.
 
 After root interruption, permit future configuration edits while old attempts retain fixed inputs and their stop
 disposition. Changed model evaluation configuration requires explicit reinitialization and a new parent; unchanged
 evaluation, with or without worker edits, resumes the existing parent. Late results cannot enter another parent.
 Configuration unlocking is distinct from worker inactivity and cleanup eligibility.
 
-Recover the known task set and fixed parent from `execution_configuration.csv`, `execution_state.csv`, the authoritative
-`partition_schedules.xlsx`, and complete model-keyed root result bundles. Recognize an atomically published accepted
-bundle without reevaluation or retransmission; never infer completion from a package, staging directory, or incomplete
-bundle. Preserve selected reception, stop dispositions, accepted outcomes, and exhausted retry budgets.
+Recover the known task set and fixed parent from `execution_configuration.csv`, the authoritative
+`partition_schedules.xlsx`, and complete model-keyed root result bundles. Load `execution_state.csv` for inspection and
+reconciliation only. Recognize an atomically published accepted bundle without reevaluation or retransmission; never
+infer completion from a state row, package, staging directory, or incomplete bundle. Do not resume terminal failed,
+interrupted, or aborted attempts.
 
 Explicit interruption and unexpected root-process termination use the same persisted loading and continuation
 foundation but have different runtime consequences. The existing instance may continue after interruption. After
@@ -539,15 +541,15 @@ Transfer Phase 4's fixed prepared representations and generate worker-local refe
 parent's prepared files without per-transfer checks, recompression, or resharding. Root-side prepared files
 are not worker-cleanup targets.
 
-Synchronize dataset plus applicable saved partition/parent context before unit execution. Apply the configured dataset
+Synchronize dataset plus applicable saved partition/parent context before assigning an attempt. Apply the configured dataset
 retention policy, subject to mandatory public-release cleanup in Phase 20. Reuse a retained ready
 dataset_id without retransmission, but always establish the applicable parent configuration and partition context.
 A changed representation or cleared copy requires preparation again. Unit-task messages carry the model and required
-model-specific/lifecycle information, not another dataset or an independent dataset identity. After allocation, the
-online attempt begins with this attempt-specific model synchronization and continues through model reconstruction,
-evaluation, result publication, and delivery.
+model-specific/lifecycle information, not another dataset or an independent dataset identity. After assignment, the
+online attempt enters `model_synchronizing` and continues through model reconstruction, evaluation, result publication,
+and result synchronization.
 
-For the selected result, package the already published immutable bundle once as `.tar.zst` and reuse those same package
+For a completed result, package the already published immutable bundle once as `.tar.zst` and reuse those same package
 bytes for every retry. Record and verify exact byte length and SHA-256. Private delivery also uses the shared runtime
 key and HMAC-SHA-256 metadata contract from Architecture Section 6.4. Resolve canonical HMAC metadata encoding, result
 compression parameter names, acknowledgement encoding, and applicable retry timing before implementing this path.
@@ -577,14 +579,14 @@ or assigned, and an eligible slot would otherwise be unused. Choose an unfinishe
 oldest by its first execution start. A completed result awaiting delivery is not a reason to
 launch a duplicate; terminal reconstruction or primary-validation failures are not retried.
 
-Exercise receiving-order selection, serialized reception per unit, and at-most-one durable acceptance across attempts.
-An earlier failure outcome can win over later success. Selection or delivery failure cannot promote another attempt.
-Only after the selected bundle is atomically published and accepted may remaining duplicates be stopped without
-receiving their packages or handing off their local bundles. Unselected bundles do not enter the retry lifecycle.
-Different units remain independent.
+Serialize atomic root publication per model rather than persisting a preselected attempt. The first successful
+publication wins and produces `result_synchronized`; every competing attempt becomes `aborted`. Scientific failures in
+a complete bundle do not prevent it from winning. On connection loss, mark affected root-side attempts
+`connection_loss` and create replacement attempts for unfinished models. A reconnected original attempt may compete if
+the model still lacks an authoritative root bundle. Different units remain independent.
 
-Before proceeding, mixed execution, simultaneous ready results, duplicate cancellation, reconnects, and root restart
-must all use the existing identities, persisted selection state, and remaining budgets. This phase adds scheduling policy and
+Before proceeding, mixed execution, simultaneous ready results, duplicate abortion, reconnects, and root restart
+must all use the existing identities and configured retry policies. This phase adds scheduling policy and
 multi-attempt integration, not new scientific semantics or fold/sample-level distributed tasks. Public-pool allocation
 and worker data/resource management remain separate later capabilities.
 
@@ -637,7 +639,7 @@ pending result delivery, without marking an undelivered logical result accepted.
 
 Force-enable parent-transition result cleanup for public workers. Before a public worker begins an attempt for a
 different parent, delete worker-side result artifacts belonging to earlier parents, regardless of a longer configured
-retention choice. First complete any selected delivery still required by the lifecycle or allow it to reach its
+retention choice. First complete any active result synchronization still required by the lifecycle or allow it to reach its
 established terminal operation state. This parent-transition cleanup remains separate from the stronger public-release
 cleanup, which may override pending delivery before reassignment to another user.
 
@@ -672,10 +674,10 @@ categories, distributed folds, rendered worker plots, and a public-service imple
 
 This ordering places difficult boundaries before their consumers:
 
-- **Shared evidence before behavior:** Phase 1 defines minimal parent/unit/attempt associations and independent stop,
-  selection, acceptance, and operation observations. Phase 2 establishes their required durable evidence. Later phases
-  implement transitions, scheduling, delivery, and recovery. Derive convenience summaries where practical; do not
-  collapse independently meaningful observations or require a nested runtime object hierarchy.
+- **Shared evidence before behavior:** Phase 1 defines minimal parent/unit/attempt associations, attempt statuses, and
+  failure provenance. Phase 2 establishes the informational attempt-state table and atomic persistence boundary. Later
+  phases implement transitions, scheduling, result synchronization, duplicate arbitration, and recovery, with actual
+  final root bundles as completion evidence.
 - **Data and results before orchestration:** Dataset/sample/source and prediction/report contracts precede model
   workflows and packaging. Model-family adapters consume one report interface. Local control and online transport
   differ at their boundaries while preserving task, scientific, persistence, and acceptance semantics.
