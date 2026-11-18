@@ -231,15 +231,66 @@ def test_decode_structured_log_record_rejects_invalid_line(
         decode_structured_log_record(data)
 
 
-def test_decode_structured_log_record_rejects_wrong_key_order() -> None:
-    """Reject a record whose physical object order differs from the schema."""
+def test_decode_structured_log_record_accepts_reordered_schema_keys() -> None:
+    """Decode an exact schema independently of physical object key order."""
     encoded = (
         '{"node_role":"root","timestamp_utc_ns":1,"channel":"running",'
         '"event":"attempt_started","message":"Attempt started.",'
         '"context":null,"failure":null,"attributes":{}}\n'
     ).encode("utf-8")
 
-    with pytest.raises(ValueError, match="keys"):
+    assert decode_structured_log_record(encoded) == _record()
+
+
+def test_decode_structured_log_record_accepts_reordered_nested_keys() -> None:
+    """Decode exact context and failure schemas independently of key order."""
+    context = (
+        '{"worker_id":"worker-1","attempt_id":"attempt-1",'
+        '"model_id":"1","parent_id":"parent-1","stage":"validation",'
+        '"fold_id":null,"sample_id":null,"class_label":null,'
+        '"report_name":null,"operation_id":null}'
+    )
+    failure = (
+        '{"scope":"fit_prediction","failure_id":"failure-1",'
+        f'"context":{context},"message":"Model evaluation failed.",'
+        '"exception_type":"builtins.RuntimeError",'
+        '"traceback":"Traceback content","origin_failure_id":null}'
+    )
+    encoded = (
+        '{"failure":'
+        f'{failure},"context":{context},"attributes":{{}},'
+        '"message":"Attempt started.","event":"attempt_started",'
+        '"channel":"error","node_role":"worker","timestamp_utc_ns":1}\n'
+    ).encode("utf-8")
+
+    assert decode_structured_log_record(encoded) == _record(
+        node_role=NodeRole.WORKER,
+        channel=LogChannel.ERROR,
+        context=_CONTEXT,
+        failure=_FAILURE,
+    )
+
+
+@pytest.mark.parametrize(
+    "encoded",
+    (
+        (
+            '{"timestamp_utc_ns":1,"node_role":"root","channel":"running",'
+            '"event":"attempt_started","context":null,"failure":null,'
+            '"attributes":{}}\n'
+        ).encode("utf-8"),
+        (
+            '{"timestamp_utc_ns":1,"node_role":"root","channel":"running",'
+            '"event":"attempt_started","message":"Attempt started.",'
+            '"context":null,"failure":null,"attributes":{},"extra":null}\n'
+        ).encode("utf-8"),
+    ),
+)
+def test_decode_structured_log_record_rejects_inexact_schema_keys(
+    encoded: bytes,
+) -> None:
+    """Reject a schema-controlled object with a missing or additional key."""
+    with pytest.raises(ValueError, match="exactly keys"):
         decode_structured_log_record(encoded)
 
 

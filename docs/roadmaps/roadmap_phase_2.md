@@ -461,10 +461,11 @@ class StructuredLogRecord:
     attributes: tuple[tuple[str, LogScalar], ...]
 ~~~
 
-Each `.log` file is UTF-8 JSON Lines: one compact JSON object plus `\n` per append. JSON object keys are deterministic;
-`ensure_ascii=False` and `allow_nan=False` are required. Attribute keys are nonempty and unique, and their tuple order is
-preserved. A failure reuses its own context; when both `context` and `failure` are present they must agree rather than
-record contradictory identity fields.
+Each `.log` file is UTF-8 JSON Lines: one compact JSON object plus `\n` per append. Encoding uses deterministic JSON
+object key order, `ensure_ascii=False`, and `allow_nan=False`. Decoding requires the exact schema-controlled key sets
+but does not depend on their physical JSON object order. Attribute keys are nonempty and unique, and their tuple order
+is preserved. A failure reuses its own context; when both `context` and `failure` are present they must agree rather
+than record contradictory identity fields.
 
 Phase 2 defines the storage format, not a catalogue of future events. Later phases define their event names and required
 attributes.

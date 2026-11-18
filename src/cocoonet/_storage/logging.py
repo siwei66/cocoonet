@@ -406,10 +406,14 @@ def _require_exact_keys(
     *,
     field: str,
 ) -> None:
-    """Require exact deterministic JSON object keys and order."""
-    observed = tuple(value)
-    if observed != expected:
-        raise ValueError(f"{field} must contain keys {expected!r} in order; " f"got {observed!r}.")
+    """Require the exact JSON object keys independently of physical order."""
+    missing = tuple(key for key in expected if key not in value)
+    unexpected = tuple(key for key in value if key not in expected)
+
+    if missing or unexpected:
+        raise ValueError(
+            f"{field} must contain exactly keys {expected!r}; " f"missing {missing!r}; unexpected {unexpected!r}."
+        )
 
 
 def _required_string(
