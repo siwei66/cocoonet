@@ -1,0 +1,341 @@
+# Unit 27 review outcome
+
+All configured quality gates pass, but Phase 1 and Phase 2 should not yet be declared unconditionally complete. I found two significant design inconsistencies and two smaller documentation-compliance issues.
+
+No files were modified during this review.
+
+## Verification results
+
+All checks used `D:/ProgramData/Anaconda3/envs/cocoonet/python.exe`.
+
+| Check | Result |
+|---|---|
+| Full pytest suite | 1,133 passed, 7 skipped |
+| mypy | Passed across 33 source files |
+| Black | Passed across 33 files |
+| Ruff | Passed |
+| Markdown local links | Valid |
+| Missing source docstrings | None |
+
+The seven skipped tests all require creating Windows symlinks, which the current account lacks permission to create. This is explicitly permitted by the Phase 2 roadmap. It leaves those safety cases unexecuted on this machine, but is not a test failure.
+
+No Sphinx project, `conf.py`, or documentation build command exists, so a rendered documentation/version-switching check was unavailable. The current documentation consists of Markdown design documents.
+
+# Compliance findings
+
+## 1. High: Phase 1 result reception contradicts the governing result-selection rule
+
+The current project roadmap says model completion is established by the first atomically published root bundle, without a separate selection or acceptance record. See [roadmap.md](E:/swectral_new/cocoonet/docs/roadmap.md:83).
+
+However, Phase 1 still defines:
+
+- `ReceiptStatus`
+- `PersistenceStatus`
+- `ReceptionRecord`
+- `selected_attempt_id`
+- an independent `accepted` flag
+- validators for the complete selection/receipt/persistence state graph
+
+The class explicitly says that durable publication of `selected_attempt_id` makes it authoritative before reception. See [state.py](E:/swectral_new/cocoonet/src/cocoonet/_contracts/state.py:1380) and [state.py](E:/swectral_new/cocoonet/src/cocoonet/_contracts/state.py:1409).
+
+Its validator also says Phase 2 publishes that selection before reception, but Phase 2 intentionally implements no such record. See [state.py](E:/swectral_new/cocoonet/src/cocoonet/_contracts/state.py:1650).
+
+The obsolete rule is still present in the Phase 1 roadmap: [roadmap_phase_1.md](E:/swectral_new/cocoonet/docs/roadmaps/roadmap_phase_1.md:764).
+
+This is not merely redundant terminology. The two designs behave differently:
+
+- Current governing rule: attempts remain eligible to compete until one complete bundle is successfully published.
+- Phase 1 reception rule: one attempt is selected before production reception and remains selected even if delivery fails.
+
+The Phase 1 design could therefore block a later successfully delivered competing result, contrary to the approved first-successful-publication rule.
+
+Recommendation: revise the Phase 1 roadmap, `state.py`, and its tests before any coordinator or reception consumer is implemented. Receipt and persistence retry progress can remain operational evidence, but it should not establish a separate authoritative selection or acceptance fact.
+
+## 2. High: Relative working-directory behavior differs between code and all governing documents
+
+Current governing documents require a relative working directory to resolve beneath:
+
+```text
+<current working directory>/cocoonet/<parent_id>/
+```
+
+See:
+
+- [AGENTS.md](E:/swectral_new/cocoonet/AGENTS.md:17)
+- [architecture.md](E:/swectral_new/cocoonet/docs/architecture.md:233)
+- [roadmap.md](E:/swectral_new/cocoonet/docs/roadmap.md:104)
+- [roadmap_phase_2.md](E:/swectral_new/cocoonet/docs/roadmaps/roadmap_phase_2.md:108)
+
+The implementation has no `parent_id` argument and resolves a relative user path directly against the current working directory:
+
+- [paths.py](E:/swectral_new/cocoonet/src/cocoonet/_storage/paths.py:259)
+- [test_paths.py](E:/swectral_new/cocoonet/tests/storage/test_paths.py:324)
+
+This implementation matches your earlier clarification that a user-specified directory has no `parent_id`, but that clarification was not propagated into the current governing documents.
+
+Recommendation: based on that explicit clarification, update the four documents rather than adding artificial `parent_id` handling to this function. Until then, the implementation is not compliant with the documents currently in the repository.
+
+## 3. Medium: Four Phase 2 records lack required node-usage scope
+
+`AGENTS.md` requires every non-helper class and function to end its `Notes` section with a node-usage statement. See [AGENTS.md](E:/swectral_new/cocoonet/AGENTS.md:1324).
+
+These four non-helper layout classes have docstrings but no node scope:
+
+- [RootStorageLayout](E:/swectral_new/cocoonet/src/cocoonet/_storage/paths.py:529)
+- [WorkerStorageLayout](E:/swectral_new/cocoonet/src/cocoonet/_storage/paths.py:551)
+- [WorkerParentStorageLayout](E:/swectral_new/cocoonet/src/cocoonet/_storage/paths.py:566)
+- [BundlePublicationPaths](E:/swectral_new/cocoonet/src/cocoonet/_storage/paths.py:584)
+
+This is documentation-only and does not affect runtime correctness.
+
+## 4. Low: The Phase 2 roadmap assigns a historical check to the decoder
+
+The roadmap says the decoder rejects a changed, nonempty `worker_id`: [roadmap_phase_2.md](E:/swectral_new/cocoonet/docs/roadmaps/roadmap_phase_2.md:276).
+
+A decoder sees only one document and cannot know the previous assignment. The implementation correctly enforces immutability while replacing the existing file in [execution_state.py](E:/swectral_new/cocoonet/src/cocoonet/_storage/execution_state.py:482).
+
+Recommendation: change “decoder rejects” to “replacement writer rejects” for this historical rule. No implementation change is needed.
+
+# Implementation risk review
+
+## Overall risk assessment
+
+| Area | Risk | Assessment |
+|---|---|---|
+| Scientific identity and result integrity | Low–medium | Strong explicit associations and negative tests |
+| Filesystem safety | Low | Canonical paths, ownership checks, and focused atomic publication are proportionate |
+| Lifecycle consistency | High | Obsolete reception-selection model conflicts with bundle authority |
+| Maintenance complexity | High | Very large contract and validation surface before production consumers exist |
+| Dependency/import weight | High | Basic contract imports eagerly load NumPy, pandas, and PyTorch |
+| Test confidence | High | Broad negative coverage and clean full suite |
+| Test rigidity | Medium | Many tests lock exact diagnostics and internal representations |
+| Future integration | Medium–high | Numerous contracts remain untested by real producers and consumers |
+
+## Scale relative to a lightweight module
+
+Current implementation size:
+
+| Measure | Count |
+|---|---:|
+| Source lines | 10,517 |
+| Test lines | 13,368 |
+| Classes | 53 |
+| Dataclasses | 30 |
+| Enum members | 85 |
+| Functions over 100 lines | 13 |
+| Function-local C901 suppressions | 10 |
+| Collected tests | 1,140 |
+| Public API functions | 1 (`get_version`) |
+
+This is a substantial internal framework, despite the absence of a usable evaluation API, dataset loader, model adapter, report producer, worker runtime, or end-to-end execution path.
+
+That imbalance is the strongest over-engineering signal: most abstractions have only validators and tests as consumers, so real workflow pressure has not yet confirmed that their divisions and invariants are useful.
+
+## High risk: universal runtime type-validation framework
+
+[_type_validation.py](E:/swectral_new/cocoonet/src/cocoonet/_type_validation.py:1) is 1,745 lines and supports unions, literals, typed dictionaries, generic aliases, structured classes, containers, NumPy, pandas, PyTorch, dtype validation, bounded diagnostics, and decorators.
+
+It eagerly imports all three scientific frameworks: [_type_validation.py](E:/swectral_new/cocoonet/src/cocoonet/_type_validation.py:29).
+
+On this environment, fresh imports measured approximately:
+
+| Import | Time |
+|---|---:|
+| `cocoonet` | 0.09 seconds |
+| `cocoonet._contracts.identity` | 2.83 seconds |
+| `cocoonet._contracts.state` | 2.82 seconds |
+| `cocoonet._storage.logging` | 2.81 seconds |
+
+These timings are environment-specific, but the difference shows that even identity and storage contracts pay for pandas and PyTorch initialization.
+
+For a lightweight scientific module, this is high risk. Supporting PyTorch models eventually does not require every identity, path, metadata, or logging import to initialize PyTorch.
+
+Recommended future direction:
+
+- keep ordinary contract validation direct;
+- isolate framework-specific dtype validation;
+- import pandas and PyTorch lazily or through adapter-specific modules;
+- do not expand the general annotation interpreter further unless a concrete public boundary needs it.
+
+## Medium–high risk: premature state and result modeling
+
+The largest Phase 1 modules are:
+
+- [state.py](E:/swectral_new/cocoonet/src/cocoonet/_contracts/state.py:1): 1,747 lines
+- [result.py](E:/swectral_new/cocoonet/src/cocoonet/_contracts/result.py:1): 1,350 lines
+
+Much of this code validates detailed relationships before the corresponding coordinator, report payloads, model adapters, and persistence consumers exist.
+
+Several representations are justified:
+
+- immutable identities;
+- prediction/sample alignment;
+- failure provenance;
+- partition membership;
+- attempt outcome and result-bundle routing.
+
+Higher-risk representations include:
+
+- the obsolete reception/acceptance graph;
+- stored `WorkerAvailability` alongside the facts from which availability is largely derived;
+- separate parent progress that currently has no consumer;
+- five generic report payload parameters and extensive failure-coverage validation before concrete report schemas exist.
+
+This does not mean these features are inherently wrong. It means they should not expand further until a minimal vertical workflow demonstrates their producer and consumer needs.
+
+## Medium–high risk: structured logging codec complexity
+
+[logging.py](E:/swectral_new/cocoonet/src/cocoonet/_storage/logging.py:1) is 848 lines for one JSON-line record format.
+
+Some complexity is justified:
+
+- typed reconstruction of `TraceContext` and `FailureRecord`;
+- duplicate-key rejection;
+- finite-number validation;
+- deterministic encoding;
+- append serialization.
+
+Less clearly necessary for the basic demand:
+
+- rejecting JSON objects solely because keys appear in a different physical order;
+- requiring every optional nested key to be physically present;
+- extensive custom scalar/object decoding rather than accepting ordinary valid JSON structure and then validating the reconstructed record.
+
+Canonical key order is useful for encoding and reproducible files. Requiring the same order during decoding adds compatibility fragility without improving the meaning of a JSON object.
+
+Risk: medium–high, but not an immediate correctness defect.
+
+## Medium risk: stale full-snapshot execution-state updates
+
+The state writer preserves appended rows and worker assignment, but a stale proposal can replace the current status of an existing row:
+
+```python
+merged[current_position] = proposed_record
+```
+
+See [execution_state.py](E:/swectral_new/cocoonet/src/cocoonet/_storage/execution_state.py:488).
+
+The lock prevents byte-level races and lost appended rows. It does not prevent a delayed snapshot from overwriting a newer status with an older status.
+
+This is acceptable only if “one writer” means one logical owner supplies properly ordered revisions. If multiple independent coroutines can submit stale full snapshots, serialization alone does not guarantee semantic last-update correctness.
+
+For a lightweight implementation, I would avoid adding version vectors or a transactional state framework now. Prefer one of:
+
+- document and enforce the single logical writer invariant; or
+- later expose focused “append attempt” and “update attempt status” operations rather than accepting whole stale snapshots.
+
+## Medium risk: test rigidity
+
+The test suite is strong but heavy:
+
+- 13,368 test lines for 10,517 source lines;
+- 380 `pytest.raises` usages;
+- 168 explicit `match=` checks.
+
+This provides excellent negative-path confidence. The risk is that exact diagnostic wording and internal structure become harder to improve than the actual behavior.
+
+The redesigned log concurrency tests are appropriately focused and no longer use mocks. However, one test now directly consumes the private `_root_log_lock`, so it couples to the locking mechanism. This is acceptable for verifying a reproduced platform-independent concurrency invariant, but similar private-mechanism tests should not become the default pattern.
+
+# Architecture and roadmap proportionality
+
+The architecture describes 21 development phases, including:
+
+- many table formats;
+- partition persistence;
+- multiple model families;
+- numerous reports and visualization outputs;
+- sample-influence computation;
+- CPU/GPU resource control;
+- root-local, private-online, mixed, and public-worker execution;
+- synchronization, archives, integrity checks, retries, reconnection, reconciliation, retention, and cleanup.
+
+That is not a lightweight feature scope. It is a distributed scientific execution platform.
+
+The individual requirements are often defensible, but the combined scope creates high delivery and maintenance risk. Treating every anticipated future scenario as mandatory before a minimal evaluation path exists would be over-engineering.
+
+## Requirements that are proportionate and should remain
+
+- exact sample/model/attempt identities;
+- authoritative realized partitions;
+- fresh model state for every fold;
+- prediction/sample alignment;
+- explicit failure provenance;
+- root-owned atomic result bundles;
+- safe overwrite and dataset ownership boundaries;
+- minimal informational attempt state;
+- focused atomic publication;
+- direct structured failure logs.
+
+These protect scientific validity or user data.
+
+## Requirements that should be demand-validated before implementation
+
+- external public-worker integration;
+- every advertised dataset format;
+- automatic compression and sharding for all cases;
+- multiple private connection modes;
+- generalized sample-influence analysis;
+- full report and visualization catalogue;
+- exact package-version equality across workers;
+- elaborate retention/reconciliation policies;
+- additional general runtime validation machinery;
+- additional durable state beyond authoritative configuration, partitions, bundles, and minimal attempt observations.
+
+A sensible next milestone would be one complete vertical slice:
+
+```text
+one root
+→ one explicit local worker
+→ one standardized tabular dataset
+→ one persisted split
+→ one scikit-learn-like model
+→ fold evaluation
+→ one minimal result bundle
+→ root atomic publication
+→ restart inspection
+```
+
+That slice would reveal which Phase 1 contracts are genuinely useful before the architecture expands into online and public-worker behavior.
+
+# Phase review summary
+
+## Phase 1
+
+| Area | Verdict |
+|---|---|
+| Identity and association contracts | Compliant and well tested |
+| Partition and prediction alignment | Compliant and scientifically justified |
+| Failure provenance | Compliant and useful |
+| Attempt status vocabulary | Aligned with current architecture |
+| Result envelope | Functionally consistent but complex before consumers |
+| Worker/operation observations | Valid but at risk of premature modeling |
+| Reception/acceptance model | **Noncompliant with current bundle-authority design** |
+| Overall | **Revision required before downstream lifecycle integration** |
+
+## Phase 2
+
+| Area | Verdict |
+|---|---|
+| Managed-root safety | Compliant and proportionate |
+| Dataset/root ownership | Compliant |
+| Layout construction | Functionally correct; four docstring scope violations |
+| Metadata codec | Compliant |
+| Atomic file/bundle publication | Compliant |
+| Execution-state schema and codec | Compliant |
+| Execution-state concurrency | Byte-safe; semantic stale-snapshot risk remains |
+| Structured logging | Compliant and tested |
+| Relative root resolution | **Implementation/documentation mismatch** |
+| Overall | **Implementation is operationally sound, but documentation alignment is required** |
+
+# Unit 27 and Phase 2 status
+
+Unit 27 verification itself is complete.
+
+Phase 2 implementation units 1–26 are present and all configured automated checks pass. However, formal Phase 2 acceptance should remain pending because:
+
+1. the relative-root rule differs between code and all governing documents;
+2. four layout records violate the mandatory node-scope docstring rule;
+3. the Phase 2 roadmap incorrectly assigns historical worker-assignment validation to the decoder;
+4. the inherited Phase 1 reception model conflicts with the authoritative bundle design that Phase 2 relies upon.
+
+No file was modified during Unit 27.

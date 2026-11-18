@@ -38,8 +38,9 @@ governing documents.
 - Dataset-, parent-, unit-, attempt-, model-, sample-, fold-, worker-, and operation-reference scopes.
 - A reusable computation's configuration snapshot, distinct from a fixed parent evaluation snapshot.
 - Logical normalized sample metadata, realized fold memberships, and references to dataset/model/configuration inputs.
-- Separate consolidation, execution, worker availability/readiness, stop, report, reception/acceptance, and operation
-  records. These describe facts; they do not implement transitions or scheduling decisions.
+- Separate consolidation, execution, worker availability/readiness, stop, report, and bounded-operation records, plus
+  transient candidate receipt/persistence vocabularies. These describe facts; they do not implement transitions,
+  scheduling decisions, result preselection, or acceptance.
 - Standardized regression/classification prediction alignment and availability information.
 - Generic report outcomes, traceable failures, and one complete attempt-result envelope, including failure-only results.
 - Exact Cocoonet version compatibility and supported-Python metadata checks without executable payload loading.
@@ -83,16 +84,17 @@ Phase 1 is complete only when all approved declarations and validators in Sectio
 corresponding tests pass, and:
 
 - Invalid associations are rejected descriptively, including cross-parent/unit/attempt, sample/label, class-column,
-  selected-result, and operation-progress mismatches.
+  and operation-progress mismatches.
 - Inputs cannot be silently rewritten through mutable nested containers in the Phase 1 records.
 - Incomplete configuration is representable without a parent, dataset, model, or worker; it cannot be confused with a
   validated parent execution snapshot.
 - Model references and fixed configuration references can be shared by duplicate attempts without copying or running
   executable model objects.
-- Scientific undefined values, computational failures, stopped work, failed delivery, acceptance, and worker-process
-  availability remain independently observable.
+- Scientific undefined values, computational failures, stopped work, failed delivery, and worker-process availability
+  remain independently observable. Result acceptance is established only by later atomic publication of a complete
+  root bundle.
 - A complete failure-only envelope and a complete envelope containing failed reports that preserve successful results
-  can both be represented; neither implies delivery, acceptance, or worker termination.
+  can both be represented; neither implies delivery, publication, acceptance, or worker termination.
 - Compatibility is decided using plain metadata; supported differing Python versions do not cause rejection.
 - Component obligations are covered by record-level tests without fake workers, sockets, splitters, model execution,
   files, or simulated lifecycle engines.
@@ -116,7 +118,7 @@ Plan a private `src/cocoonet/_contracts/` package with these cohesive modules:
 | `identity.py` | Typed identifiers, shared scalar aliases, identity validation. |
 | `data.py` | Sample metadata, source references, dataset/partition references and realized memberships. |
 | `execution.py` | Model/evaluation references, computation snapshot, fixed parent and attempt inputs. |
-| `state.py` | Orthogonal runtime observations, stop, bounded operation, and result reception records. |
+| `state.py` | Orthogonal runtime observations, stop handling, bounded operations, and transient candidate receipt/persistence vocabularies. |
 | `failure.py` | Trace context and failure records. |
 | `prediction.py` | Sample-aligned predictions with class identities and value availability. |
 | `result.py` | Generic report outcome and complete attempt-result envelope. |
@@ -519,8 +521,8 @@ Prediction invariants:
 ### 6.2 Report and result envelopes
 
 A complete attempt result carries parent, model, attempt, and worker identities directly.
-AttemptInputs serves allocation; ReceptionRecord serves reception and acceptance. Both identify their
-logical unit through direct parent_id and model_id fields. Neither is embedded in the completed result.
+`AttemptInputs` serves allocation. `AttemptProgress` and `BoundedOperation` describe assigned execution and
+transfer/persistence observations without selecting a winning attempt. None is embedded in the completed result.
 
 A report's fixed result slot supplies its category. ReportOutcome contains status, payload,
 and failure references. An independently consumed report receives its category explicitly from
@@ -615,7 +617,8 @@ and checked against that result when loaded. It is not another authoritative sta
   reconstruction or primary-validation failures and do not create scientific result outcomes. Their attempt-state
   observations belong to Section 7. This phase does not define a cancelled result bundle.
 - One envelope describes one attempt; result-bundle files, completion publication, report loading, and user-facing
-  rendering are later component responsibilities. At most one accepted result per unit is a separate root invariant.
+  rendering are later component responsibilities. At most one authoritative result per unit is established later by
+  atomic root publication, not by a Phase 1 selection record.
 
 ### 6.3 Planned prediction/result validators and tests
 
@@ -638,9 +641,9 @@ readiness probes, result arbitration, retry loops, persistence, or recovery. Lat
 their own authority.
 
 The shared `AttemptStatus` vocabulary covers the approved root-observed attempt workflow and the applicable
-worker-observed stages. The later minimal `execution_state.csv` representation does not replace or remove the internal
-stop, process, readiness, bounded-operation, reception, persistence, acceptance, and detailed failure records defined
-here.
+worker-observed stages. The later minimal `execution_state.csv` representation does not replace the internal stop,
+process, readiness, bounded-operation, transient candidate receipt/persistence, or detailed failure contracts defined
+here. Neither representation stores a selected attempt or independently establishes result acceptance.
 
 Identify each observation’s owner and whether it is an independent fact or a derived summary. Derive convenience
 summaries where practical and validate intentionally stored summaries against their source facts.
@@ -667,7 +670,6 @@ summaries where practical and validate intentionally stored summaries against th
 | `BoundedOperation` | `operation_id: OperationId`, `kind: OperationKind`, `context: TraceContext`, `attempt_limit: int`, `attempts_made: int`, `status: OperationStatus`, `last_failure: FailureRecord | None` |
 | `ReceiptStatus` | `not_received`, `incomplete`, `complete` |
 | `PersistenceStatus` | `not_started`, `incomplete`, `complete` |
-| `ReceptionRecord` | `parent_id: ParentId`, `model_id: ModelId`, `selected_attempt_id: AttemptId | None`, `receipt: ReceiptStatus`, `persistence: PersistenceStatus`, `result_artifact_id: ArtifactId | None`, `accepted: bool` |
 
 `first_started_at` is a finite, nonnegative UTC Unix timestamp in seconds describing the first observed start of
 attempt-specific model synchronization or local handoff; it is not used as a timer here.
@@ -684,6 +686,9 @@ complete result artifact.
 The latter records a complete valid bundle containing scientific failure information. `result_synchronizing`,
 `result_synchronized`, and `result_synchronization_failed` retain that artifact reference while describing result
 delivery and publication.
+
+None of these attempt-local observations preselects a winner. Attempts remain eligible to compete until one complete
+bundle is successfully published.
 
 `interrupted`, `connection_loss`, and `aborted` may be observed before or after processing starts and may therefore
 have no start timestamp or result artifact. Their status does not prove worker cleanup. Detailed failures remain in
@@ -761,25 +766,22 @@ in retries must explicitly convert to this total; no default retry count or dela
 - Separate connection rounds use separate operation identities. This allows a later scheduled round without resetting
   an exhausted delivery operation. Records preserve counts; Phase 1 has no automatic retry or count-reset method.
 
-### 7.4 Reception and acceptance semantics
+### 7.4 Result competition and publication boundary
 
-Root coordination owns one `ReceptionRecord` per `(parent_id, model_id)` pair, covering local and online attempts equally:
+`ReceiptStatus` and `PersistenceStatus` may describe transient progress for one candidate bundle. They do not identify
+a selected attempt and do not establish result acceptance.
 
-- Before selection, the selected attempt is absent, receipt is `not_received`, persistence is
-  `not_started`, the result artifact is absent, and accepted is false.
-- A selection names an attempt with the same parent_id and model_id. The future storage component durably persists
-  `selected_attempt_id` as the authoritative selection state before production reception proceeds. Selecting by
-  receiving order belongs to later coordination.
-- Incomplete receipt may coexist with incomplete persistence because bytes may be written as received. Complete
-  persistence requires complete receipt and a result artifact. A result artifact may describe an incomplete write;
-  presence alone is not completion. Incomplete/complete persistence requires an artifact reference.
-- Acceptance requires a durably persisted selected attempt, complete receipt, complete persistence, and the
-  corresponding result artifact. Complete persistence with `accepted=False` is representable for the crash/reconcile
-  window. An acceptance validator checks structure; it never opens a file or verifies durability.
-- A selected attempt remains selected even if delivery fails or is exhausted. Do not promote a competitor, erase
-  selection, infer acceptance from a scientific result, or mark a unit complete because its worker became available.
-- Duplicate files are not received as independent report deliveries. An unselected ready attempt can exist without
-  any reception/operation record. Later arbitration stops duplicates only after acceptance.
+- Receipt, verification, staging, transfer progress, and persistence attempts do not select a winner or make another
+  attempt ineligible.
+- Attempts remain eligible to compete until one complete valid bundle is successfully and atomically published at the
+  model's final root path.
+- The first successfully published bundle becomes authoritative and its producing attempt becomes
+  `result_synchronized`. Every other attempt for that model becomes `aborted`.
+- A complete valid bundle containing scientific failures competes on the same basis as any other complete bundle.
+- `AttemptStatus`, `ReceiptStatus`, `PersistenceStatus`, and `BoundedOperation` are observations only. None is a
+  substitute for the authoritative final root bundle.
+- Publication serialization, duplicate arbitration, crash reconciliation, and filesystem validation belong to their
+  later owning phases.
 
 ### 7.5 Planned state validators and tests
 
@@ -790,12 +792,11 @@ Root coordination owns one `ReceptionRecord` per `(parent_id, model_id)` pair, c
 | `validate_attempt_progress(value: AttemptProgress, *, parent: ParentEvaluation) -> None` | Check assigned-attempt context, approved status/start/artifact relationships, and independent stop consistency. | Every assigned-attempt status category; reject pre-assignment states; missing required start/artifact; premature artifact; artifact without start; observed stop during active processing; invalid timestamp; no transition, persistence, or result inference. |
 | `validate_worker_observation(value: WorkerObservation) -> None` | Check usability prerequisites, known/unknown positive capacity, unique valid reserved-attempt IDs, and unique parent readiness. | Available worker with zero, some, or all slots occupied; unavailable worker retaining multiple attempts; unknown capacity; invalid/bool capacity; duplicate attempt IDs; reservations exceeding a prospectively lowered limit; no scheduling or mutation. |
 | `validate_bounded_operation(value: BoundedOperation) -> None` | Check count bounds, status, last-error context, and operation kind. | Zero/past-limit counts; bool rejected; success after retries; failed/exhausted; cancelled; distinct connection round identity; no budget reset or reevaluation. |
-| `validate_reception_record(value: ReceptionRecord, *, attempts: tuple[AttemptInputs, ...]) -> None` | Validate parent/model identifiers, selected-attempt identity and parent/model agreement, and receipt/persistence/acceptance prerequisites. | Invalid parent/model IDs even before selection; unknown selected attempt; mismatched parent or model; incomplete bundle reception; complete persistence before acceptance; accepted failure outcome uses same facts; absent result artifact; no persistence I/O. |
-| `validate_reception_set(values: tuple[ReceptionRecord, ...], *, attempts: tuple[AttemptInputs, ...]) -> None` | Check unique parent/model pairs using a local tuple set and unique attempt IDs, then validate each record. | Reject duplicate parent/model pairs and duplicate attempt IDs; allow the same model ID under different parents and different models under one parent. |
 
-Runtime enforcement against concurrent writes, historical selection replacement, or acceptance replacement cannot be
-proved by a pure snapshot validator. Later storage/coordinator tests must exercise those behaviors. Phase 1 does not
-claim that frozen records alone enforce distributed at-most-one acceptance.
+Phase 1 defines no reception-selection validator. Pure snapshot validation cannot enforce publication serialization
+or determine a winner. Later storage and coordinator tests must prove that per-model publication is serialized, that
+failed candidate delivery does not exclude competitors, and that only the first successfully published complete bundle
+becomes authoritative.
 
 ## 8. Compatibility and component boundaries
 
@@ -838,14 +839,14 @@ method signatures, IPC, or messages. Later component implementations call the ap
 | Root configuration | User inputs; later validated source ownership | `ComputationSnapshot`, fixed model/evaluation references; keep authoritative inputs behind immutable handles. | 3–4 |
 | Dataset preparation | User source representation and split configuration or saved artifact | Validated `PartitionSchedule`, whose `PartitionReference` is the sole dataset/partition identity handle; exact identity/content verification and one authoritative durable schedule. | 2–4 |
 | Root parent commitment | Complete validated configuration and durable partition reference | `ParentEvaluation` with fixed model references; each model defines one logical unit through the parent/model identity pair. Old snapshots remain fixed during prospective edits. | 3, 13 |
-| Root coordination | Fixed parent, readiness, unit/attempt/reception observations | `AttemptInputs`, progress/selection/acceptance observations; allocation and duplicate policy remain separate from records. | 13–18 |
+| Root coordination | Fixed parent, readiness, and unit/attempt/operation observations | `AttemptInputs`, progress observations, and bounded-operation observations; allocation and duplicate policy remain separate from records. | 13–18 |
 | Worker control/readiness | Applicable local/online parent context, owned worker | `WorkerObservation`, `AttemptProgress`; no model execution in the coordinator or control path. | 5, 13–17 |
 | Model initialization/execution | Resolved fixed model input and framework-supplied sample data | Aligned standardized predictions or scoped failures; executable loading only inside enforced worker boundary. | 5–7, 10 |
 | Validation/report components | Saved schedule, sample metadata, aligned predictions and valid prerequisites | Typed report payloads and `ReportOutcome`; preserve labels/classes, finite values, permitted infinities, `NaN`, `None`, and failures without redundant value statuses or independent file persistence. | 7–10 |
 | Attempt workflow/packaging | Report outcomes and computational failure records for one attempt | `AttemptResult`; one complete file later, with a failure-only reconstruction outcome or a validation-failure envelope that preserves completed fold results. No report-specific delivery state. | 7–12 |
 | Worker report persistence | Complete result envelope | Published worker artifact resolved by `ArtifactId`; preserve attempt identity. | 2, 12 |
-| Root reception/persistence | Selected existing artifact and its unit/attempt identity | Persisted selection state, durable result evidence, and acceptance/acknowledgement after complete persistence. No active-loop report loading. | 2, 13–18 |
-| Delivery | Selected existing completed result, operation progress | Updated bounded-operation observations; resends never reconstruct/recompute results. | 14, 17 |
+| Root reception/persistence | Eligible completed candidate bundles and their unit/attempt identities | Candidate-local transfer/staging observations until atomic publication; the complete final root bundle is the sole acceptance authority. No attempt is preselected. | 2, 13–18 |
+| Delivery | Eligible existing completed result and operation progress | Updated bounded-operation observations; retries never reconstruct results, preselect a winner, or exclude competitors. | 14, 17 |
 | Failure/log owner | Actual exception or detected failure plus precise context | `FailureRecord`, later structured log; no application error implies worker termination. | 2 and each producer |
 | Compatibility boundary | Plain root/worker metadata | Compatibility decision before normal operation; no model/result payload loading. | 13, 16 |
 
@@ -886,7 +887,7 @@ approved unit. Generated dataclass methods do not imply planned custom methods.
 | 7 | Execution/attempt/stop enums with the approved attempt vocabulary; `ParentProgress`; `StopDisposition`; `AttemptProgress` | `validate_parent_progress`; `validate_stop_disposition`; `validate_attempt_progress` | `tests/contracts/test_state.py` |
 | 8 | Worker/ownership/compatibility enums; `ParentContextReadiness`; `WorkerObservation` | `validate_worker_observation` | `tests/contracts/test_state.py` |
 | 9 | Operation enums; `BoundedOperation` | `validate_bounded_operation` | `tests/contracts/test_state.py` |
-| 10 | Receipt/persistence enums; `ReceptionRecord` | `validate_reception_record`; `validate_reception_set` | `tests/contracts/test_state.py` |
+| 10 | `ReceiptStatus`; `PersistenceStatus` | No reception-selection validator; atomic publication in later phases determines the winner. | `tests/contracts/test_state.py` |
 | 11 | `CompatibilityMetadata`; declared supported-series constant | `validate_compatibility_metadata`; `require_compatible` | `tests/contracts/test_compatibility.py` |
 | 12 | No new production declaration/function | Verify agreement among schemas, validators, consumers, tests, and component boundaries; target-validation ownership; scalar preservation; bounded diagnostics; helper documentation; nonredundant composed validation; and complete-attempt reservation semantics. The universal validator and its tests are outside the development scope. Run applicable phase checks. | Targeted contract test modules. |
 
@@ -967,7 +968,7 @@ No production tests are added or run merely to validate a documentation-only pla
 | How much dataset/report schema belongs here? | Sample/source/membership and prediction alignment plus generic report/envelope structure. Feature adapters and concrete metric payloads remain Phase 4/8–10. |
 | Which fields/types are specified? | Sections 3–6 define scalar families, direct source strings, parent model references, direct result routing, report-slot identity, derived outcomes, and position-aligned prediction failure associations. Section 9 defines implementation units; Section 13 defines validation responsibilities. |
 | Does undefined science mean an operation failed? | No. Formula-defined `NaN` has no failure solely for being undefined; computationally unavailable `None` has applicable failure references; schema-defined non-applicable `None` has none. No per-value status enum is needed. |
-| Does a failure-only result finish delivery or terminate a worker? | No. It is a complete scientific outcome, independently selected/persisted/accepted later. |
+| Does a failure-only result finish delivery or terminate a worker? | No. It is a complete scientific outcome that competes normally; it becomes authoritative only through successful atomic root publication. |
 | What does a retry count mean? | Total begun attempts including the first, bounded by a supplied total limit; no policy defaults or timers chosen. |
 | Are frozen records proof of durable acceptance or isolation? | No. They describe evidence/references; storage, ownership, concurrency, and enforced execution boundaries remain later obligations. |
 | Does Python mismatch imply framework incompatibility? | Not within the declared supported stable series; complete Cocoonet strings must match exactly. |
@@ -989,8 +990,9 @@ Plan approval and implementation-unit approval are separate requirements.
    no-rebuild plan. Resolve the actual commands before an authorized documentation rebuild.
 3. **Stale attempt-state vocabulary:** Unit 7 still described the earlier `allocated`, `result_ready`, and `stopped`
    model and cancellation/supersession stop reasons. This revision replaces only that vocabulary and its directly
-   dependent invariants. It retains the internal observation, stop, failure, operation, and reception records; the
-   later six-column persistence schema does not replace those internal contracts.
+   dependent invariants. It retains the internal observation, stop, failure, operation, and candidate
+   receipt/persistence vocabularies. The later six-column persistence schema and final bundle publication do not
+   replace those internal contracts.
 
 No conflicting behavioral requirement was found among root `AGENTS.md`, the architecture, and the Phase 1 scope.
 Their broad deferred-mechanism wording is compatible with choosing the minimal internal contracts here: Phase 1
@@ -1000,7 +1002,7 @@ specifies observations and associations; later phases implement their owners and
 
 | Decision | Earliest owning phase / boundary |
 | --- | --- |
-| Filesystem equality/containment, symlinks, overwrite safety, artifact layout, dill loading/publication, durable reception-selection state and logs | Phase 2, before any file-changing consumer. |
+| Filesystem equality/containment, symlinks, overwrite safety, artifact layout, dill loading/publication, atomic file and bundle publication, and logs | Phase 2, before any file-changing consumer. |
 | Public computation API, configuration containers/edits, settings payload schema, fixed-input ownership implementation, copy/exclusion mechanics, bulk commit behavior | Phase 3; recovery-specific mechanics Phase 15. |
 | Dataset identity generation/content validation, sample-ID restoration, raw-input parsing and standardization, floating-point representation selection, mixed inline/file support, tensor shape encoding, splitter APIs and strategy coverage/empty-population decisions | Phase 4, before dataset consumers. Standardized scalar admissibility and contextual target compatibility are Phase 1 responsibilities. |
 | Isolation enforcement and model/control execution boundary | Phase 5, before executable loading or user code. |
@@ -1010,10 +1012,10 @@ specifies observations and associations; later phases implement their owners and
 | Concrete influence payload, exact comparison count, value/failure-reference representation, and removal workflow under architecture 4.7 | Phase 9; formula, populations, failure traceability, successful-result preservation, and absence of a separate evaluation-status field are already fixed. |
 | PyTorch reconstruction/training/device failure details and process-pool/CPU-detection mechanics | Phases 10–11, preserving architecture 3.3/8. |
 | Result serialization/publication and envelope payload loading restrictions | Phase 12 using Phase 2; no extra authoritative partition copy. |
-| Local IPC, readiness verification, start/assignment/acceptance algorithms, process lifetime | Phase 13, with interruption/reconciliation in Phase 15. |
+| Local IPC, readiness verification, start/assignment/atomic-publication algorithms, process lifetime | Phase 13, with interruption/reconciliation in Phase 15. |
 | Retry counts/delays, delivery and retention algorithms | Phase 14; separate connection-round timers in Phase 16. |
 | Wire encodings, authentication, heartbeat/reconnect/probes, online transfer verification | Phases 16–17. |
-| Duplicate arbitration/tie handling, concurrency enforcement, mixed-target integration | Phase 18 using existing unit/attempt/selection contracts. |
+| Duplicate arbitration/tie handling, concurrency enforcement, mixed-target integration | Phase 18 using existing unit/attempt contracts and atomic bundle publication. |
 | Cleanup selection, deletion verification, public-service API and lifecycle policies | Phases 19–20; the public interface must be supplied externally. |
 | Full supported-runtime serialization/model/result compatibility and lifecycle integration matrix | Incrementally with producers/consumers, completed in Phase 21. |
 
@@ -1025,8 +1027,8 @@ documentation and approval gates.
 ## 12. Review checkpoint
 
 Implementation order: identity primitives → sample/source/schedule records → configuration/parent/attempt references
-→ failures → predictions → report/result envelopes → execution/worker/operation/reception observations → compatibility
-guard → contract coverage and quality checks.
+→ failures → predictions → report/result envelopes → execution/worker/operation observations → compatibility guard
+→ contract coverage and quality checks.
 
 Phase 1 completion requires conformance to the specified schemas, validation responsibilities,
 component boundaries, documentation requirements, and tests. Unresolved requirements block their
