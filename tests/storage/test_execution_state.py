@@ -398,10 +398,122 @@ def test_replace_execution_state_writes_and_replaces_atomically(
             attempt_id=AttemptId("attempt-2"),
         )
 
-        await replace_execution_state(path, (assigned, appended))
+        await replace_execution_state(
+            path,
+            (assigned, appended),
+            expected_records=(initial,),
+        )
 
         assert await load_execution_state(path) == (assigned, appended)
         assert not staged_file_path(path).exists()
+
+    asyncio.run(exercise())
+
+
+def test_replace_execution_state_requires_current_record_for_change(
+    tmp_path: Path,
+) -> None:
+    """Require an exact current-record precondition for an existing-row change."""
+
+    async def exercise() -> None:
+        path = tmp_path / "execution_state.csv"
+        initial = _record(
+            worker_id=_WORKER_ID,
+            attempt_status=AttemptStatus.MODEL_SYNCHRONIZING,
+        )
+        updated = replace(
+            initial,
+            attempt_status=AttemptStatus.MODEL_SYNCHRONIZED,
+        )
+
+        await replace_execution_state(path, (initial,))
+
+        with pytest.raises(ValueError, match="exact current record"):
+            await replace_execution_state(path, (updated,))
+
+        assert await load_execution_state(path) == (initial,)
+
+    asyncio.run(exercise())
+
+
+def test_replace_execution_state_rejects_stale_competing_update(
+    tmp_path: Path,
+) -> None:
+    """Permit one competing revision and reject the stale competitor."""
+
+    async def exercise() -> None:
+        path = tmp_path / "execution_state.csv"
+        initial = _record(
+            worker_id=_WORKER_ID,
+            attempt_status=AttemptStatus.MODEL_SYNCHRONIZED,
+        )
+        running = replace(
+            initial,
+            attempt_status=AttemptStatus.RUNNING,
+        )
+        failed = replace(
+            initial,
+            attempt_status=AttemptStatus.ATTEMPT_FAILED,
+        )
+
+        await replace_execution_state(path, (initial,))
+
+        outcomes = await asyncio.gather(
+            replace_execution_state(
+                path,
+                (running,),
+                expected_records=(initial,),
+            ),
+            replace_execution_state(
+                path,
+                (failed,),
+                expected_records=(initial,),
+            ),
+            return_exceptions=True,
+        )
+
+        assert sum(outcome is None for outcome in outcomes) == 1
+        assert sum(isinstance(outcome, ValueError) for outcome in outcomes) == 1
+        assert await load_execution_state(path) in (
+            (running,),
+            (failed,),
+        )
+        assert not staged_file_path(path).exists()
+
+    asyncio.run(exercise())
+
+
+def test_replace_execution_state_rejects_stale_status_regression(
+    tmp_path: Path,
+) -> None:
+    """Prevent an old observation from replacing a newer published status."""
+
+    async def exercise() -> None:
+        path = tmp_path / "execution_state.csv"
+        initial = _record(
+            worker_id=_WORKER_ID,
+            attempt_status=AttemptStatus.MODEL_SYNCHRONIZING,
+        )
+        synchronized = replace(
+            initial,
+            attempt_status=AttemptStatus.MODEL_SYNCHRONIZED,
+        )
+
+        await replace_execution_state(path, (initial,))
+        await replace_execution_state(
+            path,
+            (synchronized,),
+            expected_records=(initial,),
+        )
+
+        with pytest.raises(ValueError, match="stale"):
+            await replace_execution_state(
+                path,
+                (initial,),
+                expected_records=(initial,),
+            )
+
+        assert await load_execution_state(path) == (synchronized,)
 
     asyncio.run(exercise())
 

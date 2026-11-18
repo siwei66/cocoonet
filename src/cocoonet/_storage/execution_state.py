@@ -422,9 +422,10 @@ def _execution_state_lock(path: Path, /) -> asyncio.Lock:
 def _merge_execution_state_records(
     current: tuple[ExecutionStateRecord, ...],
     proposed: tuple[ExecutionStateRecord, ...],
+    expected_records: tuple[ExecutionStateRecord, ...],
     /,
 ) -> tuple[ExecutionStateRecord, ...]:
-    """Merge one proposed state revision without losing existing attempt rows.
+    """Merge one proposed state revision without losing newer observations.
 
     Parameters
     ----------
@@ -432,6 +433,8 @@ def _merge_execution_state_records(
         Currently published records in their preserved identity order.
     proposed
         Validated records supplied for the next state revision.
+    expected_records
+        Exact previously observed records required for changed existing rows.
 
     Returns
     -------
@@ -441,20 +444,37 @@ def _merge_execution_state_records(
     Raises
     ------
     ValueError
-        If an existing identity is reordered or changed, an established worker
-        assignment is removed or changed, or the merged records violate the
-        execution-state record contract.
+        If an expected record is stale or unrelated to the proposal, a changed
+        existing row lacks its exact current precondition, an existing identity
+        is reordered or changed, an established worker assignment is removed
+        or changed, or the merged records violate the state-record contract.
 
     Notes
     -----
-    Existing rows omitted from a stale concurrent proposal remain unchanged.
-    New attempt identities are appended after every already published row.
-    Attempt-status changes are accepted without applying transition policy.
+    Existing rows omitted from a concurrent proposal remain unchanged. New
+    attempt identities are appended after every already published row. An
+    existing row may change only when its exact current record was supplied as
+    an optimistic concurrency precondition.
+
+    This function does not apply attempt-status transition policy.
 
     Node usage scope: Shared - Used by root and worker state writers.
     """
+    validate_execution_state_records(expected_records)
+
     merged = list(current)
     current_positions = {record.attempt_id: position for position, record in enumerate(current)}
+    proposed_ids = {record.attempt_id for record in proposed}
+    expected_by_id = {record.attempt_id: record for record in expected_records}
+
+    for expected_record in expected_records:
+        if expected_record.attempt_id not in proposed_ids:
+            raise ValueError("Each expected execution-state record must correspond to " "a proposed existing attempt.")
+
+        current_position = current_positions.get(expected_record.attempt_id)
+        if current_position is None or current[current_position] != expected_record:
+            raise ValueError("Execution-state revision is stale for attempt " f"{expected_record.attempt_id!r}.")
+
     next_current_position = 0
     saw_new_attempt = False
 
@@ -485,6 +505,13 @@ def _merge_execution_state_records(
                 f"preserve assigned worker_id {current_record.worker_id!r}."
             )
 
+        if proposed_record != current_record and expected_by_id.get(proposed_record.attempt_id) != current_record:
+            raise ValueError(
+                "Changing existing attempt "
+                f"{proposed_record.attempt_id!r} requires its exact current "
+                "record in expected_records."
+            )
+
         merged[current_position] = proposed_record
         next_current_position += 1
 
@@ -497,6 +524,8 @@ async def replace_execution_state(
     path: PathInput,
     records: tuple[ExecutionStateRecord, ...],
     /,
+    *,
+    expected_records: tuple[ExecutionStateRecord, ...] = (),
 ) -> None:
     """Atomically replace one serialized execution-state CSV file.
 
@@ -507,23 +536,28 @@ async def replace_execution_state(
     records
         Proposed records containing existing rows in published order and any
         new attempts after them.
+    expected_records
+        Exact previously observed records for existing rows changed by this
+        revision. New and unchanged rows require no precondition.
 
     Raises
     ------
     TypeError
         If the path, sequence, record, or field has an incorrect type.
     ValueError
-        If the path does not identify ``execution_state.csv`` or the proposed
-        revision violates schema, identity, ordering, or worker-assignment
-        requirements.
+        If the path does not identify ``execution_state.csv``, the revision is
+        stale or lacks a required current-record precondition, or the proposal
+        violates schema, identity, ordering, or worker-assignment requirements.
     OSError
         If asynchronous staging-file I/O fails.
 
     Notes
     -----
     Validation and encoding finish before the staging file is opened. Updates
-    to the same physical path are serialized in the owning event loop.
-    Publication uses the focused mutable staged-file helper.
+    to the same physical path are serialized in the owning event loop. Within
+    that lock, changed existing rows are compared with their exact expected
+    records before publication. Publication uses the focused mutable staged-file
+    helper.
 
     This function does not validate status transitions, inspect result bundles,
     or infer model completion.
@@ -539,13 +573,17 @@ async def replace_execution_state(
         )
 
     encoded = encode_execution_state_csv(records)
+    validate_execution_state_records(expected_records)
     lock = _execution_state_lock(resolve_physical_path(final))
 
     async with lock:
-        if final.exists():
-            current = await load_execution_state(final)
-            records = _merge_execution_state_records(current, records)
-            encoded = encode_execution_state_csv(records)
+        current = await load_execution_state(final) if final.exists() else ()
+        records = _merge_execution_state_records(
+            current,
+            records,
+            expected_records,
+        )
+        encoded = encode_execution_state_csv(records)
 
         async with aiofiles.open(staging, "wb") as staging_handle:
             await staging_handle.write(encoded)

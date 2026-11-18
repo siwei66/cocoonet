@@ -431,8 +431,9 @@ Assignments fill the existing empty `worker_id`; state transitions update only `
 are not removed, duplicated, or reordered.
 
 The root and each worker serialize updates to their own file through one writer. The writer stages and atomically
-replaces the complete CSV. Atomic replacement prevents partial publication; writer serialization prevents competing
-lost updates.
+replaces the complete CSV. Atomic replacement prevents partial publication. Updating an existing row requires the exact
+previously observed record as an optimistic concurrency precondition; a mismatching current record rejects the stale
+revision. Newly created attempts require no precondition and remain mergeable as append-only rows.
 
 The loader returns records in file order. Row order is preserved for stable inspection but has no lifecycle meaning.
 The file is informational and never establishes result-bundle existence or model completion. The complete scientific
@@ -657,6 +658,8 @@ async def replace_execution_state(
     path: PathInput,
     records: tuple[ExecutionStateRecord, ...],
     /,
+    *,
+    expected_records: tuple[ExecutionStateRecord, ...] = (),
 ) -> None
 
 async def load_execution_state(
@@ -665,10 +668,11 @@ async def load_execution_state(
 ) -> tuple[ExecutionStateRecord, ...]
 ~~~
 
-The asynchronous writer validates and encodes before opening staging, preserves existing identity order, permits field
-updates within existing rows, permits newly created attempts only as appended rows, writes with `aiofiles`, then calls
-the focused mutable publication helper. One serialized writer owns updates to each file. The loader reads only the
-final file. Neither function applies transitions or treats state as proof that a result bundle exists.
+The asynchronous writer validates and encodes before opening staging, preserves existing identity order, and permits
+new attempts only as appended rows. An existing row may change only when its exact currently published record matches
+the supplied optimistic concurrency precondition. The writer rejects stale revisions, writes with `aiofiles`, and then
+calls the focused mutable publication helper. The loader reads only the final file. Neither function applies lifecycle
+transitions or treats state as proof that a result bundle exists.
 
 ### 6.5 `logging.py`
 
@@ -800,13 +804,15 @@ Build root and worker attempt-state records from real Phase 1 identities. Test:
 - every exact status value;
 - non-ASCII model labels and RFC-compatible commas, quotes, and newlines;
 - round-trip preservation of row order;
-- assignment filling an empty worker ID;
+- assignment and status updates with exact-current-record preconditions;
 - immutable worker assignment after it is established;
-- in-place status updates without reordering;
-- duplicate and retry attempts appended in creation order;
+- rejection of an existing-row change without its current-record precondition;
+- duplicate and retry attempts appended in creation order without preconditions;
 - duplicate attempt-ID and inconsistent model-ID/model-label rejection;
 - malformed rows, incorrect headers, BOM, unknown statuses, and invalid identifiers;
-- serialized competing updates without lost rows;
+- serialized concurrent appends without lost rows;
+- competing updates based on the same observation permitting one revision and rejecting the stale competitor;
+- stale observations unable to regress a newer published status;
 - initial write and repeated atomic replacement;
 - loader ignoring stale `.partial`; and
 - state claims never establishing result-bundle existence or model completion.
