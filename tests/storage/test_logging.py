@@ -335,30 +335,17 @@ def test_append_root_log_preserves_concurrent_complete_lines(
     asyncio.run(exercise())
 
 
-def test_append_root_log_serializes_writes_independent_of_platform(
+def test_root_log_lock_prevents_overlapping_writes(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Prevent overlapping writes without relying on OS append behavior."""
+    """Serialize same-path write sections without allowing overlap."""
     active_writes = 0
     maximum_active_writes = 0
 
-    class FakeLogHandle:
-        """Expose an instrumented asynchronous append handle."""
+    async def write_once(path: Path) -> None:
+        nonlocal active_writes, maximum_active_writes
 
-        async def __aenter__(self) -> "FakeLogHandle":
-            return self
-
-        async def __aexit__(
-            self,
-            exception_type: object,
-            exception: object,
-            traceback: object,
-        ) -> None:
-            return None
-
-        async def write(self, data: bytes) -> int:
-            nonlocal active_writes, maximum_active_writes
+        async with storage_logging._root_log_lock(path):
             active_writes += 1
             maximum_active_writes = max(
                 maximum_active_writes,
@@ -366,27 +353,51 @@ def test_append_root_log_serializes_writes_independent_of_platform(
             )
             await asyncio.sleep(0)
             active_writes -= 1
-            return len(data)
-
-    def fake_open(path: object, mode: str) -> FakeLogHandle:
-        return FakeLogHandle()
 
     async def exercise() -> None:
         layout = build_root_storage_layout(tmp_path)
-        records = tuple(
-            _record(
-                timestamp_utc_ns=index,
-                event=f"event-{index}",
-            )
-            for index in range(10)
-        )
 
-        await asyncio.gather(*(append_root_log(layout, record) for record in records))
+        await asyncio.gather(*(write_once(layout.root_running_log) for _ in range(20)))
 
-    monkeypatch.setattr(storage_logging.aiofiles, "open", fake_open)
     asyncio.run(exercise())
 
     assert maximum_active_writes == 1
+
+
+def test_root_log_paths_and_functions_are_os_independent(
+    tmp_path: Path,
+) -> None:
+    """Use platform-native paths for routing, appending, and decoding."""
+
+    async def exercise() -> None:
+        root = tmp_path / "portable root"
+        layout = build_root_storage_layout(root)
+        layout.logs.mkdir(parents=True)
+
+        running = _record(
+            event="portable_running_event",
+            message="Portable running message.",
+        )
+        error = _record(
+            timestamp_utc_ns=2,
+            channel=LogChannel.ERROR,
+            event="portable_error_event",
+            message="Portable error message.",
+        )
+
+        await append_root_log(layout, running)
+        await append_root_log(layout, error)
+
+        assert layout.logs == root.resolve() / "logs"
+        assert layout.root_running_log == (layout.logs / "root_running.log")
+        assert layout.root_error_log == (layout.logs / "root_error.log")
+        assert layout.root_running_log.name == "root_running.log"
+        assert layout.root_error_log.name == "root_error.log"
+
+        assert decode_structured_log_record(layout.root_running_log.read_bytes()) == running
+        assert decode_structured_log_record(layout.root_error_log.read_bytes()) == error
+
+    asyncio.run(exercise())
 
 
 def test_append_root_log_leaves_incomplete_final_content_untouched(
