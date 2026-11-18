@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import collections.abc as collections_abc
 import inspect
+import sys
 from dataclasses import fields, is_dataclass
 from functools import lru_cache, wraps
+from importlib import import_module
 from itertools import islice
-from types import NoneType, UnionType
+from types import ModuleType, NoneType, UnionType
 from typing import (
     Annotated,
     Any,
@@ -26,15 +28,32 @@ from typing import (
     is_typeddict,
 )
 
-import numpy as np
-import pandas as pd
-import torch
-
 _VALUE_PREVIEW_LIMIT = 500
 _ITEM_PREVIEW_LIMIT = 80
 _PREVIEW_ITEM_LIMIT = 8
 _DATAFRAME_PREVIEW_ROWS = 5
 _DATAFRAME_PREVIEW_COLUMNS = 8
+
+_ScientificDependency = Literal["numpy", "pandas", "torch"]
+
+
+def _loaded_scientific_dependency(
+    name: _ScientificDependency,
+    /,
+) -> ModuleType | None:
+    """Return an already loaded scientific dependency without importing it."""
+    module = sys.modules.get(name)
+    return module if isinstance(module, ModuleType) else None
+
+
+def _load_scientific_dependency(
+    name: _ScientificDependency,
+    /,
+) -> ModuleType:
+    """Load one requested scientific dependency through Python's module cache."""
+    module = _loaded_scientific_dependency(name)
+    return module if module is not None else import_module(name)
+
 
 _Parameters = ParamSpec("_Parameters")
 _ReturnType = TypeVar("_ReturnType")
@@ -289,7 +308,7 @@ def _preview_items(items: collections_abc.Iterable[object]) -> str:
 
 
 def _scientific_value_preview(value: object) -> str | None:
-    """Produce a bounded preview for a supported scientific object.
+    """Produce a bounded preview for an already loaded scientific object.
 
     Parameters
     ----------
@@ -301,20 +320,22 @@ def _scientific_value_preview(value: object) -> str | None:
     str | None
         Bounded framework preview, or ``None`` for another value category.
     """
-    if isinstance(value, np.ndarray):
+    numpy = _loaded_scientific_dependency("numpy")
+    if numpy is not None and isinstance(value, numpy.ndarray):
         values = _preview_items(value.flat)
         return _truncate(
             f"ndarray(shape={value.shape}, dtype={value.dtype}, size={value.size}, values=[{values}])",
             _VALUE_PREVIEW_LIMIT,
         )
 
-    if isinstance(value, np.generic):
+    if numpy is not None and isinstance(value, numpy.generic):
         return _truncate(
             f"{type(value).__name__}(dtype={value.dtype}, value={_safe_repr(value)})",
             _VALUE_PREVIEW_LIMIT,
         )
 
-    if isinstance(value, pd.DataFrame):
+    pandas = _loaded_scientific_dependency("pandas")
+    if pandas is not None and isinstance(value, pandas.DataFrame):
         preview = value.iloc[:_DATAFRAME_PREVIEW_ROWS, :_DATAFRAME_PREVIEW_COLUMNS]
         return _truncate(
             (
@@ -324,14 +345,15 @@ def _scientific_value_preview(value: object) -> str | None:
             _VALUE_PREVIEW_LIMIT,
         )
 
-    if isinstance(value, (pd.Series, pd.Index)):
+    if pandas is not None and isinstance(value, (pandas.Series, pandas.Index)):
         values = _preview_items(value)
         return _truncate(
             f"{type(value).__name__}(length={len(value)}, dtype={value.dtype}, values=[{values}])",
             _VALUE_PREVIEW_LIMIT,
         )
 
-    if isinstance(value, torch.Tensor):
+    torch = _loaded_scientific_dependency("torch")
+    if torch is not None and isinstance(value, torch.Tensor):
         metadata = (
             f"Tensor(shape={tuple(value.shape)}, dtype={value.dtype}, "
             f"device={value.device}, requires_grad={value.requires_grad}"
@@ -491,7 +513,7 @@ def _fail(
     raise _TypeMismatchError(path, expected_type, value, detail)
 
 
-def _normalize_numpy_dtype(expected_dtype: object, *, path: str) -> np.dtype[Any]:
+def _normalize_numpy_dtype(expected_dtype: object, *, path: str) -> object:
     """Normalize one NumPy dtype specification.
 
     Parameters
@@ -511,19 +533,20 @@ def _normalize_numpy_dtype(expected_dtype: object, *, path: str) -> np.dtype[Any
     _TypeMismatchError
         If NumPy cannot interpret the dtype specification.
     """
+    numpy = _load_scientific_dependency("numpy")
     try:
-        return cast(np.dtype[Any], np.dtype(cast(Any, expected_dtype)))
+        return numpy.dtype(expected_dtype)
     except (TypeError, ValueError) as error:
         _fail(
             path,
-            np.dtype,
+            numpy.dtype,
             expected_dtype,
             f"invalid NumPy dtype specification: {error}",
         )
 
 
 def _validate_numpy_dtype_value(
-    value: np.ndarray[Any, Any] | np.generic,
+    value: Any,
     *,
     expected_dtype: object,
     field: str,
@@ -571,7 +594,8 @@ def _validate_numpy_array_annotation(
         If the value is not an array or its declared dtype is invalid or does
         not match.
     """
-    if not isinstance(value, np.ndarray):
+    numpy = _load_scientific_dependency("numpy")
+    if not isinstance(value, numpy.ndarray):
         _fail(path, expected_type, value)
 
     arguments = get_args(expected_type)
@@ -587,7 +611,7 @@ def _validate_numpy_array_annotation(
     if dtype_annotation is Any:
         return
 
-    if get_origin(dtype_annotation) is not np.dtype:
+    if get_origin(dtype_annotation) is not numpy.dtype:
         _fail(
             path,
             expected_type,
@@ -1249,8 +1273,9 @@ def _validate_container(
         Whether this helper recognized and validated the annotation.
     """
     origin = get_origin(expected_type)
+    numpy = _loaded_scientific_dependency("numpy")
 
-    if origin is np.ndarray:
+    if numpy is not None and origin is numpy.ndarray:
         _validate_numpy_array_annotation(value, expected_type, path)
         return True
 
@@ -1429,7 +1454,7 @@ def validate_declared_types(
 
 
 def validate_numpy_dtype(
-    value: np.ndarray[Any, Any] | np.generic,
+    value: object,
     *,
     expected_dtype: object,
     field: str = "value",
@@ -1456,12 +1481,14 @@ def validate_numpy_dtype(
 
     Notes
     -----
+    NumPy is loaded only when this explicit NumPy validation boundary is used.
     Node usage scope: Shared - Used by both root and worker nodes.
     """
+    numpy = _load_scientific_dependency("numpy")
     try:
         validate_declared_types(
             value,
-            expected_type=np.ndarray | np.generic,
+            expected_type=numpy.ndarray | numpy.generic,
             field=field,
         )
         _validate_numpy_dtype_value(
@@ -1493,8 +1520,9 @@ def _normalize_pandas_dtype(expected_dtype: object, *, path: str) -> object:
     _TypeMismatchError
         If pandas cannot interpret the dtype specification.
     """
+    pandas = _load_scientific_dependency("pandas")
     try:
-        return pd.api.types.pandas_dtype(expected_dtype)
+        return pandas.api.types.pandas_dtype(expected_dtype)
     except TypeError as error:
         _fail(
             path,
@@ -1505,7 +1533,7 @@ def _normalize_pandas_dtype(expected_dtype: object, *, path: str) -> object:
 
 
 def _validate_pandas_dtype_value(
-    value: pd.Series[Any] | pd.Index[Any] | pd.DataFrame,
+    value: Any,
     *,
     expected_dtype: object,
     field: str,
@@ -1526,12 +1554,13 @@ def _validate_pandas_dtype_value(
     _TypeMismatchError
         If the dtype specification is invalid or an inspected dtype differs.
     """
+    pandas = _load_scientific_dependency("pandas")
     normalized_dtype = _normalize_pandas_dtype(
         expected_dtype,
         path="expected_dtype",
     )
 
-    if isinstance(value, pd.DataFrame):
+    if isinstance(value, pandas.DataFrame):
         # Dataframes may contain multiple columns, so report the stable
         # positional dtype path of the first mismatching column.
         for index, actual_dtype in enumerate(value.dtypes):
@@ -1548,7 +1577,7 @@ def _validate_pandas_dtype_value(
 
 
 def validate_pandas_dtype(
-    value: pd.Series[Any] | pd.Index[Any] | pd.DataFrame,
+    value: object,
     *,
     expected_dtype: object,
     field: str = "value",
@@ -1582,12 +1611,15 @@ def validate_pandas_dtype(
     this helper repeatedly for very wide dataframes can add overhead
     proportional to the number of inspected columns. A heterogeneous schema
     should validate only its selected series with column-specific calls.
+    pandas is loaded only when this explicit pandas validation boundary is used.
+    Its own dependencies, including NumPy, may be loaded transitively.
     Node usage scope: Shared - Used by both root and worker nodes.
     """
+    pandas = _load_scientific_dependency("pandas")
     try:
         validate_declared_types(
             value,
-            expected_type=pd.Series | pd.Index | pd.DataFrame,
+            expected_type=pandas.Series | pandas.Index | pandas.DataFrame,
             field=field,
         )
         _validate_pandas_dtype_value(
@@ -1600,9 +1632,9 @@ def validate_pandas_dtype(
 
 
 def validate_torch_dtype(
-    value: torch.Tensor,
+    value: Any,
     *,
-    expected_dtype: torch.dtype,
+    expected_dtype: object,
     field: str = "value",
 ) -> None:
     """Require a PyTorch tensor to have the expected dtype.
@@ -1627,8 +1659,11 @@ def validate_torch_dtype(
 
     Notes
     -----
+    PyTorch is loaded only when this explicit PyTorch validation boundary is used.
+    Its own optional or required dependencies may be loaded transitively.
     Node usage scope: Shared - Used by both root and worker nodes.
     """
+    torch = _load_scientific_dependency("torch")
     try:
         validate_declared_types(
             value,

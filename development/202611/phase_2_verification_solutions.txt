@@ -1,0 +1,612 @@
+No files were modified. Your lazy-loading plan is practical, with one limitation: pandas depends on NumPy, and PyTorch may load optional dependencies internally. Cocoonet can ensure that it directly imports only the requested framework, but it cannot prevent that framework’s own transitive imports.
+
+## 1. Universal runtime type-validation framework
+
+### Assessment
+
+Your proposed method is appropriate:
+
+1. Importing `_type_validation` must not load NumPy, pandas, or PyTorch.
+2. Ordinary Python type validation must not load them.
+3. An explicit NumPy, pandas, or PyTorch boundary loads only that framework directly.
+4. Scientific diagnostics inspect a framework object only when its module is already loaded; formatting an unrelated error must not trigger scientific imports.
+5. Python’s import cache handles repeated loads.
+
+Some contract modules intentionally use NumPy scalar types in their schemas, such as [identity.py](E:/swectral_new/cocoonet/src/cocoonet/_contracts/identity.py:6). Importing those modules will still load NumPy because they genuinely encounter NumPy types. The correction prevents them from also loading pandas and PyTorch through the universal validator.
+
+### Proposed documentation revision
+
+File: [AGENTS.md](E:/swectral_new/cocoonet/AGENTS.md:1366)
+
+Replace lines 1366–1369 with:
+
+```text
+- The universal type validator must not eagerly import NumPy, pandas, or PyTorch. Load a scientific dependency only
+  when validation encounters its supported type or an explicit framework-specific dtype validator is called. Load
+  only the corresponding dependency directly and leave the others unloaded until required. A dependency may load its
+  own transitive requirements; Cocoonet does not duplicate or override that dependency management.
+```
+
+No Phase 1 roadmap change is necessary because it does not currently require eager imports.
+
+### Proposed implementation
+
+File: [\_type_validation.py](E:/swectral_new/cocoonet/src/cocoonet/_type_validation.py:3)
+
+Remove:
+
+```python
+import numpy as np
+import pandas as pd
+import torch
+```
+
+Add the standard-library imports:
+
+```python
+from importlib import import_module
+import sys
+from types import ModuleType, NoneType, UnionType
+```
+
+Add after the diagnostic constants:
+
+```python
+_SCIENTIFIC_DEPENDENCIES = ("numpy", "pandas", "torch")
+
+
+def _loaded_scientific_dependency(name: str, /) -> ModuleType | None:
+    """Return an already loaded scientific dependency without importing it."""
+    module = sys.modules.get(name)
+    return module if isinstance(module, ModuleType) else None
+
+
+def _load_scientific_dependency(name: str, /) -> ModuleType:
+    """Load one requested scientific dependency through Python's module cache."""
+    module = _loaded_scientific_dependency(name)
+    return module if module is not None else import_module(name)
+```
+
+The helper is justified because the same loading rule is reused by NumPy, pandas, PyTorch, scientific previews, generic annotation handling, and the three dtype validators.
+
+Revise `_scientific_value_preview()` so it never imports a dependency merely to test an unrelated value:
+
+```python
+def _scientific_value_preview(value: object) -> str | None:
+    """Produce a bounded preview for an already loaded scientific object."""
+    numpy = _loaded_scientific_dependency("numpy")
+    if numpy is not None and isinstance(value, numpy.ndarray):
+        values = _preview_items(value.flat)
+        return _truncate(
+            f"ndarray(shape={value.shape}, dtype={value.dtype}, "
+            f"size={value.size}, values=[{values}])",
+            _VALUE_PREVIEW_LIMIT,
+        )
+
+    if numpy is not None and isinstance(value, numpy.generic):
+        return _truncate(
+            f"{type(value).__name__}(dtype={value.dtype}, "
+            f"value={_safe_repr(value)})",
+            _VALUE_PREVIEW_LIMIT,
+        )
+
+    pandas = _loaded_scientific_dependency("pandas")
+    if pandas is not None and isinstance(value, pandas.DataFrame):
+        preview = value.iloc[
+            :_DATAFRAME_PREVIEW_ROWS,
+            :_DATAFRAME_PREVIEW_COLUMNS,
+        ]
+        return _truncate(
+            (
+                f"DataFrame(shape={value.shape}, "
+                f"columns={_safe_repr(list(preview.columns))}, "
+                f"dtypes={_safe_repr(list(preview.dtypes))}, "
+                f"values=\n{preview.to_string()})"
+            ),
+            _VALUE_PREVIEW_LIMIT,
+        )
+
+    if pandas is not None and isinstance(value, (pandas.Series, pandas.Index)):
+        values = _preview_items(value)
+        return _truncate(
+            f"{type(value).__name__}(length={len(value)}, "
+            f"dtype={value.dtype}, values=[{values}])",
+            _VALUE_PREVIEW_LIMIT,
+        )
+
+    torch = _loaded_scientific_dependency("torch")
+    if torch is not None and isinstance(value, torch.Tensor):
+        metadata = (
+            f"Tensor(shape={tuple(value.shape)}, dtype={value.dtype}, "
+            f"device={value.device}, requires_grad={value.requires_grad}"
+        )
+        if value.device.type != "cpu":
+            return f"{metadata}, values=<not read from non-CPU device>)"
+
+        try:
+            flat = value.detach().view(-1)
+            values = _preview_items(
+                flat[:_PREVIEW_ITEM_LIMIT].tolist()
+            )
+        except Exception as error:
+            values = f"<unavailable: {_type_name(type(error))}>"
+
+        return _truncate(
+            f"{metadata}, values=[{values}])",
+            _VALUE_PREVIEW_LIMIT,
+        )
+
+    return None
+```
+
+Apply these mechanical changes to the existing scientific functions:
+
+- Replace scientific-library types in function annotations with `object`. These are runtime validation boundaries and must accept an arbitrary candidate in order to reject it.
+- `_normalize_numpy_dtype()` and `validate_numpy_dtype()` call `_load_scientific_dependency("numpy")`.
+- `_normalize_pandas_dtype()` and `validate_pandas_dtype()` call `_load_scientific_dependency("pandas")`.
+- `validate_torch_dtype()` calls `_load_scientific_dependency("torch")`.
+- `_validate_container()` checks whether NumPy is already loaded before comparing `origin` with `numpy.ndarray`.
+- `_validate_numpy_array_annotation()` uses the already-loaded NumPy module because constructing that annotation necessarily required NumPy.
+
+For example, the public NumPy boundary becomes:
+
+```python
+def validate_numpy_dtype(
+    value: object,
+    *,
+    expected_dtype: object,
+    field: str = "value",
+) -> None:
+    """Require a NumPy array or scalar to have the expected dtype."""
+    numpy = _load_scientific_dependency("numpy")
+
+    try:
+        validate_declared_types(
+            value,
+            expected_type=numpy.ndarray | numpy.generic,
+            field=field,
+        )
+        _validate_numpy_dtype_value(
+            value,
+            expected_dtype=expected_dtype,
+            field=field,
+        )
+    except _TypeMismatchError as mismatch:
+        _raise_public_type_error(mismatch)
+```
+
+The pandas and PyTorch validators follow the same pattern and load only their corresponding dependency directly.
+
+### Proposed tests
+
+File: [test_type_validation.py](E:/swectral_new/cocoonet/tests/test_type_validation.py:1)
+
+Add subprocess tests because the current test process already imports all three frameworks:
+
+```python
+def test_type_validation_import_does_not_load_scientific_dependencies() -> None:
+    """Keep all scientific dependencies unloaded at module import."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json, sys\n"
+                "import cocoonet._type_validation\n"
+                "print(json.dumps({name: name in sys.modules "
+                "for name in ('numpy', 'pandas', 'torch')}))\n"
+            ),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(result.stdout) == {
+        "numpy": False,
+        "pandas": False,
+        "torch": False,
+    }
+
+
+def test_basic_type_validation_does_not_load_scientific_dependencies() -> None:
+    """Keep scientific dependencies unloaded for ordinary Python types."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json, sys\n"
+                "from cocoonet._type_validation "
+                "import validate_declared_types\n"
+                "validate_declared_types(1, expected_type=int)\n"
+                "print(json.dumps({name: name in sys.modules "
+                "for name in ('numpy', 'pandas', 'torch')}))\n"
+            ),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(result.stdout) == {
+        "numpy": False,
+        "pandas": False,
+        "torch": False,
+    }
+```
+
+Add one subprocess test per explicit dtype validator:
+
+- NumPy validation loads NumPy but not pandas or PyTorch.
+- pandas validation loads pandas and may transitively load NumPy, but not PyTorch.
+- PyTorch validation loads PyTorch and may load its transitive dependencies, but not pandas.
+
+This verifies Cocoonet’s direct loading behavior without making assertions about a dependency’s internal import graph.
+
+---
+
+## 2. Implementation scale ahead of usable workflow
+
+Per your direction, no revision is proposed. This remains acceptable during the current early development stage.
+
+---
+
+## 3. Roadmap scope versus a lightweight module
+
+No revision is proposed.
+
+The intended product is a model-evaluation platform with a lightweight Python-facing interface for small models. The platform’s internal distributed functionality does not itself contradict a lightweight public interface.
+
+---
+
+## 4. Premature state and result modeling
+
+No revision is proposed. The existing state and result contracts remain temporarily accepted.
+
+---
+
+## 5. Structured-log decoder key order
+
+### Proposed behavior
+
+Encoding remains deterministic and preserves the canonical key order.
+
+Decoding will:
+
+- require exactly the same keys at every schema-controlled JSON object;
+- reject missing keys;
+- reject additional keys;
+- reject duplicate keys;
+- retain all existing type and relationship validation;
+- accept the required keys in any physical JSON object order.
+
+Attribute order remains meaningful and preserved because attributes reconstruct an ordered tuple. This correction applies only to schema-object key order.
+
+### Proposed implementation
+
+File: [logging.py](E:/swectral_new/cocoonet/src/cocoonet/_storage/logging.py:403)
+
+Replace `_require_exact_keys()` with:
+
+```python
+def _require_exact_keys(
+    value: dict[str, object],
+    expected: tuple[str, ...],
+    *,
+    field: str,
+) -> None:
+    """Require the exact JSON object keys independently of physical order."""
+    missing = tuple(key for key in expected if key not in value)
+    unexpected = tuple(key for key in value if key not in expected)
+
+    if missing or unexpected:
+        raise ValueError(
+            f"{field} must contain exactly keys {expected!r}; "
+            f"missing {missing!r}; unexpected {unexpected!r}."
+        )
+```
+
+No decoder call-site changes are required. The helper is already applied to:
+
+- the top-level record;
+- trace context;
+- failure records.
+
+Duplicate-key rejection remains in `_json_object_from_pairs()`.
+
+### Proposed roadmap clarification
+
+File: [roadmap_phase_2.md](E:/swectral_new/cocoonet/docs/roadmaps/roadmap_phase_2.md:464)
+
+Replace the opening structured-log description with:
+
+```text
+Each `.log` file is UTF-8 JSON Lines: one compact JSON object plus `\n` per append. Encoding uses deterministic JSON
+object key order, `ensure_ascii=False`, and `allow_nan=False`. Decoding requires the exact schema-controlled key sets
+but does not depend on their physical JSON object order.
+```
+
+### Proposed tests
+
+File: [test_logging.py](E:/swectral_new/cocoonet/tests/storage/test_logging.py:234)
+
+Replace `test_decode_structured_log_record_rejects_wrong_key_order()` with:
+
+```python
+def test_decode_structured_log_record_accepts_reordered_schema_keys() -> None:
+    """Decode an exact schema independently of physical object key order."""
+    encoded = (
+        '{"node_role":"root","timestamp_utc_ns":1,"channel":"running",'
+        '"event":"attempt_started","message":"Attempt started.",'
+        '"context":null,"failure":null,"attributes":{}}\n'
+    ).encode("utf-8")
+
+    assert decode_structured_log_record(encoded) == _record()
+```
+
+Add focused tests confirming that reordered nested context and failure keys are accepted, while one missing or one additional schema key is rejected. This proves order independence without weakening structural identity.
+
+---
+
+## 6. Stale execution-state snapshots
+
+### Recommended solution
+
+Do not add status-transition ordering to Phase 2. Transition policy belongs to later lifecycle owners.
+
+Instead, add a per-record optimistic concurrency precondition:
+
+- Appending a new attempt requires no precondition.
+- Repeating an existing row unchanged is idempotent and requires no precondition.
+- Modifying an existing row requires the caller to provide the exact record it previously observed.
+- Under the existing per-file lock, Cocoonet compares that expected record with the currently published record.
+- If they differ, the proposal is stale and is rejected before staging.
+- Unrelated concurrent attempt appends continue to merge successfully.
+
+This prevents semantic rollback without adding sequence numbers, version vectors, timestamps, or transition logic.
+
+### Proposed implementation
+
+File: [execution_state.py](E:/swectral_new/cocoonet/src/cocoonet/_storage/execution_state.py:422)
+
+Extend the merge boundary:
+
+```python
+def _merge_execution_state_records(
+    current: tuple[ExecutionStateRecord, ...],
+    proposed: tuple[ExecutionStateRecord, ...],
+    expected_records: tuple[ExecutionStateRecord, ...],
+    /,
+) -> tuple[ExecutionStateRecord, ...]:
+```
+
+At the start of the function, validate and index the preconditions:
+
+```python
+    validate_execution_state_records(expected_records)
+
+    current_positions = {
+        record.attempt_id: position
+        for position, record in enumerate(current)
+    }
+    proposed_ids = {record.attempt_id for record in proposed}
+    expected_by_id = {
+        record.attempt_id: record
+        for record in expected_records
+    }
+
+    for expected_record in expected_records:
+        if expected_record.attempt_id not in proposed_ids:
+            raise ValueError(
+                "Each expected execution-state record must correspond to "
+                "a proposed existing attempt."
+            )
+
+        current_position = current_positions.get(expected_record.attempt_id)
+        if (
+            current_position is None
+            or current[current_position] != expected_record
+        ):
+            raise ValueError(
+                "Execution-state revision is stale for attempt "
+                f"{expected_record.attempt_id!r}."
+            )
+```
+
+After the existing identity and worker-assignment checks, require a matching precondition for any real change:
+
+```python
+        if (
+            proposed_record != current_record
+            and expected_by_id.get(proposed_record.attempt_id)
+            != current_record
+        ):
+            raise ValueError(
+                "Changing existing attempt "
+                f"{proposed_record.attempt_id!r} requires its exact current "
+                "record in expected_records."
+            )
+```
+
+Keep the existing:
+
+- identity preservation;
+- worker assignment immutability;
+- row-order preservation;
+- append-only identity behavior;
+- final sequence validation.
+
+File: [execution_state.py](E:/swectral_new/cocoonet/src/cocoonet/_storage/execution_state.py:496)
+
+Revise the public writer signature:
+
+```python
+async def replace_execution_state(
+    path: PathInput,
+    records: tuple[ExecutionStateRecord, ...],
+    /,
+    *,
+    expected_records: tuple[ExecutionStateRecord, ...] = (),
+) -> None:
+```
+
+Inside the existing file lock, always merge against the current state:
+
+```python
+    async with lock:
+        current = (
+            await load_execution_state(final)
+            if final.exists()
+            else ()
+        )
+        records = _merge_execution_state_records(
+            current,
+            records,
+            expected_records,
+        )
+        encoded = encode_execution_state_csv(records)
+
+        async with aiofiles.open(staging, "wb") as staging_handle:
+            await staging_handle.write(encoded)
+
+        publish_staged_file(final, replace=True)
+```
+
+The existing pre-lock validation of `records` remains. Validate `expected_records` before opening staging as well.
+
+### Proposed roadmap revisions
+
+File: [roadmap_phase_2.md](E:/swectral_new/cocoonet/docs/roadmaps/roadmap_phase_2.md:433)
+
+Replace the writer description with:
+
+```text
+The root and each worker serialize updates to their own file through one writer. The writer stages and atomically
+replaces the complete CSV. Atomic replacement prevents partial publication. Updating an existing row requires the exact
+previously observed record as an optimistic concurrency precondition; a mismatching current record rejects the stale
+revision. Newly created attempts require no precondition and remain mergeable as append-only rows.
+```
+
+Update the planned signature at line 655:
+
+```python
+async def replace_execution_state(
+    path: PathInput,
+    records: tuple[ExecutionStateRecord, ...],
+    /,
+    *,
+    expected_records: tuple[ExecutionStateRecord, ...] = (),
+) -> None
+```
+
+Replace the responsibility paragraph at line 667 with:
+
+```text
+The asynchronous writer validates and encodes before opening staging, preserves existing identity order, and permits
+new attempts only as appended rows. An existing row may change only when its exact currently published record matches
+the supplied optimistic concurrency precondition. The writer rejects stale revisions, writes with `aiofiles`, and then
+calls the focused mutable publication helper. The loader reads only the final file. Neither function applies lifecycle
+transitions or treats state as proof that a result bundle exists.
+```
+
+Add to the Unit 24 test list:
+
+```text
+- two concurrent updates based on the same existing record permit one update and reject the stale competitor;
+- a stale update cannot regress a newer attempt status;
+- unrelated concurrent attempt appends remain mergeable without preconditions;
+```
+
+### Proposed tests
+
+File: [test_execution_state.py](E:/swectral_new/cocoonet/tests/storage/test_execution_state.py:378)
+
+Update existing legitimate row modifications to pass the prior record:
+
+```python
+await replace_execution_state(
+    path,
+    (assigned, appended),
+    expected_records=(initial,),
+)
+```
+
+Add a concurrency test:
+
+```python
+def test_replace_execution_state_rejects_stale_competing_status_update(
+    tmp_path: Path,
+) -> None:
+    """Allow one competing update and reject the stale revision."""
+
+    async def exercise() -> None:
+        path = tmp_path / "execution_state.csv"
+        initial = _record(
+            worker_id=_WORKER_ID,
+            attempt_status=AttemptStatus.MODEL_SYNCHRONIZED,
+        )
+        running = replace(
+            initial,
+            attempt_status=AttemptStatus.RUNNING,
+        )
+        failed = replace(
+            initial,
+            attempt_status=AttemptStatus.ATTEMPT_FAILED,
+        )
+
+        await replace_execution_state(path, (initial,))
+
+        outcomes = await asyncio.gather(
+            replace_execution_state(
+                path,
+                (running,),
+                expected_records=(initial,),
+            ),
+            replace_execution_state(
+                path,
+                (failed,),
+                expected_records=(initial,),
+            ),
+            return_exceptions=True,
+        )
+
+        assert sum(outcome is None for outcome in outcomes) == 1
+        assert sum(isinstance(outcome, ValueError) for outcome in outcomes) == 1
+        assert await load_execution_state(path) in ((running,), (failed,))
+
+    asyncio.run(exercise())
+```
+
+Add a sequential test proving that a stale proposal cannot replace a newer published status. Keep the existing concurrent append test unchanged to prove that unrelated appends still merge.
+
+---
+
+## 7. Test rigidity and private coupling
+
+Per your direction, no revision is proposed.
+
+---
+
+## 8. Missing node-usage scopes
+
+Per your direction, no revision is proposed temporarily.
+
+---
+
+## 9. Historical worker-assignment check assigned to decoder
+
+The implementation is already correct. Only the Phase 2 roadmap requires correction.
+
+File: [roadmap_phase_2.md](E:/swectral_new/cocoonet/docs/roadmaps/roadmap_phase_2.md:276)
+
+Replace lines 276–279 with:
+
+```text
+Undefined values use empty fields. The decoder rejects an incorrect header, malformed rows, unknown statuses, invalid
+identifiers, duplicate attempt IDs within a parent, and inconsistent model identity/label associations. The replacement
+writer rejects a nonempty worker ID that changes after assignment. Encoding preserves supplied row order. Decoding
+preserves file order, but consumers must not assign semantic meaning to it.
+```
+
+No source or test change is needed for issue 9 because [execution_state.py](E:/swectral_new/cocoonet/src/cocoonet/_storage/execution_state.py:482) already enforces worker-assignment immutability at the historical replacement boundary.

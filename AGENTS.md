@@ -1363,10 +1363,10 @@ Before planning or implementing a phase, process project guidance in this order:
   annotation interpreter requires a demonstrated need.
 - Validate scientific containers directly for applicable dtype, shape, values, and alignment. Keep framework-specific
   dependencies at the boundaries that require them.
-- The universal type validator may import NumPy, pandas, and PyTorch for their supported data types.
-  Normal imports reuse Python's module cache within each process; separate processes may incur their
-  own initialization. This per-process overhead is acceptable. Library presence or initialization
-  alone is not evidence of over-engineering. Repeated validation work is a separate concern.
+- The universal type validator must not eagerly import NumPy, pandas, or PyTorch. Ordinary Python type validation must
+  leave all three unloaded. When validation reaches a supported scientific type or an explicit framework-specific
+  dtype validator, Cocoonet must directly load only the corresponding dependency. A requested dependency may load its
+  own transitive requirements; Cocoonet does not suppress, duplicate, or treat those transitive imports as direct loads.
 
 Existing runtime diagnostic and static typing requirements remain applicable.
 

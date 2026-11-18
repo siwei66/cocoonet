@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import inspect
+import json
+import subprocess
+import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -48,6 +51,88 @@ class Color(Enum):
     """Enumeration used by direct runtime type tests."""
 
     RED = "red"
+
+
+def _probe_scientific_imports(statements: str) -> dict[str, bool]:
+    """Run statements in a fresh process and report loaded frameworks."""
+    script = (
+        "import json\n"
+        "import sys\n"
+        f"{statements}\n"
+        "print(json.dumps({name: name in sys.modules "
+        "for name in ('numpy', 'pandas', 'torch')}))\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return cast(dict[str, bool], json.loads(completed.stdout))
+
+
+def test_type_validation_import_keeps_scientific_dependencies_unloaded() -> None:
+    """Import the validator without importing scientific frameworks."""
+    assert _probe_scientific_imports("import cocoonet._type_validation") == {
+        "numpy": False,
+        "pandas": False,
+        "torch": False,
+    }
+
+
+def test_ordinary_validation_keeps_scientific_dependencies_unloaded() -> None:
+    """Validate an ordinary Python value without scientific imports."""
+    assert _probe_scientific_imports(
+        "from cocoonet._type_validation import validate_declared_types\n"
+        "validate_declared_types(1, expected_type=int)"
+    ) == {
+        "numpy": False,
+        "pandas": False,
+        "torch": False,
+    }
+
+
+def test_numpy_dtype_boundary_loads_only_numpy() -> None:
+    """Load NumPy without loading pandas or PyTorch."""
+    assert _probe_scientific_imports(
+        "from cocoonet._type_validation import validate_numpy_dtype\n"
+        "try:\n"
+        "    validate_numpy_dtype([], expected_dtype='float64')\n"
+        "except TypeError:\n"
+        "    pass"
+    ) == {
+        "numpy": True,
+        "pandas": False,
+        "torch": False,
+    }
+
+
+def test_pandas_dtype_boundary_does_not_load_torch() -> None:
+    """Load pandas without loading PyTorch."""
+    loaded = _probe_scientific_imports(
+        "from cocoonet._type_validation import validate_pandas_dtype\n"
+        "try:\n"
+        "    validate_pandas_dtype([], expected_dtype='float64')\n"
+        "except TypeError:\n"
+        "    pass"
+    )
+
+    assert loaded["pandas"]
+    assert not loaded["torch"]
+
+
+def test_torch_dtype_boundary_does_not_load_pandas() -> None:
+    """Load PyTorch without loading pandas."""
+    loaded = _probe_scientific_imports(
+        "from cocoonet._type_validation import validate_torch_dtype\n"
+        "try:\n"
+        "    validate_torch_dtype([], expected_dtype=None)\n"
+        "except TypeError:\n"
+        "    pass"
+    )
+
+    assert loaded["torch"]
+    assert not loaded["pandas"]
 
 
 @runtime_checkable
