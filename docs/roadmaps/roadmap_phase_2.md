@@ -274,9 +274,9 @@ parent_id,worker_id,model_label,model_id,attempt_id,attempt_status
 ~~~
 
 Undefined values use empty fields. The decoder rejects an incorrect header, malformed rows, unknown statuses, invalid
-identifiers, duplicate attempt IDs within a parent, inconsistent model identity/label associations, and a nonempty
-worker ID that changes after assignment. Encoding preserves supplied row order. Decoding preserves file order, but
-consumers must not assign semantic meaning to it.
+identifiers, duplicate attempt IDs within a parent, and inconsistent model identity/label associations. The replacement
+writer rejects a nonempty worker ID that changes after assignment. Encoding preserves supplied row order. Decoding
+preserves file order, but consumers must not assign semantic meaning to it.
 
 ## 5. Planned modules and records
 
