@@ -532,6 +532,8 @@ class RootStorageLayout:
     Notes
     -----
     This record performs no validation or filesystem operations.
+
+    Node usage scope: Root only - Used exclusively by the root node.
     """
 
     root: Path
@@ -554,6 +556,8 @@ class WorkerStorageLayout:
     Notes
     -----
     This record performs no validation or filesystem operations.
+
+    Node usage scope: Worker only - Used exclusively by worker nodes.
     """
 
     root: Path
@@ -569,6 +573,8 @@ class WorkerParentStorageLayout:
     Notes
     -----
     This record performs no validation or filesystem operations.
+
+    Node usage scope: Worker only - Used exclusively by worker nodes.
     """
 
     parent_root: Path
@@ -587,6 +593,8 @@ class BundlePublicationPaths:
     Notes
     -----
     This record performs no validation or filesystem operations.
+
+    Node usage scope: Shared - Used by both root and worker nodes.
     """
 
     staging: Path
