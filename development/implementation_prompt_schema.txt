@@ -102,3 +102,67 @@ Then continue with the next unit. Propose only. The requirements are same:
 - Propose the exact change only.
 - Do not modify files for next unit.
 ```
+
+====================================================================
+
+
+
+## For phase end implementation verification:
+
+```text
+Verify the currently implementated units of the implemented phases in the perspective of the entire module, especially as a light-weight scientific python module.
+Verify the architecture and roadmap requirements in the perspective of the entire module too, analyze the over-engineering and over-complicating risk based on the basic demand, do not treat every demand as ground truth and verify the demand compliance and the risk level.
+
+The verification is not asking for rejecting every demand, but simply a compliance and implementation risk level analysis, and an implementation and phase design review.
+
+Inspect, analyze and verify only, do not modify any file.
+```
+
+====================================================================
+
+
+
+## For new detailed implementation-ready phase roadmap creation:
+
+```text
+Read the complete root `AGENTS.md`, `architecture.md`, and `roadmap.md` and the phase roadmaps of the previous phases in docs/roadmaps carefully.
+Plan next phase only according to `roadmap.md`, the phase roadmaps of the previous phases, and the implementation of previous phases.
+
+Create:
+`docs/roadmaps/roadmap_phase_<k>.md`
+(`<k>` is the index for the next phase to implement)
+
+The phase roadmap must translate the next phase tasks into an implementation-ready plan while following all development and approval rules in `AGENTS.md`.
+
+---
+
+Define, where applicable:
+- Phase goal, scope, and out-of-scope items;
+- entry and completion criteria;
+- relevant architecture contracts and invariants;
+- required data models, fields, types, and invariants;
+- public APIs and signatures;
+- computation formulas and numerical behavior;
+- planned classes, functions, and methods with concise responsibilities;
+- directly corresponding tests;
+- dependency-safe implementation order;
+- validation requirements;
+- decisions explicitly deferred to later phases.
+
+---
+
+Requirements:
+- Plan implementation at function-/method-level granularity so later development can proceed mostly forward without unnecessary refactoring or jumping between subsystems.
+- Resolve all ambiguities and contracts required to the current phase. If a required design decision for the current phase cannot be resolved from the development docs and the implementation of previous phases, do not guess: report it as a blocking ambiguity.
+- Do not prematurely design later phases. Decisions needed only later should be explicitly deferred.
+- Do not implement any source code or tests.
+- Do not modify `AGENTS.md`, `architecture.md`, or `roadmap.md`. Modify only `docs/roadmaps/roadmap_phase_<k>.md`.
+
+---
+
+After creating the phase roadmap:
+1. summarize and list its implementation order;
+2. report any remaining blocking ambiguity;
+3. report any inconsistency found among `AGENTS.md`, `architecture.md`, `roadmap.md`, the implemented phase scopes;
+4. stop and wait for my approval before any implementation of the next phase begins.
+```
