@@ -6,8 +6,9 @@ This document describes the initial architecture of Cocoonet, a distributed engi
 classification and regression models. It establishes the worker task boundary and the requested worker input/output
 contract, and provides a skeleton for the remaining system design.
 
-The repository is at the scaffold stage. Documented requirements do not imply that implementations exist. This
-document distinguishes resolved behavior from implementation details to specify before developing the affected unit.
+The repository is under phased implementation. Some architecture contracts are implemented, while others remain
+planned or deferred; documented requirements do not by themselves imply that the corresponding implementation exists.
+This document distinguishes resolved behavior from implementation details to specify before developing the affected unit.
 Standard metrics use established conventional definitions unless an explicit Cocoonet variation is specified;
 missing formula detail alone does not make a standard metric unresolved. Cocoonet-specific measures require explicit
 definitions, including the approved influence measure in Section 4.7.

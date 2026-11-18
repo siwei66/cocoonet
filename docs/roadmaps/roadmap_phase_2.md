@@ -1,6 +1,6 @@
 # Phase 2: Filesystem ownership and durable persistence foundations
 
-Status: revised proposal;
+Status: implemented and verified.
 
 ## 1. Authority and purpose
 
@@ -876,7 +876,7 @@ network behavior.
 | Dataset input schemas, dataset IDs, managed references, partition workbook, and XLSX engine | Phase 4 |
 | Model adapters and trusted model artifacts | Phases 5–6 |
 | Prediction/report/result workbook payloads | Phases 7–10 |
-| Result bundle contents and validation | Phase 10 |
+| Result bundle contents and validation | Phase 12 |
 | Root-local process and IPC | Phase 13 |
 | Scheduling, result synchronization, duplicate arbitration, retry transitions | Phases 14–18 |
 | Recovery orchestration | Phase 15 |

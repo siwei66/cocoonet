@@ -74,7 +74,7 @@ class ConsolidationState(StrEnum):
     INITIALIZED : str
         A fresh working directory is ready, but the current evaluation
         configuration has not been committed to a parent task. Configuration
-        edits retain this state. Successful ``start()`` creates a parent task
+        edits retain this state. Successful ``run()`` creates a parent task
         and changes the state to ``CONSOLIDATED``.
     CONSOLIDATED : str
         The current evaluation configuration matches an existing parent task.
@@ -83,7 +83,7 @@ class ConsolidationState(StrEnum):
         to ``UNCONSOLIDATED``.
     UNCONSOLIDATED : str
         The prospective evaluation configuration differs from the previous
-        parent task, which remains fixed. ``start()`` is rejected. Explicit
+        parent task, which remains fixed. ``run()`` is rejected. Explicit
         fresh initialization changes the state to ``INITIALIZED``.
 
     Notes
