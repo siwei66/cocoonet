@@ -231,10 +231,9 @@ configuration changes. An ordinary copy preserves those same identity rules.
 #### Root directory and initialization
 
 Construction requires a user-provided root working directory. `overwrite` defaults to `False`. Absolute and relative
-specifications are accepted. Resolve an absolute path directly. Resolve a relative path to a location inside
-`<current console working directory>/cocoonet/<parent_id>/`; it must not escape that parent-specific directory. The
-root working directory is Cocoonet-managed persistent storage. User-provided dataset source paths are user-owned and
-must remain outside it.
+specifications are accepted. Resolve an absolute path directly and resolve a relative path from the current console
+working directory. Use the user-provided directory directly as Cocoonet-managed persistent storage. User-provided
+dataset source paths are user-owned and must remain outside it.
 
 Before creating, changing, or deleting persistent files, resolve the proposed root to its canonical physical location
 and reject a filesystem anchor itself. For a Python installation or package-installation directory, the installed

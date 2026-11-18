@@ -105,9 +105,9 @@ Phase 2 is complete only when:
 Resolution must also work for a missing final path: resolve the nearest existing ancestor physically, then append the
 missing lexical suffix without creating it.
 
-Managed-root specifications may be absolute or relative. Resolve an absolute root directly. Resolve a relative root to
-a location inside `<current console working directory>/cocoonet/<parent_id>/` and reject traversal outside that
-parent-specific directory. An otherwise safe absolute path remains valid.
+Managed-root specifications may be absolute or relative. Resolve an absolute root directly and resolve a relative root
+from the current console working directory. Use the user-provided directory directly. An otherwise safe absolute path
+remains valid.
 
 Containment comparisons use platform-normalized canonical components, not string prefixes. Equality is handled
 explicitly. On case-insensitive filesystems, aliases that differ only by case compare as the same physical path.
@@ -478,8 +478,7 @@ def resolve_physical_path(path: PathInput, /) -> Path
 ~~~
 
 Return the canonical physical path without mutation, including for a missing suffix. Managed-root callers preserve an
-absolute input and resolve a relative input inside the current console working directory's
-`cocoonet/<parent_id>/` location.
+absolute input and resolve a relative input from the current console working directory.
 
 ~~~python
 def discover_protected_locations() -> tuple[Path, ...]
@@ -493,8 +492,8 @@ def validate_managed_root(root: PathInput, /) -> Path
 ~~~
 
 Canonicalize and validate one absolute or relative root against every discovered protected location using the approved
-matrix. Reject relative traversal outside its parent-specific base. A private pure containment helper accepts explicit
-canonical paths for direct tests; production validation cannot replace or omit discovered protections.
+matrix. A private pure containment helper accepts explicit canonical paths for direct tests; production validation
+cannot replace or omit discovered protections.
 
 ~~~python
 def validate_dataset_source_ownership(
@@ -736,8 +735,7 @@ filesystem calls merely to force operating-system failures.
 Test:
 
 - existing and missing-suffix canonical resolution;
-- direct absolute-root resolution, relative-root resolution under `cocoonet/<parent_id>/`, and relative escape
-  rejection;
+- direct absolute-root resolution and direct relative-root resolution from the current console working directory;
 - alias, symlink, case-normalization, equality, and component-aware containment;
 - direct filesystem-anchor rejection, each risky protected-location containment direction, and acceptance of an
   otherwise safe absolute path;
@@ -902,8 +900,8 @@ remain usable: `ArtifactId` identifies the immutable result bundle, and Phase 2 
 ### 12.1 Resolved protected-root rule
 
 Absolute and relative managed-root specifications are permitted. Absolute paths resolve directly. Relative paths
-resolve inside `<current console working directory>/cocoonet/<parent_id>/` and cannot escape that parent-specific
-directory. Reject a filesystem anchor itself. For Python installation/package-installation directories, the installed
+resolve from the current console working directory, and the user-provided directory is used directly. Reject a
+filesystem anchor itself. For Python installation/package-installation directories, the installed
 Cocoonet package directory, and the complete source repository, reject equality, a candidate ancestor, or a candidate
 descendant. This protects risky locations without rejecting otherwise safe absolute paths.
 

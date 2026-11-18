@@ -107,7 +107,7 @@ Build on Phase 1 to establish the storage boundary before any configuration oper
 root-directory preparation and bidirectional ownership validation: dataset source paths must neither equal nor lie
 inside the managed root, and a proposed root must be checked against every configured source path, including paths
 retained by a copied instance. Accept absolute and relative root specifications: resolve absolute paths directly and
-relative paths inside `<current console working directory>/cocoonet/<parent_id>/`. Resolve canonical physical
+relative paths from the current console working directory, using the user-provided directory directly. Resolve canonical physical
 locations, reject a filesystem anchor itself, and reject a root that equals, contains, or is contained within a Python
 installation or package-installation directory, installed Cocoonet package directory, or the complete Cocoonet source
 repository before modifying persistent files. Do not reject an otherwise safe path merely because it is absolute.
