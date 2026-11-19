@@ -159,9 +159,10 @@ runtime resources, duplicating accepted bundles, or creating another parent. Dat
 Worker removal is configuration-only
 and sends no stop, disconnect, cleanup, reset, or release instruction. Root reassignment must use Phase 2 validation.
 
-Before proceeding, configuration validation, copy semantics, mutation boundaries, and parent-snapshot preparation must
-be stable. Dataset registration becomes complete in Phase 4. Runnable `run()`, interruption, resume, worker runtime
-management, and external service operations remain deferred; no placeholder may silently perform those operations.
+Before proceeding, `ModelingSnapshot` validation, copy semantics, mutation boundaries, and parent-snapshot preparation
+must be stable. Dataset registration becomes complete in Phase 4. Runnable `run()`, interruption, resume, worker
+runtime management, and external service operations remain deferred; no placeholder may silently perform those
+operations.
 
 ### 4. Dataset normalization and authoritative realized partitions
 

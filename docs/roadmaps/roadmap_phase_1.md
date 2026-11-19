@@ -294,7 +294,7 @@ compatibility remains Phase 4 work and must preserve the universal separation ru
 | `ModelFamily` | `sklearn`, `sklearn-like`, `pytorch`, `cocoonet` |
 | `ModelReference` | `model_id: ModelId`, `model_label: ScalarLabel`, `family: ModelFamily`, `task_kind: TaskKind` |
 | `EvaluationReference` | `configuration_id: EvaluationConfigId`, `task_kind: TaskKind`, `class_labels: tuple[ScalarLabel, ...]`, `influence_requested: bool` |
-| `ComputationSnapshot` | `root_dir: str`, `consolidation: ConsolidationState`, `partition: PartitionReference | None`, `evaluation: EvaluationReference | None`, `models: tuple[ModelReference, ...]`, `worker_ids: tuple[WorkerId, ...]`, `parent_id: ParentId | None` |
+| `ModelingSnapshot` | `work_dir: str`, `consolidation_state: ConsolidationState`, `data_partition: PartitionReference | None`, `evaluation_config: EvaluationReference | None`, `models: tuple[ModelReference, ...]`, `worker_ids: tuple[WorkerId, ...]`, `parent_id: ParentId | None` |
 | `ParentEvaluation` | `parent_id: ParentId`, `partition: PartitionReference`, `evaluation: EvaluationReference`, `models: tuple[ModelReference, ...]` |
 | `AttemptInputs` | `attempt_id: AttemptId`, `parent_id: ParentId`, `model_id: ModelId`, `worker_id: WorkerId` |
 
@@ -306,12 +306,12 @@ Phase 1 validates these tags without inspecting model behavior or defining compo
 
 `ConsolidationState` has exactly `initialized`, `consolidated`, and `unconsolidated`.
 
-`root_dir` is the user-selected location recorded as a nonempty string; no normalization or filesystem validation
+`work_dir` is the user-selected location recorded as a nonempty string; no normalization or filesystem validation
 happens in Phase 1. The configuration component later enforces ownership before initializing/reassigning it.
 
-`ComputationSnapshot` is a read-only description, not the mutable public computation. It intentionally
+`ModelingSnapshot` is a read-only description, not the mutable public computation. It intentionally
 permits no active dataset/partition association, no settings, no models, and no workers in initialized
-state. `partition=None` means that the prospective configuration has no active dataset and realized
+state. `data_partition=None` means that the prospective configuration has no active dataset and realized
 partition. `parent_id` is absent for initialized state and required for consolidated/unconsolidated
 state; in unconsolidated state it identifies the previous execution, not a new parent for the
 prospective configuration. Models and worker references are unique, including model labels within
@@ -357,7 +357,7 @@ Parent and attempt invariants:
 | `validate_partition_schedule(value: PartitionSchedule) -> None` | Validate complete logical associations and per-fold eligibility/disjointness/group rules. | Duplicate ID/label/fold; unknown ID; forbidden membership; group leakage; legal file overlap; reordered metadata; empty populations; repeated cross-fold use. |
 | `validate_model_reference(value: ModelReference) -> None` | Check identity/label and declared family/task-kind tags. | Exact four-family enum vocabulary, including sklearn-like and cocoonet; valid/invalid family and task-kind tags; no model object/API inspection or derived descriptions. |
 | `validate_evaluation_reference(value: EvaluationReference) -> None` | Check settings handle, task kind, class order, influence flag. | Regression/classification class rules; equality collisions; one class allowed; no sorting/coercion. |
-| `validate_computation_snapshot(value: ComputationSnapshot) -> None` | Check structural consolidation/parent relationships, the optional partition and evaluation references, and model/worker uniqueness while allowing incomplete configuration. | All three states; zero models/workers/partition; present partition with valid or invalid partition/dataset identity; missing required parent; unchanged parent after worker-list edit; snapshot unchanged by validation. |
+| `validate_modeling_snapshot(value: ModelingSnapshot) -> None` | Check structural consolidation/parent relationships, the optional data-partition and evaluation-configuration references, and model/worker uniqueness while allowing incomplete configuration. | All three states; zero models/workers/data partition; present data partition with valid or invalid partition/dataset identity; missing required parent; unchanged parent after worker-list edit; snapshot unchanged by validation. |
 | `validate_parent_evaluation(value: ParentEvaluation) -> None` | Check partition-reference identities, fixed parent structure, nonempty models, unique model IDs/labels, and agreement with the task-wide task kind. | Invalid partition/dataset identity; empty models; mixed task kinds; duplicate IDs/labels; same label in different parents allowed. |
 | `validate_attempt_inputs(value: AttemptInputs, *, parent: ParentEvaluation) -> None` | Resolve the exact unit/model context and validate attempt/worker identities. | Unknown/cross-parent unit; duplicates with different attempts/workers; no independent scientific override. |
 
@@ -836,7 +836,7 @@ method signatures, IPC, or messages. Later component implementations call the ap
 
 | Owner / boundary | Consumes | Produces / obligation | Implementing phase |
 | --- | --- | --- | --- |
-| Root configuration | User inputs; later validated source ownership | `ComputationSnapshot`, fixed model/evaluation references; keep authoritative inputs behind immutable handles. | 3–4 |
+| Root configuration | User inputs; later validated source ownership | `ModelingSnapshot`, fixed model/evaluation references; keep authoritative inputs behind immutable handles. | 3–4 |
 | Dataset preparation | User source representation and split configuration or saved artifact | Validated `PartitionSchedule`, whose `PartitionReference` is the sole dataset/partition identity handle; exact identity/content verification and one authoritative durable schedule. | 2–4 |
 | Root parent commitment | Complete validated configuration and durable partition reference | `ParentEvaluation` with fixed model references; each model defines one logical unit through the parent/model identity pair. Old snapshots remain fixed during prospective edits. | 3, 13 |
 | Root coordination | Fixed parent, readiness, and unit/attempt/operation observations | `AttemptInputs`, progress observations, and bounded-operation observations; allocation and duplicate policy remain separate from records. | 13–18 |
@@ -880,7 +880,7 @@ approved unit. Generated dataclass methods do not imply planned custom methods.
 | --- | --- | --- | --- |
 | 1 | Scalar/target aliases; each ID alias; `ReportName` | `validate_identifier`; `validate_label` | `tests/contracts/test_identity.py` |
 | 2 | `SourceReference` string alias; `SampleRecord`; `PartitionReference`; `FoldRecord`; `PartitionSchedule` | `validate_source_reference`; `validate_sample_record`; `validate_partition_schedule` | `tests/contracts/test_data.py` |
-| 3 | `TaskKind`; `ModelFamily`; `ConsolidationState`; `ModelReference`; `EvaluationReference`; `ComputationSnapshot`; `ParentEvaluation`; `AttemptInputs` | `validate_model_reference`; `validate_evaluation_reference`; `validate_computation_snapshot`; `validate_parent_evaluation`; `validate_attempt_inputs` | `tests/contracts/test_execution.py` |
+| 3 | `TaskKind`; `ModelFamily`; `ConsolidationState`; `ModelReference`; `EvaluationReference`; `ModelingSnapshot`; `ParentEvaluation`; `AttemptInputs` | `validate_model_reference`; `validate_evaluation_reference`; `validate_modeling_snapshot`; `validate_parent_evaluation`; `validate_attempt_inputs` | `tests/contracts/test_execution.py` |
 | 4 | `FailureScope`; `TraceContext`; `FailureRecord` | `validate_trace_context`; `validate_failure_record`; `validate_failure_links` | `tests/contracts/test_failure.py` |
 | 5 | `RegressionPredictions`; `ClassificationPredictions`; `PredictionBatch` | `validate_regression_predictions`; `validate_classification_predictions` | `tests/contracts/test_prediction.py` |
 | 6 | `ReportStatus`; `ReportOutcome`; `EvaluationOutcome`; `AttemptResult` | `validate_report_outcome`; `validate_attempt_result`; `derive_evaluation_outcome` | `tests/contracts/test_result.py` |

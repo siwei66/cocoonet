@@ -10,17 +10,17 @@ import pytest
 from cocoonet._contracts.data import PartitionReference
 from cocoonet._contracts.execution import (
     AttemptInputs,
-    ComputationSnapshot,
     ConsolidationState,
     EvaluationReference,
     ModelFamily,
+    ModelingSnapshot,
     ModelReference,
     ParentEvaluation,
     TaskKind,
     validate_attempt_inputs,
-    validate_computation_snapshot,
     validate_evaluation_reference,
     validate_model_reference,
+    validate_modeling_snapshot,
     validate_parent_evaluation,
 )
 from cocoonet._contracts.identity import (
@@ -155,7 +155,7 @@ def test_evaluation_reference_rejects_field_mutation() -> None:
         reference.__setattr__("influence_requested", True)
 
 
-def test_computation_snapshot_preserves_configuration_references() -> None:
+def test_modeling_snapshot_preserves_configuration_references() -> None:
     """Preserve the complete prospective configuration and parent association."""
     partition = PartitionReference(
         partition_id=PartitionId("partition-a"),
@@ -173,68 +173,68 @@ def test_computation_snapshot_preserves_configuration_references() -> None:
         family=ModelFamily.SKLEARN,
         task_kind=TaskKind.CLASSIFICATION,
     )
-    snapshot = ComputationSnapshot(
-        root_dir="computation-root",
-        consolidation=ConsolidationState.CONSOLIDATED,
-        partition=partition,
-        evaluation=evaluation,
+    snapshot = ModelingSnapshot(
+        work_dir="computation-root",
+        consolidation_state=ConsolidationState.CONSOLIDATED,
+        data_partition=partition,
+        evaluation_config=evaluation,
         models=(model,),
         worker_ids=(WorkerId("worker-a"),),
         parent_id=ParentId("parent-a"),
     )
-    same = ComputationSnapshot(
-        root_dir="computation-root",
-        consolidation=ConsolidationState.CONSOLIDATED,
-        partition=partition,
-        evaluation=evaluation,
+    same = ModelingSnapshot(
+        work_dir="computation-root",
+        consolidation_state=ConsolidationState.CONSOLIDATED,
+        data_partition=partition,
+        evaluation_config=evaluation,
         models=(model,),
         worker_ids=(WorkerId("worker-a"),),
         parent_id=ParentId("parent-a"),
     )
 
-    assert snapshot.root_dir == "computation-root"
-    assert snapshot.consolidation is ConsolidationState.CONSOLIDATED
-    assert snapshot.partition is partition
-    assert snapshot.evaluation is evaluation
+    assert snapshot.work_dir == "computation-root"
+    assert snapshot.consolidation_state is ConsolidationState.CONSOLIDATED
+    assert snapshot.data_partition is partition
+    assert snapshot.evaluation_config is evaluation
     assert snapshot.models == (model,)
     assert snapshot.worker_ids == (WorkerId("worker-a"),)
     assert snapshot.parent_id == ParentId("parent-a")
     assert snapshot == same
 
 
-def test_computation_snapshot_supports_incomplete_initialized_configuration() -> None:
+def test_modeling_snapshot_supports_incomplete_initialized_configuration() -> None:
     """Represent an initialized computation before optional configuration is added."""
-    snapshot = ComputationSnapshot(
-        root_dir="computation-root",
-        consolidation=ConsolidationState.INITIALIZED,
-        partition=None,
-        evaluation=None,
+    snapshot = ModelingSnapshot(
+        work_dir="computation-root",
+        consolidation_state=ConsolidationState.INITIALIZED,
+        data_partition=None,
+        evaluation_config=None,
         models=(),
         worker_ids=(),
         parent_id=None,
     )
 
-    assert snapshot.partition is None
-    assert snapshot.evaluation is None
+    assert snapshot.data_partition is None
+    assert snapshot.evaluation_config is None
     assert snapshot.models == ()
     assert snapshot.worker_ids == ()
     assert snapshot.parent_id is None
 
 
-def test_computation_snapshot_rejects_field_mutation() -> None:
+def test_modeling_snapshot_rejects_field_mutation() -> None:
     """Prevent reassignment of recorded computation-configuration fields."""
-    snapshot = ComputationSnapshot(
-        root_dir="computation-root",
-        consolidation=ConsolidationState.INITIALIZED,
-        partition=None,
-        evaluation=None,
+    snapshot = ModelingSnapshot(
+        work_dir="computation-root",
+        consolidation_state=ConsolidationState.INITIALIZED,
+        data_partition=None,
+        evaluation_config=None,
         models=(),
         worker_ids=(),
         parent_id=None,
     )
 
     with pytest.raises(FrozenInstanceError):
-        snapshot.__setattr__("root_dir", "replacement-root")
+        snapshot.__setattr__("work_dir", "replacement-root")
 
 
 def test_parent_evaluation_preserves_fixed_scientific_context() -> None:
@@ -544,37 +544,37 @@ def test_validate_evaluation_reference_rejects_non_boolean_influence_request() -
     assert "expected: builtins.bool" in str(error.value)
 
 
-def test_validate_computation_snapshot_accepts_empty_initialized_snapshot() -> None:
+def test_validate_modeling_snapshot_accepts_empty_initialized_snapshot() -> None:
     """Accept incomplete initialized configuration without changing it."""
-    snapshot = ComputationSnapshot(
-        root_dir="computation-root",
-        consolidation=ConsolidationState.INITIALIZED,
-        partition=None,
-        evaluation=None,
+    snapshot = ModelingSnapshot(
+        work_dir="computation-root",
+        consolidation_state=ConsolidationState.INITIALIZED,
+        data_partition=None,
+        evaluation_config=None,
         models=(),
         worker_ids=(),
         parent_id=None,
     )
 
-    validate_computation_snapshot(snapshot)
+    validate_modeling_snapshot(snapshot)
 
-    assert snapshot.partition is None
-    assert snapshot.evaluation is None
+    assert snapshot.data_partition is None
+    assert snapshot.evaluation_config is None
     assert snapshot.models == ()
     assert snapshot.worker_ids == ()
     assert snapshot.parent_id is None
 
 
-def test_validate_computation_snapshot_preserves_parent_after_worker_edit() -> None:
+def test_validate_modeling_snapshot_preserves_parent_after_worker_edit() -> None:
     """Allow worker-only edits while retaining a consolidated parent identity."""
-    snapshot = ComputationSnapshot(
-        root_dir="computation-root",
-        consolidation=ConsolidationState.CONSOLIDATED,
-        partition=PartitionReference(
+    snapshot = ModelingSnapshot(
+        work_dir="computation-root",
+        consolidation_state=ConsolidationState.CONSOLIDATED,
+        data_partition=PartitionReference(
             partition_id=PartitionId("partition-a"),
             dataset_id=DatasetId("dataset-a"),
         ),
-        evaluation=EvaluationReference(
+        evaluation_config=EvaluationReference(
             configuration_id=EvaluationConfigId("evaluation-a"),
             task_kind=TaskKind.REGRESSION,
             class_labels=(),
@@ -596,30 +596,30 @@ def test_validate_computation_snapshot_preserves_parent_after_worker_edit() -> N
         worker_ids=(WorkerId("worker-b"),),
     )
 
-    validate_computation_snapshot(snapshot)
-    validate_computation_snapshot(edited)
+    validate_modeling_snapshot(snapshot)
+    validate_modeling_snapshot(edited)
 
     assert edited.parent_id == snapshot.parent_id
-    assert edited.consolidation is ConsolidationState.CONSOLIDATED
+    assert edited.consolidation_state is ConsolidationState.CONSOLIDATED
 
 
-def test_validate_computation_snapshot_accepts_incomplete_unconsolidated_snapshot() -> None:
+def test_validate_modeling_snapshot_accepts_incomplete_unconsolidated_snapshot() -> None:
     """Allow incomplete prospective configuration while retaining the old parent."""
-    snapshot = ComputationSnapshot(
-        root_dir="computation-root",
-        consolidation=ConsolidationState.UNCONSOLIDATED,
-        partition=None,
-        evaluation=None,
+    snapshot = ModelingSnapshot(
+        work_dir="computation-root",
+        consolidation_state=ConsolidationState.UNCONSOLIDATED,
+        data_partition=None,
+        evaluation_config=None,
         models=(),
         worker_ids=(),
         parent_id=ParentId("parent-a"),
     )
 
-    validate_computation_snapshot(snapshot)
+    validate_modeling_snapshot(snapshot)
 
 
 @pytest.mark.parametrize(
-    ("consolidation", "parent_id", "message"),
+    ("consolidation_state", "parent_id", "message"),
     [
         (
             ConsolidationState.INITIALIZED,
@@ -638,79 +638,79 @@ def test_validate_computation_snapshot_accepts_incomplete_unconsolidated_snapsho
         ),
     ],
 )
-def test_validate_computation_snapshot_rejects_invalid_parent_relationship(
-    consolidation: ConsolidationState,
+def test_validate_modeling_snapshot_rejects_invalid_parent_relationship(
+    consolidation_state: ConsolidationState,
     parent_id: ParentId | None,
     message: str,
 ) -> None:
     """Reject parent identities that conflict with consolidation state."""
-    snapshot = ComputationSnapshot(
-        root_dir="computation-root",
-        consolidation=consolidation,
-        partition=None,
-        evaluation=None,
+    snapshot = ModelingSnapshot(
+        work_dir="computation-root",
+        consolidation_state=consolidation_state,
+        data_partition=None,
+        evaluation_config=None,
         models=(),
         worker_ids=(),
         parent_id=parent_id,
     )
 
     with pytest.raises(ValueError, match=message):
-        validate_computation_snapshot(snapshot)
+        validate_modeling_snapshot(snapshot)
 
 
-def test_validate_computation_snapshot_rejects_empty_root_dir() -> None:
-    """Reject an empty recorded root-directory value."""
-    snapshot = ComputationSnapshot(
-        root_dir="",
-        consolidation=ConsolidationState.INITIALIZED,
-        partition=None,
-        evaluation=None,
+def test_validate_modeling_snapshot_rejects_empty_work_dir() -> None:
+    """Reject an empty recorded work-directory value."""
+    snapshot = ModelingSnapshot(
+        work_dir="",
+        consolidation_state=ConsolidationState.INITIALIZED,
+        data_partition=None,
+        evaluation_config=None,
         models=(),
         worker_ids=(),
         parent_id=None,
     )
 
-    with pytest.raises(ValueError, match=r"^root_dir.*nonempty.*empty string"):
-        validate_computation_snapshot(snapshot)
+    with pytest.raises(ValueError, match=r"^work_dir.*nonempty.*empty string"):
+        validate_modeling_snapshot(snapshot)
 
 
 @pytest.mark.parametrize(
     ("partition_id", "dataset_id", "field"),
     [
-        (PartitionId(""), DatasetId("dataset-a"), "partition.partition_id"),
-        (PartitionId("partition-a"), DatasetId(""), "partition.dataset_id"),
+        (PartitionId(""), DatasetId("dataset-a"), "data_partition.partition_id"),
+        (PartitionId("partition-a"), DatasetId(""), "data_partition.dataset_id"),
     ],
 )
-def test_validate_computation_snapshot_rejects_empty_partition_identity(
+def test_validate_modeling_snapshot_rejects_empty_partition_identity(
     partition_id: PartitionId,
     dataset_id: DatasetId,
     field: str,
 ) -> None:
     """Reject an empty partition or associated dataset identity."""
-    snapshot = ComputationSnapshot(
-        root_dir="computation-root",
-        consolidation=ConsolidationState.INITIALIZED,
-        partition=PartitionReference(
+    snapshot = ModelingSnapshot(
+        work_dir="computation-root",
+        consolidation_state=ConsolidationState.INITIALIZED,
+        data_partition=PartitionReference(
             partition_id=partition_id,
             dataset_id=dataset_id,
         ),
-        evaluation=None,
+        evaluation_config=None,
         models=(),
         worker_ids=(),
         parent_id=None,
     )
 
     with pytest.raises(ValueError, match=rf"^{field}.*nonempty.*empty string"):
-        validate_computation_snapshot(snapshot)
+        validate_modeling_snapshot(snapshot)
 
 
-def test_validate_computation_snapshot_rejects_invalid_evaluation() -> None:
+def test_validate_modeling_snapshot_rejects_invalid_evaluation() -> None:
     """Validate an included evaluation reference through its own contract."""
-    snapshot = ComputationSnapshot(
-        root_dir="computation-root",
-        consolidation=ConsolidationState.INITIALIZED,
-        partition=None,
-        evaluation=EvaluationReference(
+    snapshot = ModelingSnapshot(
+        work_dir="computation-root",
+        consolidation_state=ConsolidationState.INITIALIZED,
+        data_partition=None,
+        evaluation_config=EvaluationReference(
             configuration_id=EvaluationConfigId(""),
             task_kind=TaskKind.REGRESSION,
             class_labels=(),
@@ -725,10 +725,10 @@ def test_validate_computation_snapshot_rejects_invalid_evaluation() -> None:
         ValueError,
         match=r"configuration_id.*nonempty.*empty string",
     ):
-        validate_computation_snapshot(snapshot)
+        validate_modeling_snapshot(snapshot)
 
 
-def test_validate_computation_snapshot_rejects_duplicate_model_id() -> None:
+def test_validate_modeling_snapshot_rejects_duplicate_model_id() -> None:
     """Reject repeated model identities in the prospective configuration."""
     models = (
         ModelReference(
@@ -744,11 +744,11 @@ def test_validate_computation_snapshot_rejects_duplicate_model_id() -> None:
             task_kind=TaskKind.REGRESSION,
         ),
     )
-    snapshot = ComputationSnapshot(
-        root_dir="computation-root",
-        consolidation=ConsolidationState.INITIALIZED,
-        partition=None,
-        evaluation=None,
+    snapshot = ModelingSnapshot(
+        work_dir="computation-root",
+        consolidation_state=ConsolidationState.INITIALIZED,
+        data_partition=None,
+        evaluation_config=None,
         models=models,
         worker_ids=(),
         parent_id=None,
@@ -758,10 +758,10 @@ def test_validate_computation_snapshot_rejects_duplicate_model_id() -> None:
         ValueError,
         match=r"models\[1\].model_id.*unique.*model-a",
     ):
-        validate_computation_snapshot(snapshot)
+        validate_modeling_snapshot(snapshot)
 
 
-def test_validate_computation_snapshot_rejects_model_label_collision() -> None:
+def test_validate_modeling_snapshot_rejects_model_label_collision() -> None:
     """Reject model labels that collide under Python text equality."""
     models = (
         ModelReference(
@@ -777,11 +777,11 @@ def test_validate_computation_snapshot_rejects_model_label_collision() -> None:
             task_kind=TaskKind.REGRESSION,
         ),
     )
-    snapshot = ComputationSnapshot(
-        root_dir="computation-root",
-        consolidation=ConsolidationState.INITIALIZED,
-        partition=None,
-        evaluation=None,
+    snapshot = ModelingSnapshot(
+        work_dir="computation-root",
+        consolidation_state=ConsolidationState.INITIALIZED,
+        data_partition=None,
+        evaluation_config=None,
         models=models,
         worker_ids=(),
         parent_id=None,
@@ -791,16 +791,16 @@ def test_validate_computation_snapshot_rejects_model_label_collision() -> None:
         ValueError,
         match=(r"models\[1\].model_label.*unique.*duplicate"),
     ):
-        validate_computation_snapshot(snapshot)
+        validate_modeling_snapshot(snapshot)
 
 
-def test_validate_computation_snapshot_rejects_duplicate_worker_id() -> None:
+def test_validate_modeling_snapshot_rejects_duplicate_worker_id() -> None:
     """Reject repeated configured worker identities."""
-    snapshot = ComputationSnapshot(
-        root_dir="computation-root",
-        consolidation=ConsolidationState.INITIALIZED,
-        partition=None,
-        evaluation=None,
+    snapshot = ModelingSnapshot(
+        work_dir="computation-root",
+        consolidation_state=ConsolidationState.INITIALIZED,
+        data_partition=None,
+        evaluation_config=None,
         models=(),
         worker_ids=(WorkerId("worker-a"), WorkerId("worker-a")),
         parent_id=None,
@@ -810,7 +810,7 @@ def test_validate_computation_snapshot_rejects_duplicate_worker_id() -> None:
         ValueError,
         match=r"worker_ids\[1\].*unique.*worker-a",
     ):
-        validate_computation_snapshot(snapshot)
+        validate_modeling_snapshot(snapshot)
 
 
 def _valid_parent_evaluation(
@@ -1125,7 +1125,7 @@ def test_validate_attempt_inputs_rejects_invalid_parent_context() -> None:
     [
         (validate_model_reference, ModelReference),
         (validate_evaluation_reference, EvaluationReference),
-        (validate_computation_snapshot, ComputationSnapshot),
+        (validate_modeling_snapshot, ModelingSnapshot),
         (validate_parent_evaluation, ParentEvaluation),
     ],
 )
@@ -1153,29 +1153,29 @@ def test_parent_rejects_invalid_components(field: str, invalid: object) -> None:
 @pytest.mark.parametrize(
     "field,invalid",
     [
-        ("partition", "partition"),
-        ("evaluation", "evaluation"),
+        ("data_partition", "partition"),
+        ("evaluation_config", "evaluation"),
         ("models", []),
         ("models", (None,)),
         ("worker_ids", []),
         ("worker_ids", (1,)),
-        ("root_dir", 1),
-        ("consolidation", "initialized"),
+        ("work_dir", 1),
+        ("consolidation_state", "initialized"),
     ],
 )
 def test_snapshot_rejects_invalid_component_types(field: str, invalid: object) -> None:
     """Validate provided configuration without requiring startup completeness."""
-    snapshot = ComputationSnapshot(
-        root_dir="root",
-        consolidation=ConsolidationState.INITIALIZED,
-        partition=None,
-        evaluation=None,
+    snapshot = ModelingSnapshot(
+        work_dir="root",
+        consolidation_state=ConsolidationState.INITIALIZED,
+        data_partition=None,
+        evaluation_config=None,
         models=(),
         worker_ids=(),
         parent_id=None,
     )
     with pytest.raises(TypeError) as error:
-        validate_computation_snapshot(cast(Callable[..., ComputationSnapshot], replace)(snapshot, **{field: invalid}))
+        validate_modeling_snapshot(cast(Callable[..., ModelingSnapshot], replace)(snapshot, **{field: invalid}))
     assert field in str(error.value)
 
 

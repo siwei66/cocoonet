@@ -46,7 +46,7 @@ Phase 3 implements:
 10. all-or-nothing bulk validation and commit behavior;
 11. model-evaluation edits changing consolidated state to unconsolidated, while worker-only edits preserve it;
 12. a configuration-edit guard for later active-execution integration;
-13. immutable `ComputationSnapshot` production and pure `ParentEvaluation` preparation; and
+13. immutable `ModelingSnapshot` production and pure `ParentEvaluation` preparation; and
 14. Python `copy.copy()` support with independent mutable registries and no constructor/filesystem/runtime action.
 
 ### 2.2 Out of scope
@@ -199,7 +199,7 @@ evaluation: EvaluationReference | None
 dataset_sources: tuple[Path, ...]
 ```
 
-Phase 3 initializes them to `None`, `None`, and `()`, includes the two references in `ComputationSnapshot`, passes the
+Phase 3 initializes them to `None`, `None`, and `()`, includes the two references in `ModelingSnapshot`, passes the
 sources into fresh root validation, and preserves them through ordinary copying. It does not expose a user mutation for
 them. Phase 4 owns the one operation that validates/persists a prepared dataset and atomically replaces all three
 fields, plus dataset inspection/removal APIs.
@@ -394,7 +394,7 @@ def _require_configuration_editable(
 
 
 def prepare_parent_evaluation(
-    snapshot: ComputationSnapshot,
+    snapshot: ModelingSnapshot,
     /,
     *,
     parent_id: ParentId,
@@ -435,7 +435,7 @@ class Computation:
     @property
     def parent_id(self) -> ParentId | None
 
-    def snapshot(self) -> ComputationSnapshot
+    def snapshot(self) -> ModelingSnapshot
 
     def initialize(
         self,
@@ -452,7 +452,7 @@ Constructor behavior is real fresh preparation, not recovery. `initialize()` req
 reinitializing the current root therefore remains an explicit call with the same path and, when nonempty, explicit
 `overwrite=True`. There is no implicit current-directory fallback.
 
-`snapshot()` returns a newly constructed, validated immutable Phase 1 `ComputationSnapshot`. `root_dir` returns the
+`snapshot()` returns a newly constructed, validated immutable Phase 1 `ModelingSnapshot`. `root_dir` returns the
 canonical `Path` from Phase 2. `state` and `parent_id` expose lifecycle facts without permitting assignment.
 
 ### 6.2 Model registry API
@@ -850,6 +850,8 @@ committed in Phase 3. Phases 6 and 13 must establish and consume a fixed prepare
 
 - The public mutable object is named `Computation`; construction always means fresh preparation.
 - `initialize()` requires an explicit root path and is also fresh preparation, never recovery.
+- The immutable Phase 1 root-side modeling record is named `ModelingSnapshot` with fields `work_dir`,
+  `consolidation_state`, `data_partition`, `evaluation_config`, `models`, `worker_ids`, and `parent_id`.
 - Model IDs are assigned internally, sequentially, and never reused after removal.
 - Model inputs remain opaque and are not copied or inspected in the coordinator during this phase.
 - Phase 3 retains opaque model inputs internally; Phase 6 defines their private retrieval/preparation boundary.
@@ -862,16 +864,15 @@ committed in Phase 3. Phases 6 and 13 must establish and consume a fixed prepare
 - Node-scope docstrings use a standardized Root/Worker/Shared prefix followed by a functionality-specific clarification.
 
 These resolved choices require no further Phase 4 data-schema, Phase 5 isolation, Phase 6 model-adapter, Phase 11
-capacity-control, or Phase 13 runtime-persistence design. Full Phase 3 approval still depends on the three current-phase
+capacity-control, or Phase 13 runtime-persistence design. Full Phase 3 approval still depends on the two current-phase
 questions in Section 13.2.
 
 ### 13.2 Remaining blocking ambiguities
 
-The following three questions remain deliberately unresolved pending separate user decisions:
+The following two questions remain deliberately unresolved pending separate user decisions:
 
-1. whether and how the implemented Phase 1 `ComputationSnapshot` is renamed or remapped;
-2. the exact shared validation/staging/commit mechanism for singular and bulk additions; and
-3. the final shallow-copy, deep-copy, warning, and independent-work-directory policy.
+1. the exact shared validation/staging/commit mechanism for singular and bulk additions; and
+2. the final shallow-copy, deep-copy, warning, and independent-work-directory policy.
 
 These unresolved contracts block approval and implementation of their affected Phase 3 units. This revision does not
 choose among their alternatives or modify their existing design sections.

@@ -225,9 +225,11 @@ Transport is defined in Section 7; worker-side cleanup and its service boundary 
 ### 2.3 Reusable computation, initialization, and user workflow
 
 A **computation instance** holds root-side dataset, model, worker, and evaluation configuration; it is not a parent
-task. The first evaluation establishes a parent. Thereafter, changed model evaluation configuration requires a new
-parent, while unchanged model evaluation configuration resumes the existing parent, with or without worker
-configuration changes. An ordinary copy preserves those same identity rules.
+task. Its immutable root-side modeling record is `ModelingSnapshot`, whose fields are `work_dir`,
+`consolidation_state`, `data_partition`, `evaluation_config`, `models`, `worker_ids`, and `parent_id`. The first
+evaluation establishes a parent. Thereafter, changed model evaluation configuration requires a new parent, while
+unchanged model evaluation configuration resumes the existing parent, with or without worker configuration changes.
+An ordinary copy preserves those same identity rules.
 
 #### Root directory and initialization
 

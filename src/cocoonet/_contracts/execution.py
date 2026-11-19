@@ -247,20 +247,20 @@ def validate_evaluation_reference(value: EvaluationReference) -> None:
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class ComputationSnapshot:
-    """Describe the current root-side computation configuration.
+class ModelingSnapshot:
+    """Describe the current root-side modeling configuration.
 
     Parameters
     ----------
-    root_dir : str
+    work_dir : str
         User-selected Cocoonet-managed working directory.
-    consolidation : ConsolidationState
+    consolidation_state : ConsolidationState
         Relationship between the prospective evaluation configuration and
         its committed parent task.
-    partition : PartitionReference | None
+    data_partition : PartitionReference | None
         Active dataset and realized-partition identities, or ``None`` when
         no dataset and partition are currently configured.
-    evaluation : EvaluationReference | None
+    evaluation_config : EvaluationReference | None
         Active evaluation-settings reference, or ``None`` when evaluation
         settings are not currently configured.
     models : tuple[ModelReference, ...]
@@ -282,21 +282,21 @@ class ComputationSnapshot:
     Node usage scope: Root only - Used exclusively by the root node.
     """
 
-    root_dir: str
-    consolidation: ConsolidationState
-    partition: PartitionReference | None
-    evaluation: EvaluationReference | None
+    work_dir: str
+    consolidation_state: ConsolidationState
+    data_partition: PartitionReference | None
+    evaluation_config: EvaluationReference | None
     models: tuple[ModelReference, ...]
     worker_ids: tuple[WorkerId, ...]
     parent_id: ParentId | None
 
 
-def validate_computation_snapshot(value: ComputationSnapshot) -> None:  # noqa: C901
-    """Validate root configuration metadata without applying start prerequisites.
+def validate_modeling_snapshot(value: ModelingSnapshot) -> None:  # noqa: C901
+    """Validate root modeling metadata without applying start prerequisites.
 
     Parameters
     ----------
-    value : ComputationSnapshot
+    value : ModelingSnapshot
         Candidate prospective configuration and consolidation state.
 
     Raises
@@ -318,26 +318,40 @@ def validate_computation_snapshot(value: ComputationSnapshot) -> None:  # noqa: 
     Node usage scope: Root only - Used exclusively by the root node.
     """
     # Validate the outer record and its own fields without a recursive traversal.
-    if not isinstance(value, ComputationSnapshot):
-        validate_declared_types(value, expected_type=ComputationSnapshot)
-    validate_identifier(value.root_dir, field="root_dir")
-    validate_declared_types(value.consolidation, expected_type=ConsolidationState, field="consolidation")
+    if not isinstance(value, ModelingSnapshot):
+        validate_declared_types(value, expected_type=ModelingSnapshot)
+    validate_identifier(value.work_dir, field="work_dir")
+    validate_declared_types(
+        value.consolidation_state,
+        expected_type=ConsolidationState,
+        field="consolidation_state",
+    )
     validate_declared_types(value.models, expected_type=tuple, field="models")
     validate_declared_types(value.worker_ids, expected_type=tuple, field="worker_ids")
 
     # A configured partition reference owns two opaque identities, not file access.
-    if value.partition is not None:
-        if not isinstance(value.partition, PartitionReference):
-            validate_declared_types(value.partition, expected_type=PartitionReference, field="partition")
-        validate_identifier(value.partition.partition_id, field="partition.partition_id")
-        validate_identifier(value.partition.dataset_id, field="partition.dataset_id")
+    if value.data_partition is not None:
+        if not isinstance(value.data_partition, PartitionReference):
+            validate_declared_types(
+                value.data_partition,
+                expected_type=PartitionReference,
+                field="data_partition",
+            )
+        validate_identifier(
+            value.data_partition.partition_id,
+            field="data_partition.partition_id",
+        )
+        validate_identifier(
+            value.data_partition.dataset_id,
+            field="data_partition.dataset_id",
+        )
 
     # Delegate optional evaluation validity and retain its configuration field path.
-    if value.evaluation is not None:
+    if value.evaluation_config is not None:
         try:
-            validate_evaluation_reference(value.evaluation)
+            validate_evaluation_reference(value.evaluation_config)
         except (TypeError, ValueError) as error:
-            raise type(error)(f"evaluation is invalid: {error}") from error
+            raise type(error)(f"evaluation_config is invalid: {error}") from error
 
     # Model references are checked once; local sets enforce scoped uniqueness.
     model_ids: set[ModelId] = set()
@@ -367,11 +381,11 @@ def validate_computation_snapshot(value: ComputationSnapshot) -> None:  # noqa: 
     # Validate a supplied identity before checking its lifecycle relationship.
     if value.parent_id is not None:
         validate_identifier(value.parent_id, field="parent_id")
-    if value.consolidation is ConsolidationState.INITIALIZED:
+    if value.consolidation_state is ConsolidationState.INITIALIZED:
         if value.parent_id is not None:
             raise ValueError(f"Initialized snapshots require parent_id=None; got ID prefix: {value.parent_id!r}.")
     elif value.parent_id is None:
-        raise ValueError(f"{value.consolidation.value} snapshots require a parent_id; got None.")
+        raise ValueError(f"{value.consolidation_state.value} snapshots require a parent_id; got None.")
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
