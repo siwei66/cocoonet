@@ -26,7 +26,7 @@ Every implementation unit in Section 11 requires its own proposal, over-engineer
 targeted implementation, verification, and stop. If an approved signature, field, invariant, or phase boundary must
 change, implementation stops for an approved roadmap amendment.
 
-The only file changed by this planning task is this roadmap.
+This phase-roadmap revision changes only this roadmap.
 
 ## 2. Scope
 
@@ -496,21 +496,16 @@ class Computation:
         model_labels: Iterable[ScalarLabel],
         /,
     ) -> tuple[ModelReference, ...]
-
-    def _model_input(
-        self,
-        model_id: ModelId,
-        /,
-    ) -> object
 ```
 
 `list_models()` returns user-facing labels in registry order. `inspect_model()` returns one immutable metadata reference.
 `summarize_models()` returns every immutable metadata reference in registry order. The distinction avoids returning
 opaque executable inputs in a summary while providing both compact listing and complete configured metadata.
 
-Model lookup/removal uses the user-facing unique label. `_model_input()` is an internal exact-ID lookup for future model
-preparation and is not exported or documented as public API. Missing labels/IDs raise `KeyError` with the requested key;
-type/value errors are raised before lookup.
+Model lookup/removal uses the user-facing unique label. Phase 3 retains the exact opaque input inside
+`_RegisteredModel` but adds no retrieval API solely for a later consumer. Phase 6 owns the narrow private retrieval or
+preparation boundary required by its model-adapter implementation. Missing labels raise `KeyError` with the requested
+key; type/value errors are raised before lookup.
 
 ### 6.3 Worker registry API
 
@@ -666,16 +661,17 @@ descriptive here and is not executed.
 - Invalid values, duplicate keys, mixed model task kinds, conflicting evaluation task kind, more than one root-local
   worker, nonpositive `n_attempt`, and inconsistent dataset/evaluation presence raise `ValueError` with expected and
   observed conditions.
-- Missing model labels, model IDs, and worker IDs after valid key validation raise `KeyError`.
+- Missing model labels and worker IDs after valid key validation raise `KeyError`.
 - A mutation attempted during `ExecutionStatus.RUNNING` raises `RuntimeError` before any in-memory or filesystem change.
 - Phase 2 `StorageError` propagates from fresh directory preparation with its chained filesystem cause.
 - Validators and failed mutations do not normalize labels, device text, worker IDs, or model inputs.
 - Diagnostics show bounded registry counts/keys rather than complete model objects, large batches, or payloads.
 
-All public and internal classes/functions/methods receive NumPy-style source docstrings. Every non-helper docstring ends
-with the exact applicable node-usage sentence required by root `AGENTS.md`; Phase 3 components are root-only except
-reused shared Phase 1 records. The public `WorkerConfiguration` notes contain the requested/effective capacity
-distinction and formula described in Section 4.6.
+All public and internal classes/functions/methods receive NumPy-style source docstrings. Every non-helper class and
+function ends its `Notes` section with one standardized category prefix -- `Node usage scope: Root -`,
+`Node usage scope: Worker -`, or `Node usage scope: Shared -` -- followed by a concise functionality-specific
+clarification. Phase 3 components are root-only except reused shared Phase 1 records. The public
+`WorkerConfiguration` notes contain the requested/effective capacity distinction and formula described in Section 4.6.
 
 ## 10. Directly corresponding tests
 
@@ -735,7 +731,7 @@ Test:
 - model IDs `1`, `2`, ... in successful registration order;
 - no ID reuse after removal and no ID consumption on failure/no-op;
 - exact model-label ordering from list and metadata ordering from summary;
-- inspect and internal exact-ID lookup;
+- inspect by user-facing model label;
 - duplicate label, mixed task kind, present-evaluation mismatch, invalid enum, and `None` input rejection;
 - singular removal, missing-label behavior, survivor order, and incomplete zero-model configuration;
 - atomic bulk add with within-batch and existing collisions;
@@ -805,20 +801,19 @@ its production unit.
 16. Implement `list_models()`.
 17. Implement `inspect_model()`.
 18. Implement `summarize_models()`.
-19. Implement `_model_input()` for later internal preparation.
-20. Implement `remove_model()` and direct no-reuse/lifecycle tests.
-21. Implement atomic `add_models()` and direct all-or-nothing tests.
-22. Implement atomic `remove_models()` and direct all-or-nothing tests.
-23. Implement `add_worker()` and direct configuration-only tests.
-24. Implement `list_workers()`.
-25. Implement `inspect_worker()`.
-26. Implement `summarize_workers()`.
-27. Implement `remove_worker()` and direct no-side-effect tests.
-28. Implement atomic `add_workers()` and direct all-or-nothing tests.
-29. Implement atomic `remove_workers()` and direct all-or-nothing tests.
-30. Implement `Computation.__copy__()` and direct shallow-copy/no-I/O tests.
-31. Add the exact public exports in `cocoonet.__init__` and API-surface tests.
-32. Run targeted tests, the full available suite, static/format/lint checks, and a final scope, docstring, mutation,
+19. Implement `remove_model()` and direct no-reuse/lifecycle tests.
+20. Implement atomic `add_models()` and direct all-or-nothing tests.
+21. Implement atomic `remove_models()` and direct all-or-nothing tests.
+22. Implement `add_worker()` and direct configuration-only tests.
+23. Implement `list_workers()`.
+24. Implement `inspect_worker()`.
+25. Implement `summarize_workers()`.
+26. Implement `remove_worker()` and direct no-side-effect tests.
+27. Implement atomic `add_workers()` and direct all-or-nothing tests.
+28. Implement atomic `remove_workers()` and direct all-or-nothing tests.
+29. Implement `Computation.__copy__()` and direct shallow-copy/no-I/O tests.
+30. Add the exact public exports in `cocoonet.__init__` and API-surface tests.
+31. Run targeted tests, the full available suite, static/format/lint checks, and a final scope, docstring, mutation,
     side-effect, and redundancy audit.
 
 This order establishes records before validators, lifecycle rules before mutable consumers, storage-backed construction
@@ -831,7 +826,7 @@ public export. It does not jump into Phase 4 dataset preparation or Phase 13 run
 | --- | --- |
 | Public `add_dataset()`, dataset inspection/removal, normalized input records, dataset/partition/evaluation-reference generation, split API, workbook schemas, artifact carry-forward across initialization, mixed inline/file representation, tensor-shape encoding, and transfer-preparation reuse | Phase 4 |
 | Technical model isolation and responsive worker-control boundary | Phase 5 |
-| Fixed sklearn/custom model input capture, model API validation, trusted/declarative representation, and mutation isolation at parent commitment | Phase 6 |
+| Fixed sklearn/custom model input capture, model API validation, the narrow private model-input retrieval/preparation boundary, trusted/declarative representation, and mutation isolation at parent commitment | Phase 6 |
 | Validation/report payloads, scientific formulas, visualization data, and influence settings/workflows | Phases 7–9 |
 | PyTorch configuration and model-specific device/training interpretation | Phase 10 |
 | CPU detection, per-model demand, effective `n_attempt`, GPU slot enforcement, reservations, and subprocess supervision | Phase 11 |
@@ -855,47 +850,46 @@ committed in Phase 3. Phases 6 and 13 must establish and consume a fixed prepare
 
 - The public mutable object is named `Computation`; construction always means fresh preparation.
 - `initialize()` requires an explicit root path and is also fresh preparation, never recovery.
-- Singular mutations are primitive; bulk mutations are all-or-nothing conveniences.
 - Model IDs are assigned internally, sequentially, and never reused after removal.
 - Model inputs remain opaque and are not copied or inspected in the coordinator during this phase.
+- Phase 3 retains opaque model inputs internally; Phase 6 defines their private retrieval/preparation boundary.
 - Worker topology is only root-local versus online; private/public online ownership is added by its owning phases.
 - Worker device text is retained but not interpreted; requested capacity is retained but not adapted.
 - The active dataset/evaluation slot is represented once but has no public Phase 3 installer.
 - Parent preparation is pure and private; `run()` later owns durable commitment.
-- Ordinary copy means `copy.copy()`, shallow opaque-input sharing, independent registry containers, and no I/O.
+- The complete `execution_configuration.csv` schema, codec, and persistence belong exclusively to Phase 13; Phase 3
+  owns only prospective in-memory configuration and snapshot preparation.
+- Node-scope docstrings use a standardized Root/Worker/Shared prefix followed by a functionality-specific clarification.
 
-These choices are sufficient to implement Phase 3 without designing Phase 4 data schemas, Phase 5 isolation, Phase 6
-model adapters, Phase 11 capacity control, or Phase 13 runtime persistence.
+These resolved choices require no further Phase 4 data-schema, Phase 5 isolation, Phase 6 model-adapter, Phase 11
+capacity-control, or Phase 13 runtime-persistence design. Full Phase 3 approval still depends on the three current-phase
+questions in Section 13.2.
 
 ### 13.2 Remaining blocking ambiguities
 
-None. The current-phase contracts needed for the records, public methods, mutations, validation, copy behavior, and
-tests are fixed above. Later-phase decisions are explicitly deferred in Section 12 and are not required to complete
-Phase 3.
+The following three questions remain deliberately unresolved pending separate user decisions:
+
+1. whether and how the implemented Phase 1 `ComputationSnapshot` is renamed or remapped;
+2. the exact shared validation/staging/commit mechanism for singular and bulk additions; and
+3. the final shallow-copy, deep-copy, warning, and independent-work-directory policy.
+
+These unresolved contracts block approval and implementation of their affected Phase 3 units. This revision does not
+choose among their alternatives or modify their existing design sections.
 
 ### 13.3 Inconsistencies found
 
-1. **Phase 2 status is stale.** `roadmap_phase_2.md` says `Status: revised proposal`, while the planned Phase 2 storage
-   modules and tests are present and the repository history treats them as implemented. This does not change the Phase 3
-   storage API, but the roadmap status does not describe the implemented repository.
-2. **`execution_configuration.csv` ownership is described differently.** The Phase 2 roadmap says its fields are owned
+1. **`execution_configuration.csv` ownership is described differently.** The Phase 2 roadmap says its fields are owned
    by Phase 3, while the project-wide roadmap assigns persistence of the complete execution configuration to Phase 13.
-   Phase 3 has no `run()` boundary and later phases still add dataset, model-preparation, retry, and execution fields.
-   This plan therefore owns the in-memory configuration and parent snapshot only and follows the project-wide Phase 13
-   assignment for the complete persisted schema/codec/write.
-3. **Implemented terminology uses stale `start()` wording.** The existing `ConsolidationState` source docstring says
-   successful `run()` consolidates and unconsolidated `start()` is rejected, while current `AGENTS.md`, architecture,
-   and roadmap uniformly specify `run()`. The enum values and validators are unaffected. Phase 3 uses `run()` wording
-   and does not modify the existing source under this documentation-only authorization.
-4. **Architecture status prose is stale.** Architecture Section 1 still says the repository is at the scaffold stage,
-   although Phases 1 and 2 are implemented. The contracts remain applicable, but the status sentence is no longer a
-   literal description of the repository.
-5. **Some implemented Phase 2 non-helper docstrings do not use the exact required node-usage sentence.** Several
-   `_storage` functions end with variants such as `Node usage scope: Root - ...` or `Shared - Used by root and worker
-   ...`, while current root `AGENTS.md` requires one of three exact endings. Phase 3 must comply for every new object;
-   repairing earlier docstrings is a separate source change and is not authorized by this plan.
-None of these inconsistencies leaves a Phase 3 behavioral contract unresolved. They must not be silently repaired as
-part of a Phase 3 implementation unit.
+   The approved ownership decision is deterministic: Phase 3 owns only in-memory configuration and snapshot
+   preparation, while Phase 13 exclusively owns the complete persisted schema, codec, and write. The Phase 2 sentence
+   remains stale documentation but does not transfer implementation scope to Phase 3.
+2. **The root docstring rule and the approved Phase 3 convention differ.** Root `AGENTS.md` names three exact complete
+   node-usage sentences. The approved Phase 3 convention standardizes only `Node usage scope: Root -`,
+   `Node usage scope: Worker -`, or `Node usage scope: Shared -`, followed by a functionality-specific clarification.
+   Phase 3 follows that approved convention; aligning the governing prose is a separate documentation revision.
+
+Neither remaining documentation inconsistency changes a Phase 3 runtime contract. They must not be silently repaired
+outside the separately authorized documentation scope.
 
 ## 14. Approval checkpoint
 

@@ -1,0 +1,97 @@
+The Phase 3 behavior is mostly deterministic. These are the remaining questions that should be decided explicitly before approving its roadmap.
+
+1. What is the required node-scope docstring format?
+
+Clarification: `AGENTS.md` requires one of three exact sentences, but you have stated that only the category—`Root`, `Worker`, or `Shared`—should be standardized and the explanation should remain functionality-specific.
+
+Example:
+
+```text
+Exact form:
+Node usage scope: Root only - Used exclusively by the root node.
+
+Function-specific form:
+Node usage scope: Root - Prepares fresh root-managed storage.
+```
+
+Recommendation: adopt the function-specific form: require the prefix and one of the three categories, while allowing a concise responsibility-specific explanation. This matches your stated preference, but the governing `AGENTS.md` rule would eventually need alignment. Until then, Phase 3 implementers cannot know whether to follow the literal file or your exception.
+
+2. Which phase owns `execution_configuration.csv`?
+
+Clarification: the Phase 2 roadmap says Phase 3 owns its fields, while the project roadmap assigns the complete schema, encoding, and persistence to Phase 13. Phase 3 does not implement `run()` and cannot yet know all dataset, prepared-model, retry, and runtime fields.
+
+Example:
+
+- Phase 3: in-memory `ComputationSnapshot` and prospective configuration.
+- Phase 13: complete fixed execution configuration, parent creation, CSV encoding, and atomic persistence.
+
+Recommendation: assign the complete `execution_configuration.csv` schema and persistence exclusively to Phase 13. Phase 3 should own only in-memory configuration records and snapshot preparation.
+
+3. Should `_model_input()` be implemented in Phase 3?
+
+Clarification: the roadmap adds a private exact-ID lookup solely for later model preparation. Nothing in Phase 3 consumes it. Its required behavior may become clearer once Phase 6 defines model preparation and fixed executable-input capture.
+
+Example:
+
+```python
+def _model_input(self, model_id: ModelId, /) -> object:
+    ...
+```
+
+Implementing it now commits an internal boundary before its consumer exists. Deferring it lets Phase 6 decide whether it needs a single lookup, a prepared-model iterator, or another controlled interface.
+
+Recommendation: defer `_model_input()` to Phase 6. Phase 3 should retain the opaque input internally but expose no unused retrieval method.
+
+4. What exact values must `snapshot()` place in `ComputationSnapshot`?
+
+Clarification: the existing contract requires `root_dir: str` and `worker_ids: tuple[WorkerId, ...]`, while `Computation` stores a canonical `Path` and complete `WorkerConfiguration` records. The current roadmap says only that the snapshot is built from authoritative fields.
+
+Example:
+
+```python
+ComputationSnapshot(
+    root_dir=str(self._storage.root),
+    consolidation=self._consolidation,
+    partition=self._partition,
+    evaluation=self._evaluation,
+    models=tuple(model.reference for model in self._models),
+    worker_ids=tuple(worker.worker_id for worker in self._workers),
+    parent_id=self._parent_id,
+)
+```
+
+Recommendation: specify the mapping above exactly. Do not change the Phase 1 snapshot field from `str` to `Path`.
+
+5. How should singular and bulk mutations share validation logic?
+
+Clarification: the roadmap requires singular operations to be the primitive semantic actions, but bulk operations must validate everything before mutation and must not call mutating singular methods. It currently refers to “singular semantic checks” without defining where those checks live.
+
+Example: `add_models()` cannot safely call `add_model()` repeatedly because the third entry could fail after the first two have already been committed.
+
+Possible approaches:
+
+- Duplicate collision and task-kind checks in singular and bulk methods.
+- Introduce small pure staging/validation helpers used by both forms.
+- Implement singular operations by staging a one-item batch through the same non-mutating core.
+
+Recommendation: define small domain-specific staging helpers shared by singular and bulk additions. They should validate and return staged state without mutating `Computation`. Avoid a generic registry abstraction. Bulk removals can validate all keys and construct survivors directly.
+
+6. What is the scope of model-ID non-reuse after copying?
+
+Clarification: ordinary copies have independent registries and preserve the same next-ID counter. Consequently, two copies can assign the same next numeric ID to different prospective models.
+
+Example:
+
+```text
+original: model 1
+copy(original)
+
+original.add_model(A) -> model 2
+copy.add_model(B)     -> model 2
+```
+
+This is valid if `model_id` is scoped to the eventual parent, but invalid if “persistent scope” means the shared root directory across every copied configuration.
+
+Recommendation: explicitly define model IDs as unique and non-reused within one prospective computation lineage as committed to one parent—not globally across independently diverged copies. Different future parents may use the same numeric model ID. Phase 15 should prevent uncoordinated simultaneous control of the same persisted execution.
+
+The stale inconsistency entries—Phase 2 status, architecture status, and `start()` terminology—do not require decisions. They are already resolved and only need editorial removal from the Phase 3 roadmap later. No files were modified.

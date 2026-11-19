@@ -1,0 +1,49 @@
+1. What is the required node-scope docstring format?
+`Function-specific form:` with standard part `Node usage scope: Root / Worker / Shared -`
+
+---
+
+2. Which phase owns `execution_configuration.csv`?
+`Recommendation: assign the complete execution_configuration.csv schema and persistence exclusively to Phase 13. Phase 3 should own only in-memory configuration records and snapshot preparation.` Approved.
+
+---
+
+3. Should `_model_input()` be implemented in Phase 3?
+`Recommendation: defer _model_input() to Phase 6. Phase 3 should retain the opaque input internally but expose no unused retrieval method.` Approved.
+
+---
+
+4. What exact values must `snapshot()` place in `omputationSnapshot`?
+Keep the attributes unchanged but slightly renamed as:
+```
+ModelingSnapshot(
+    work_dir,  # old root_dir
+    consolidation_state,  # old consolidation
+    data_partition,  # old partition
+    evaluation_configs,  # old evaluation
+    models,
+    worker_ids,
+    parent_id,
+)
+```
+And align the types and value assignment with Phase 1 schema i.e. use the Phase 1 schema directly if possible and apply minimal conversion of format or types.
+
+---
+
+5. How should singular and bulk mutations share validation logic?
+Separate the validation with the adding operation itself, `add_model()` call internal helper validator first and call the operator, and call them once. Bulk `add_models()` simply call validator for every member and then call operator for every member, so that one failure will reject the operation / adding of the entire bulk.
+
+---
+
+6. What is the scope of model-ID non-reuse after copying?
+The shallow copy behavior should be simply a double reference, and a explicit warning should be printed out loudly when shallow copy is applied.
+
+Define the deep copying behavior as follows:
+- Copying automatically create a new work dir for the copied instance, the work dir is in the same parent dir with the original work dir and the name of the new work dir is `<the original name>_copy_<6-digit random code using numbers and lower case letters>`
+- Copy all existing subdirs with all files to the new work dir
+- The new instance configure the new work dir with copied files as its work dir, so no conflict exists, any following operation on the copied instance will be operated using the new work dir.
+What do you think in both design top view of my advice for the copying and in the practical view of it? Provide your analysis including common python user expectation for this and suggestions of policy.
+
+---
+
+Propose clarifications or revisions for these ambiguities for `roadmap_phase_3.md` with line number to locate. Propose only do not modify any file.
