@@ -7,10 +7,11 @@ online workers, or both. The root (user) node always owns coordination; it does 
 It prepares dataset access, supplies models and evaluation directives, and receives standardized result bundles. Online
 workers use synchronized datasets. Scientific auditability, transparency, and reproducibility are core requirements.
 
-**Reusable Computation and User Workflow:**
+**Reusable EvaluationTask and User Workflow:**
 
-- A computation instance is reusable root-side configuration, not a parent evaluation task. Construction requires a
-  user-provided working directory; `overwrite` defaults to `False`. Prepare a missing directory or accept an empty one;
+- An `EvaluationTask` instance is Cocoonet's core public API and reusable root-side evaluation configuration, not a
+  committed parent evaluation task, model unit, attempt, worker, scheduler, or runtime controller. Construction requires
+  a user-provided working directory; `overwrite` defaults to `False`. Prepare a missing directory or accept an empty one;
   reject a nonempty directory
   with `overwrite=False`. With explicit `overwrite=True`, clear its contents and prepare it for fresh execution.
   Successful construction/initialization sets `state = initialized`. Initialization is distinct from recovery.
@@ -84,7 +85,7 @@ consolidated + unchanged evaluation    -> same parent / resume, with or without 
 consolidated + permitted evaluation edit -> unconsolidated
 unconsolidated + run()                 -> reject
 unconsolidated + initialize(...)       -> initialized -> fresh run permitted
-copy(instance)                        -> same attributes, root directory, and lifecycle state
+copy(evaluation_task)                -> same attributes, root directory, and lifecycle state
 ```
 
 Attempt termination has three distinct meanings. `interrupted` records parent interruption and is terminal for that
@@ -299,7 +300,7 @@ results remain associated with their original parent and cannot enter another pa
 - Metadata-based change detection is intentional. Cocoonet does not reread large source files solely to
   compute a content digest. Content changes made while path, size, and modification time are deliberately
   preserved are outside automatic detection; users may explicitly request regeneration.
-- A new computation instance with no persisted source state regenerates by default. The later dataset API
+- A new `EvaluationTask` instance with no persisted source state regenerates by default. The later dataset API
   also permits explicit reuse or explicit regeneration. Explicit reuse fails if required prepared files
   are absent.
 - Dataset registration includes root-side split preparation and inspection through `add_dataset()`. `run()` consumes
@@ -307,6 +308,9 @@ results remain associated with their original parent and cannot enter another pa
 - Required public capabilities are initialization, dataset add/set with split preparation, inspect/remove, and
   model/worker add/list/inspect/summary/remove, with singular and bulk add/remove; `run`, interruption, recovery,
   and configuration modification/copy/reuse under the lifecycle rules. A general root-file clearing API is optional.
+  Every configured worker has a user-defined `worker_label` unique within its `EvaluationTask` and a distinct opaque
+  `worker_id`. Public worker registry operations identify workers by `worker_label`; runtime routing, connection
+  matching, attempt records, protocol messages, and `execution_state.csv` continue to use `worker_id`.
   Singular mutations are the primitive semantic
   actions; bulk operations are explicit conveniences. Define their commit/partial-failure behavior before
   implementation; do not silently leave undocumented partial configuration after validation failure. Exact names,
@@ -985,11 +989,12 @@ Before planning or implementing a phase, process project guidance in this order:
 
 **Worker Configuration Removal and Explicit Management:**
 
-- `remove_worker` only changes the root computation's worker configuration. It sends no stop, disconnect, cleanup,
-  reset, or release instruction. If configuration cannot be modified, fail explicitly without compensating worker
-  actions. Removal is permitted before execution, after it finishes, or after root interruption even while old work
-  stops; it is locked during ordinary active execution. Worker changes do not change model evaluation configuration
-  or create a new parent.
+- `remove_worker` resolves the configured worker by its user-facing `worker_label` and changes only the root
+  `EvaluationTask`'s worker configuration. The resolved worker retains its `worker_id`. Removal sends no stop,
+  disconnect, cleanup, reset, or release instruction. If configuration cannot be modified, fail explicitly without
+  compensating worker actions. Removal is permitted before execution, after it finishes, or after root interruption
+  even while old work stops; it is locked during ordinary active execution. Worker changes do not change model
+  evaluation configuration or create a new parent.
 - The same rule applies to a worker reconnected after interruption or recovery, whether working, idle, or retaining
   data, whenever configuration modification is permitted. Any accompanying connection loss follows the existing
   disconnection policy; removal defines no additional timeout, stop, cleanup, or release behavior.

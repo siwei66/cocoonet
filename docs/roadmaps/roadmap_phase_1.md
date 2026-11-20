@@ -50,7 +50,7 @@ governing documents.
 
 - Filesystem inspection or mutation, directory ownership enforcement, serialization/deserialization, durable writes,
   artifact filenames, log writers, recovery journals, and publication mechanisms: Phase 2 and later consumers.
-- The public computation class, initialization, configuration mutation, copying, bulk operations, and configuration
+- The public `EvaluationTask` class, initialization, configuration mutation, copying, bulk operations, and configuration
   transition algorithms: Phase 3. No `run()`, `add_dataset()`, or worker-management implementation belongs here.
 - Dataframe adapters, feature/tensor storage, dataset identity generation/content verification, partition generation,
   split reuse/restoration, and dataset registration: Phase 4.
@@ -294,7 +294,7 @@ compatibility remains Phase 4 work and must preserve the universal separation ru
 | `ModelFamily` | `sklearn`, `sklearn-like`, `pytorch`, `cocoonet` |
 | `ModelReference` | `model_id: ModelId`, `model_label: ScalarLabel`, `family: ModelFamily`, `task_kind: TaskKind` |
 | `EvaluationReference` | `configuration_id: EvaluationConfigId`, `task_kind: TaskKind`, `class_labels: tuple[ScalarLabel, ...]`, `influence_requested: bool` |
-| `ModelingSnapshot` | `work_dir: str`, `consolidation_state: ConsolidationState`, `data_partition: PartitionReference | None`, `evaluation_config: EvaluationReference | None`, `models: tuple[ModelReference, ...]`, `worker_ids: tuple[WorkerId, ...]`, `parent_id: ParentId | None` |
+| `ModelingSnapshot` | `work_dir: str`, `consolidation_state: ConsolidationState`, `data_partition: PartitionReference | None`, `evaluation_config: EvaluationReference | None`, `models: Mapping[ScalarLabel, ModelReference]`, `worker_ids: Mapping[ScalarLabel, WorkerId]`, `parent_id: ParentId | None` |
 | `ParentEvaluation` | `parent_id: ParentId`, `partition: PartitionReference`, `evaluation: EvaluationReference`, `models: tuple[ModelReference, ...]` |
 | `AttemptInputs` | `attempt_id: AttemptId`, `parent_id: ParentId`, `model_id: ModelId`, `worker_id: WorkerId` |
 
@@ -309,15 +309,17 @@ Phase 1 validates these tags without inspecting model behavior or defining compo
 `work_dir` is the user-selected location recorded as a nonempty string; no normalization or filesystem validation
 happens in Phase 1. The configuration component later enforces ownership before initializing/reassigning it.
 
-`ModelingSnapshot` is a read-only description, not the mutable public computation. It intentionally
+`ModelingSnapshot` is a read-only description, not the mutable public `EvaluationTask`. It intentionally
 permits no active dataset/partition association, no settings, no models, and no workers in initialized
 state. `data_partition=None` means that the prospective configuration has no active dataset and realized
 partition. `parent_id` is absent for initialized state and required for consolidated/unconsolidated
 state; in unconsolidated state it identifies the previous execution, not a new parent for the
-prospective configuration. Models and worker references are unique, including model labels within
-the prospective configuration. An incomplete prospective configuration after a permitted removal is
-representable. The validator does not compare changed configuration with an old parent or perform a
-state transition.
+prospective configuration. `models` is an immutable insertion-ordered `MappingProxyType` mapping whose keys are user-facing
+`model_label` values and whose values are matching `ModelReference` records. `worker_ids` is an immutable
+insertion-ordered `MappingProxyType` mapping from user-facing `worker_label` values to opaque `WorkerId` values. Model and worker labels
+are unique mapping keys; model and worker IDs remain unique across mapping values. An incomplete prospective
+configuration after a permitted removal is representable. The validator does not compare changed configuration with
+an old parent or perform a state transition.
 
 Each `ModelReference` identifies the fixed supplied model input; the owning configuration component retains that
 input and later creates the payload. No executable object is stored here. Each `EvaluationReference` identifies all
@@ -357,7 +359,7 @@ Parent and attempt invariants:
 | `validate_partition_schedule(value: PartitionSchedule) -> None` | Validate complete logical associations and per-fold eligibility/disjointness/group rules. | Duplicate ID/label/fold; unknown ID; forbidden membership; group leakage; legal file overlap; reordered metadata; empty populations; repeated cross-fold use. |
 | `validate_model_reference(value: ModelReference) -> None` | Check identity/label and declared family/task-kind tags. | Exact four-family enum vocabulary, including sklearn-like and cocoonet; valid/invalid family and task-kind tags; no model object/API inspection or derived descriptions. |
 | `validate_evaluation_reference(value: EvaluationReference) -> None` | Check settings handle, task kind, class order, influence flag. | Regression/classification class rules; equality collisions; one class allowed; no sorting/coercion. |
-| `validate_modeling_snapshot(value: ModelingSnapshot) -> None` | Check structural consolidation/parent relationships, the optional data-partition and evaluation-configuration references, and model/worker uniqueness while allowing incomplete configuration. | All three states; zero models/workers/data partition; present data partition with valid or invalid partition/dataset identity; missing required parent; unchanged parent after worker-list edit; snapshot unchanged by validation. |
+| `validate_modeling_snapshot(value: ModelingSnapshot) -> None` | Check structural consolidation/parent relationships, the optional data-partition and evaluation-configuration references, immutable label-keyed mappings, key/reference label agreement, and model/worker ID uniqueness while allowing incomplete configuration. | All three states; empty mappings; mapping insertion order; mutable mapping rejection; invalid model/worker label keys or values; mismatched model key/reference label; duplicate model/worker IDs; present data partition with valid or invalid partition/dataset identity; missing required parent; unchanged parent after worker-list edit; snapshot unchanged by validation. |
 | `validate_parent_evaluation(value: ParentEvaluation) -> None` | Check partition-reference identities, fixed parent structure, nonempty models, unique model IDs/labels, and agreement with the task-wide task kind. | Invalid partition/dataset identity; empty models; mixed task kinds; duplicate IDs/labels; same label in different parents allowed. |
 | `validate_attempt_inputs(value: AttemptInputs, *, parent: ParentEvaluation) -> None` | Resolve the exact unit/model context and validate attempt/worker identities. | Unknown/cross-parent unit; duplicates with different attempts/workers; no independent scientific override. |
 
@@ -836,7 +838,7 @@ method signatures, IPC, or messages. Later component implementations call the ap
 
 | Owner / boundary | Consumes | Produces / obligation | Implementing phase |
 | --- | --- | --- | --- |
-| Root configuration | User inputs; later validated source ownership | `ModelingSnapshot`, fixed model/evaluation references; keep authoritative inputs behind immutable handles. | 3–4 |
+| `EvaluationTask` root configuration | User inputs; later validated source ownership | `ModelingSnapshot`, fixed model/evaluation references, and immutable ordered label-to-reference/ID mappings; keep authoritative inputs behind immutable handles. | 3–4 |
 | Dataset preparation | User source representation and split configuration or saved artifact | Validated `PartitionSchedule`, whose `PartitionReference` is the sole dataset/partition identity handle; exact identity/content verification and one authoritative durable schedule. | 2–4 |
 | Root parent commitment | Complete validated configuration and durable partition reference | `ParentEvaluation` with fixed model references; each model defines one logical unit through the parent/model identity pair. Old snapshots remain fixed during prospective edits. | 3, 13 |
 | Root coordination | Fixed parent, readiness, and unit/attempt/operation observations | `AttemptInputs`, progress observations, and bounded-operation observations; allocation and duplicate policy remain separate from records. | 13–18 |

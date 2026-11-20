@@ -1,4 +1,4 @@
-# Phase 3: Reusable computation configuration and lifecycle foundations
+# Phase 3: Reusable EvaluationTask configuration and lifecycle foundations
 
 Status: proposed; implementation requires separate approval.
 
@@ -9,8 +9,9 @@ This roadmap plans only Phase 3 of [the project roadmap](../roadmap.md). It appl
 [Phase 1](roadmap_phase_1.md) and [Phase 2](roadmap_phase_2.md) roadmaps, and the implemented Phase 1 contract and
 Phase 2 storage code and tests.
 
-The phase goal is to introduce a reusable root-side `Computation` configuration object without launching a worker,
-running a model, creating a parent, or persisting an execution configuration. The phase establishes:
+The phase goal is to introduce `EvaluationTask` as Cocoonet's core public API for reusable mutable root-side evaluation
+configuration without launching a worker, running a model, creating a parent, or persisting an execution configuration.
+The phase establishes:
 
 - explicit construction and fresh initialization through the Phase 2 storage boundary;
 - incomplete but internally coherent prospective configuration;
@@ -26,7 +27,8 @@ Every implementation unit in Section 11 requires its own proposal, over-engineer
 targeted implementation, verification, and stop. If an approved signature, field, invariant, or phase boundary must
 change, implementation stops for an approved roadmap amendment.
 
-This phase-roadmap revision changes only this roadmap.
+This roadmap defines the Phase 3 implementation boundary; its governing naming and snapshot contracts are aligned with
+the root development and architecture documents.
 
 ## 2. Scope
 
@@ -34,7 +36,7 @@ This phase-roadmap revision changes only this roadmap.
 
 Phase 3 implements:
 
-1. the public mutable `Computation` class and its top-level package export;
+1. the public mutable `EvaluationTask` class and its top-level package export;
 2. construction with a required user-provided root directory and `overwrite=False` by default;
 3. explicit fresh `initialize()` using Phase 2 ownership and protected-root checks;
 4. one optional dataset/partition/evaluation slot, initially empty and not publicly populated until Phase 4;
@@ -99,7 +101,7 @@ Phase 3 is complete only when:
 - no local worker, online subsystem, dataset, model artifact, parent, attempt, or execution file is created implicitly;
 - model IDs are assigned in fixed add order as canonical positive decimal text, begin at `1`, and are never reused after
   successful removal;
-- model labels and worker IDs are unique in their owning active registries;
+- model labels, worker labels, and worker IDs are unique in their owning active registries;
 - all configured models have one task kind, and a later active evaluation reference must agree with it;
 - model inputs remain opaque and are never called, copied, serialized, deserialized, or introspected in this phase;
 - root-local and online worker entries remain configuration only, and at most one root-local worker is configured;
@@ -119,33 +121,33 @@ Phase 3 is complete only when:
 - directly corresponding tests pass with real temporary directories and existing Phase 1/2 code paths; and
 - applicable pytest, mypy, Black, and Ruff checks pass under `pyproject.toml` without a new suppression.
 
-Completion does not make a computation runnable. Phase 4 must populate and persist the dataset/partition slot, model
+Completion does not make an `EvaluationTask` runnable. Phase 4 must populate and persist the dataset/partition slot, model
 execution remains behind Phases 5–10, and Phase 13 owns the first parent commitment and runnable local path.
 
 ## 4. Governing architecture contracts and invariants
 
-### 4.1 Computation, parent, and runtime separation
+### 4.1 EvaluationTask, parent, and runtime separation
 
-A `Computation` is mutable prospective root configuration. It is not a parent task, worker, scheduler, or runtime
-handle. A `ParentEvaluation` is a separate immutable scientific snapshot prepared from a complete computation only for
-later commitment by `run()`.
+`EvaluationTask` is Cocoonet's core public API and mutable prospective root evaluation configuration. It is not a
+committed parent evaluation task, model unit, attempt, worker, scheduler, or runtime handle. A `ParentEvaluation` is a
+separate immutable scientific snapshot prepared from a complete `EvaluationTask` only for later commitment by `run()`.
 
-The computation owns one ordered model registry, one ordered worker registry, and at most one active prepared
+The `EvaluationTask` owns one ordered model registry, one ordered worker registry, and at most one active prepared
 dataset/evaluation association. Worker configuration is not included in `ParentEvaluation`; the parent fixes the
 dataset/partition, evaluation reference, and ordered model references.
 
-The computation stores no attempt list, result-selection field, accepted-result bit, worker observation, connection,
+The `EvaluationTask` stores no attempt list, result-selection field, accepted-result bit, worker observation, connection,
 process, or result bundle. Later runtime components own those facts.
 
 ### 4.2 Fresh initialization and root ownership
 
-`Computation(root_dir, overwrite=False)` and `initialize(root_dir, overwrite=False)` use
+`EvaluationTask(root_dir, overwrite=False)` and `initialize(root_dir, overwrite=False)` use
 `prepare_root_directory()` from Phase 2. They accept absolute and relative path-like specifications through that
 boundary, use the canonical returned `RootStorageLayout.root`, and never reproduce root-safety logic locally.
 
 Before mutation, initialization passes the complete currently configured physical dataset-source collection to Phase
 2. In Phase 3 that collection is empty because no public dataset installation exists; the field and call path are
-nevertheless part of the computation so Phase 4 can populate the single slot without replacing initialization logic.
+nevertheless part of the `EvaluationTask` so Phase 4 can populate the single slot without replacing initialization logic.
 
 Construction or successful initialization sets:
 
@@ -159,7 +161,7 @@ Fresh initialization retains prospective model, worker, and future prepared-data
 or copy Phase 4 artifacts. Phase 4 must integrate artifact publication before it can install a nonempty dataset slot
 that survives initialization as runnable configuration. Until then the slot remains empty in normal Phase 3 use.
 
-If directory preparation fails, the computation object's existing root, configuration, counters, and lifecycle fields
+If directory preparation fails, the `EvaluationTask` object's existing root, configuration, counters, and lifecycle fields
 remain unchanged. Phase 2's documented operating-system failure behavior for an explicitly authorized filesystem clear
 still applies to the target directory.
 
@@ -191,12 +193,12 @@ changes neither configuration nor lifecycle state. Inspection never changes stat
 
 ### 4.4 One active dataset/evaluation slot
 
-The computation carries these private prospective fields:
+The `EvaluationTask` carries these private prospective fields:
 
 ```text
-partition: PartitionReference | None
-evaluation: EvaluationReference | None
-dataset_sources: tuple[Path, ...]
+_data_partition: PartitionReference | None
+_evaluation_config: EvaluationReference | None
+_dataset_sources: tuple[Path, ...]
 ```
 
 Phase 3 initializes them to `None`, `None`, and `()`, includes the two references in `ModelingSnapshot`, passes the
@@ -234,9 +236,9 @@ not a later mutation of the prospective Python object, is authoritative for its 
 
 ### 4.6 Worker registry
 
-Worker registration is configuration only. A worker record identifies a user-configured worker ID, execution topology,
-device text, and requested attempt limit. It does not prove process availability, ownership, compatibility, readiness,
-capacity, endpoint validity, or public allocation.
+Worker registration is configuration only. A worker record identifies a user-defined worker label, a user-configured
+worker ID, execution topology, device text, and requested attempt limit. It does not prove process availability,
+ownership, compatibility, readiness, capacity, endpoint validity, or public allocation.
 
 Phase 3 uses exactly two topology values:
 
@@ -251,13 +253,15 @@ workers in the root/local-versus-online execution boundary.
 
 Rules:
 
-- `worker_id` is a nonempty opaque string and unique in the active registry;
-- at most one `root-local` worker may be configured because it represents the computation's single locally managed
+- `worker_label` is a valid user-facing `ScalarLabel` and unique in the active registry;
+- `worker_id` is a nonempty opaque string and independently unique in the active registry;
+- public worker registry operations identify a worker by `worker_label`; runtime and persistence use `worker_id`;
+- at most one `root-local` worker may be configured because it represents the `EvaluationTask`'s single locally managed
   worker service with internal attempt capacity;
 - any number of distinct online configurations may be retained;
 - `device` is nonempty text retained without normalization or availability probing;
 - `n_attempt` is a positive integer excluding `bool`, defaults to `1`, and is the requested value only;
-- removal and re-addition of the same user-supplied worker ID is allowed after successful removal; and
+- removal and re-addition of the same user-supplied worker label or ID is allowed after successful removal; and
 - worker removal has no stop, disconnect, cleanup, reset, release, filesystem, or lifecycle side effect.
 
 The public `WorkerConfiguration` docstring must include the Phase 11 capacity contract. For CPU workers, later worker
@@ -280,7 +284,7 @@ of already validated Python containers. These methods perform no persistent I/O.
 
 ### 4.8 Copy semantics
 
-`copy.copy(computation)` is the only Phase 3 copy API. `Computation.__copy__()` bypasses `__init__`, performs no root
+`copy.copy(evaluation_task)` is the only Phase 3 copy API. `EvaluationTask.__copy__()` bypasses `__init__`, performs no root
 validation or preparation, and creates no parent/model/worker identity. The copy receives:
 
 - the same immutable root layout value and root directory;
@@ -316,6 +320,7 @@ class ModelRegistration:
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class WorkerConfiguration:
+    worker_label: ScalarLabel
     worker_id: WorkerId
     kind: WorkerKind
     device: str = "cpu"
@@ -337,48 +342,56 @@ def validate_worker_configuration(value: WorkerConfiguration, /) -> None
 ```
 
 They validate only their declared representation and local values. Registry-scoped uniqueness and cross-record task
-agreement belong to `Computation` mutations.
+agreement belong to `EvaluationTask` mutations.
 
 ### 5.2 Private registered model
 
-In `src/cocoonet/computation.py`:
+In `src/cocoonet/evaluation_task.py`:
 
 ```python
 @dataclass(frozen=True, kw_only=True, slots=True)
 class _RegisteredModel:
     reference: ModelReference
     model_input: object
+
+    @property
+    def model_id(self) -> ModelId
+
+    @property
+    def model_label(self) -> ScalarLabel
 ```
 
 The private record keeps the authoritative Phase 3 association once. Public list/summary methods return immutable
-metadata and never return the internal registry list. The future model-preparation component retrieves the opaque input
-by exact `model_id` through a private lookup method; it must not infer identity from list position or label text.
+metadata and never return the internal registry list. The two properties expose the corresponding immutable
+`ModelReference` fields without storing duplicate independently maintained identity or label state. The future
+model-preparation component defines its own narrow opaque-input retrieval boundary in Phase 6.
 
-### 5.3 Mutable computation fields
+### 5.3 Mutable EvaluationTask fields
 
-`Computation` is an ordinary mutable class, not a dataclass. It retains:
+`EvaluationTask` is an ordinary mutable class, not a dataclass. It retains:
 
 ```text
-_storage: RootStorageLayout
-_consolidation: ConsolidationState
+_work_dir: Path
+_consolidation_state: ConsolidationState
 _parent_id: ParentId | None
 _execution_status: ExecutionStatus
-_partition: PartitionReference | None
-_evaluation: EvaluationReference | None
+_data_partition: PartitionReference | None
+_evaluation_config: EvaluationReference | None
 _dataset_sources: tuple[Path, ...]
 _models: list[_RegisteredModel]
 _workers: list[WorkerConfiguration]
 _next_model_number: int
 ```
 
-The class does not use `slots`, allowing later approved phases to add owned runtime/configuration fields without a
-storage-layout migration. It does not expose the mutable lists. No duplicate mapping is maintained beside each list;
-the small ordered registries use direct scans, avoiding independently synchronized order and index state. Later
-performance evidence may justify a separately approved index.
+The class stores the canonical `RootStorageLayout.root` returned by Phase 2 as `_work_dir`; it does not retain a second
+root representation. It does not use `slots`, allowing later approved phases to add owned runtime/configuration fields
+without a storage-layout migration. It does not expose the mutable lists. No duplicate mapping is maintained beside
+each list; `snapshot()` derives immutable mappings on demand. The small ordered registries use direct scans, avoiding
+independently synchronized order and index state. Later performance evidence may justify a separately approved index.
 
 ### 5.4 Pure lifecycle and parent helpers
 
-In `src/cocoonet/computation.py`:
+In `src/cocoonet/evaluation_task.py`:
 
 ```python
 def _consolidation_after_evaluation_edit(
@@ -404,8 +417,9 @@ def prepare_parent_evaluation(
 The first function implements only the three-state edit table in Section 4.3. The second rejects `RUNNING` and has no
 side effect. `prepare_parent_evaluation()` validates its complete input, requires initialized state with no existing
 parent, one partition/evaluation pair, and at least one model, constructs the existing Phase 1 `ParentEvaluation`, and
-validates it before return. It does not check workers, generate an ID, persist files, change the computation, or claim
-that a parent was committed.
+passes `tuple(snapshot.models.values())` as the parent's ordered model references. It validates the parent before
+return. It does not check workers, generate an ID, persist files, change the `EvaluationTask`, or claim that a parent
+was committed.
 
 `prepare_parent_evaluation()` remains private to the package and is not exported from `cocoonet`; Phase 13 will call it
 after its run prerequisites and parent-ID generation are satisfied.
@@ -414,10 +428,10 @@ after its run prerequisites and parent-ID generation are satisfied.
 
 ### 6.1 Construction, initialization, and inspection
 
-In `src/cocoonet/computation.py`:
+In `src/cocoonet/evaluation_task.py`:
 
 ```python
-class Computation:
+class EvaluationTask:
     def __init__(
         self,
         root_dir: PathInput,
@@ -445,20 +459,45 @@ class Computation:
         overwrite: bool = False,
     ) -> None
 
-    def __copy__(self) -> Computation
+    def __copy__(self) -> EvaluationTask
 ```
 
 Constructor behavior is real fresh preparation, not recovery. `initialize()` requires an explicit directory argument;
 reinitializing the current root therefore remains an explicit call with the same path and, when nonempty, explicit
 `overwrite=True`. There is no implicit current-directory fallback.
 
-`snapshot()` returns a newly constructed, validated immutable Phase 1 `ModelingSnapshot`. `root_dir` returns the
-canonical `Path` from Phase 2. `state` and `parent_id` expose lifecycle facts without permitting assignment.
+`snapshot()` constructs and validates exactly:
+
+```python
+ModelingSnapshot(
+    work_dir=str(self._work_dir),
+    consolidation_state=self._consolidation_state,
+    data_partition=self._data_partition,
+    evaluation_config=self._evaluation_config,
+    models=MappingProxyType(
+        dict(
+            (registered.model_label, registered.reference)
+            for registered in self._models
+        )
+    ),
+    worker_ids=MappingProxyType(
+        dict(
+            (worker.worker_label, worker.worker_id)
+            for worker in self._workers
+        )
+    ),
+    parent_id=self._parent_id,
+)
+```
+
+The newly built dictionaries preserve registration order; `MappingProxyType` prevents mutation of the snapshot's
+nested mappings. `root_dir` returns `_work_dir`, the canonical `Path` returned by Phase 2. `state` and `parent_id`
+expose lifecycle facts without permitting assignment.
 
 ### 6.2 Model registry API
 
 ```python
-class Computation:
+class EvaluationTask:
     def add_model(
         self,
         model_input: object,
@@ -510,12 +549,13 @@ key; type/value errors are raised before lookup.
 ### 6.3 Worker registry API
 
 ```python
-class Computation:
+class EvaluationTask:
     def add_worker(
         self,
         worker_id: WorkerId,
         /,
         *,
+        worker_label: ScalarLabel,
         kind: WorkerKind,
         device: str = "cpu",
         n_attempt: int = 1,
@@ -527,11 +567,11 @@ class Computation:
         /,
     ) -> tuple[WorkerConfiguration, ...]
 
-    def list_workers(self) -> tuple[WorkerId, ...]
+    def list_workers(self) -> tuple[ScalarLabel, ...]
 
     def inspect_worker(
         self,
-        worker_id: WorkerId,
+        worker_label: ScalarLabel,
         /,
     ) -> WorkerConfiguration
 
@@ -539,20 +579,21 @@ class Computation:
 
     def remove_worker(
         self,
-        worker_id: WorkerId,
+        worker_label: ScalarLabel,
         /,
     ) -> WorkerConfiguration
 
     def remove_workers(
         self,
-        worker_ids: Iterable[WorkerId],
+        worker_labels: Iterable[ScalarLabel],
         /,
     ) -> tuple[WorkerConfiguration, ...]
 ```
 
-`list_workers()` returns IDs in registry order; `inspect_worker()` returns one immutable configuration; and
-`summarize_workers()` returns every immutable configuration in registry order. Missing IDs raise `KeyError` after
-identifier validation.
+`list_workers()` returns user-facing labels in registry order; `inspect_worker()` returns one immutable configuration;
+and `summarize_workers()` returns every immutable configuration, including label and ID, in registry order. Missing
+labels raise `KeyError` after label validation. Worker labels select registry entries; worker IDs remain the routing and
+persistence identities.
 
 No method contacts a worker. `remove_worker()` and `remove_workers()` only change the root-side registry.
 
@@ -561,7 +602,7 @@ No method contacts a worker. `remove_worker()` and `remove_workers()` only chang
 `src/cocoonet/__init__.py` exports exactly these new Phase 3 names in addition to `get_version`:
 
 ```text
-Computation
+EvaluationTask
 ConsolidationState
 ModelFamily
 ModelReference
@@ -577,7 +618,7 @@ helpers retain source docstrings without becoming public API.
 
 ## 7. Method responsibilities and mutation behavior
 
-### 7.1 `Computation.__init__`
+### 7.1 `EvaluationTask.__init__`
 
 - Validate `overwrite` through the Phase 2 call path.
 - Call `prepare_root_directory(root_dir, dataset_sources=(), overwrite=overwrite)` exactly once.
@@ -585,12 +626,12 @@ helpers retain source docstrings without becoming public API.
 - Set empty registries, no dataset/evaluation, model counter `1`, initialized state, no parent, and `NOT_STARTED`.
 - Do not call another public mutation method or create a worker/model/dataset artifact.
 
-### 7.2 `Computation.initialize`
+### 7.2 `EvaluationTask.initialize`
 
 - Apply the active-execution guard before filesystem work.
 - Snapshot the current prospective configuration fields and full dataset source tuple.
 - Call `prepare_root_directory()` with the proposed root and retained sources.
-- Only after success, replace `_storage`, set initialized/no-parent/not-started, and retain prospective configuration,
+- Only after success, replace `_work_dir`, set initialized/no-parent/not-started, and retain prospective configuration,
   registry order, and next model counter.
 - Do not open/recover old state, assign model IDs again, or alter source files.
 
@@ -625,12 +666,12 @@ helpers retain source docstrings without becoming public API.
 ### 7.6 Singular and bulk worker mutations
 
 - Apply the same validation-first/commit-last structure as model operations.
-- Enforce worker-ID uniqueness and the single root-local invariant.
+- Enforce worker-label uniqueness, worker-ID uniqueness, and the single root-local invariant.
 - Worker operations never apply the evaluation-edit transition.
 - Removal performs no compensating action even if a later runtime worker is disconnected, active, or retains data;
   the active-execution gate is the only Phase 3 runtime-related admission check.
 
-### 7.7 `Computation.__copy__`
+### 7.7 `EvaluationTask.__copy__`
 
 - Allocate with `type(self).__new__(type(self))`; do not invoke construction.
 - Copy mutable registry containers with `list(...)`.
@@ -707,7 +748,7 @@ Test:
 - parent preparation not requiring a worker and not mutating its snapshot; and
 - no parent ID generation, persistence, or state commitment.
 
-### 10.3 `tests/configuration/test_computation.py`
+### 10.3 `tests/configuration/test_evaluation_task.py`
 
 Test:
 
@@ -730,6 +771,7 @@ Test:
 
 - model IDs `1`, `2`, ... in successful registration order;
 - no ID reuse after removal and no ID consumption on failure/no-op;
+- `_RegisteredModel.model_label` and `_RegisteredModel.model_id` exposing the matching immutable reference fields;
 - exact model-label ordering from list and metadata ordering from summary;
 - inspect by user-facing model label;
 - duplicate label, mixed task kind, present-evaluation mismatch, invalid enum, and `None` input rejection;
@@ -739,6 +781,7 @@ Test:
 - generator materialization exactly once and string/bytes collection rejection;
 - failed bulk operations preserving registry, state, and counter;
 - model edits applying the evaluation-edit transition; and
+- `snapshot().models` preserving registration order and mapping each label to its matching reference; and
 - no model method/API/repr/copy/dill invocation during registration, inspection, summary, removal, or copy.
 
 ### 10.5 `tests/configuration/test_workers.py`
@@ -747,9 +790,10 @@ Test:
 
 - explicit root-local and online registration with no runtime or filesystem side effect;
 - at most one root-local worker, including within an atomic batch;
-- unique active worker IDs and re-add after removal;
-- list/inspect/summary order and immutable returned configurations;
+- independently unique active worker labels and worker IDs, with re-add after removal;
+- list/inspect/summary by worker label, in registry order, with immutable returned configurations;
 - exact preservation of device and requested `n_attempt`;
+- `snapshot().worker_ids` preserving registry order and mapping each worker label to its worker ID;
 - atomic bulk add/remove and no-op behavior;
 - missing/duplicate removal keys;
 - all worker mutations preserving each consolidation state and parent identity;
@@ -787,12 +831,12 @@ its production unit.
 3. Implement `validate_model_registration()` and direct tests.
 4. Add `WorkerConfiguration` with the required capacity docstring and declaration tests.
 5. Implement `validate_worker_configuration()` and direct tests.
-6. Add `_RegisteredModel` in `computation.py`.
+6. Add `_RegisteredModel` in `evaluation_task.py`.
 7. Implement `_consolidation_after_evaluation_edit()` and direct all-state tests.
 8. Implement `_require_configuration_editable()` and direct status tests.
 9. Implement `prepare_parent_evaluation()` and complete/incomplete snapshot tests.
-10. Declare the mutable `Computation` class and owned field annotations without behavior.
-11. Implement `Computation.__init__()` with real Phase 2 fresh preparation and direct tests.
+10. Declare the mutable `EvaluationTask` class and owned field annotations without behavior.
+11. Implement `EvaluationTask.__init__()` with real Phase 2 fresh preparation and direct tests.
 12. Implement `root_dir`, `state`, and `parent_id` read-only properties as an explicitly approved inspection bundle, or
     separately if bundle approval is not given.
 13. Implement `snapshot()` and direct validation/immutability tests.
@@ -811,7 +855,7 @@ its production unit.
 26. Implement `remove_worker()` and direct no-side-effect tests.
 27. Implement atomic `add_workers()` and direct all-or-nothing tests.
 28. Implement atomic `remove_workers()` and direct all-or-nothing tests.
-29. Implement `Computation.__copy__()` and direct shallow-copy/no-I/O tests.
+29. Implement `EvaluationTask.__copy__()` and direct shallow-copy/no-I/O tests.
 30. Add the exact public exports in `cocoonet.__init__` and API-surface tests.
 31. Run targeted tests, the full available suite, static/format/lint checks, and a final scope, docstring, mutation,
     side-effect, and redundancy audit.
@@ -848,10 +892,17 @@ committed in Phase 3. Phases 6 and 13 must establish and consume a fixed prepare
 
 ### 13.1 Resolved Phase 3 decisions
 
-- The public mutable object is named `Computation`; construction always means fresh preparation.
+- Cocoonet's core public API and mutable prospective configuration object is named `EvaluationTask`; construction
+  always means fresh preparation and does not create a committed parent evaluation task.
 - `initialize()` requires an explicit root path and is also fresh preparation, never recovery.
 - The immutable Phase 1 root-side modeling record is named `ModelingSnapshot` with fields `work_dir`,
   `consolidation_state`, `data_partition`, `evaluation_config`, `models`, `worker_ids`, and `parent_id`.
+  `models` is a fresh immutable insertion-ordered `MappingProxyType` from `model_label` to `ModelReference`, and
+  `worker_ids` is the corresponding mapping from `worker_label` to `WorkerId`.
+- `_RegisteredModel.model_label` and `_RegisteredModel.model_id` are read-only properties derived from its authoritative
+  `ModelReference`, so the registry exposes the required identities without duplicate state.
+- Every worker has a user-defined `worker_label` unique within its `EvaluationTask`; public registry operations use that
+  label, while the independently unique `worker_id` remains the runtime and persistence identity.
 - Model IDs are assigned internally, sequentially, and never reused after removal.
 - Model inputs remain opaque and are not copied or inspected in the coordinator during this phase.
 - Phase 3 retains opaque model inputs internally; Phase 6 defines their private retrieval/preparation boundary.
@@ -899,7 +950,7 @@ Implementation order, in summary:
 ```text
 configuration records and validators
 -> lifecycle/edit and parent-snapshot helpers
--> storage-backed Computation construction and inspection
+-> storage-backed EvaluationTask construction and inspection
 -> explicit fresh initialization
 -> singular model registry operations
 -> atomic bulk model operations

@@ -196,7 +196,9 @@ For a private/non-public worker, users configure both root and worker endpoints 
 accepts the first authenticated, exact-version-compatible connection for the configured `worker_id` and closes
 duplicates. If no permitted direction succeeds, the worker remains unavailable; `run()` fails startup when no usable
 configured execution target remains. Private workers never appear in public discovery and remain under explicit user
-lifecycle control.
+lifecycle control. Each configured worker also has a user-defined `worker_label` unique within its `EvaluationTask`.
+Public worker registry operations use `worker_label`; connection matching and runtime routing continue to use
+`worker_id`.
 
 Once a connection is established, the root initiates reconciliation and all task and lifecycle instructions.
 
@@ -222,14 +224,16 @@ task under the owning root does not itself release a public allocation.
 
 Transport is defined in Section 7; worker-side cleanup and its service boundary are defined in Section 5.3.
 
-### 2.3 Reusable computation, initialization, and user workflow
+### 2.3 Reusable EvaluationTask, initialization, and user workflow
 
-A **computation instance** holds root-side dataset, model, worker, and evaluation configuration; it is not a parent
-task. Its immutable root-side modeling record is `ModelingSnapshot`, whose fields are `work_dir`,
-`consolidation_state`, `data_partition`, `evaluation_config`, `models`, `worker_ids`, and `parent_id`. The first
-evaluation establishes a parent. Thereafter, changed model evaluation configuration requires a new parent, while
-unchanged model evaluation configuration resumes the existing parent, with or without worker configuration changes.
-An ordinary copy preserves those same identity rules.
+`EvaluationTask` is Cocoonet's core public API and holds mutable prospective root-side dataset, model, worker, and
+evaluation configuration; it is not a committed parent evaluation task. Its immutable root-side modeling record is
+`ModelingSnapshot`, whose scalar/reference fields are `work_dir`, `consolidation_state`, `data_partition`,
+`evaluation_config`, and `parent_id`. Its `models` field is an immutable insertion-ordered mapping from user-facing
+`model_label` to `ModelReference`; its `worker_ids` field is an immutable insertion-ordered mapping from user-facing
+`worker_label` to `WorkerId`. The first evaluation establishes a parent. Thereafter, changed model evaluation
+configuration requires a new parent, while unchanged model evaluation configuration resumes the existing parent, with
+or without worker configuration changes. An ordinary copy preserves those same identity rules.
 
 #### Root directory and initialization
 
@@ -370,8 +374,8 @@ execution, and subsequent permitted reuse or recovery. No exact method ordering 
 | --- | --- |
 | Initialization | Prepare a root directory explicitly for fresh execution, with overwrite behavior. |
 | Dataset | Add/set with partition preparation or validated reuse, inspect, remove configuration references. |
-| Models | Add one/multiple, list/inspect, summary, remove one/multiple. |
-| Workers | Add one/multiple, list/inspect, summary, configuration-only remove one/multiple; separate dataset/all-user-data cleanup and public release. |
+| Models | Add one/multiple, list/inspect, summary, remove one/multiple by unique user-facing `model_label`. |
+| Workers | Add one/multiple, list/inspect, summary, configuration-only remove one/multiple by unique user-facing `worker_label`; separate dataset/all-user-data cleanup and public release. |
 | Execution | Fresh run, interruption, resume/recovery of existing persisted execution. |
 | Reuse | Permitted configuration edits, ordinary copying, explicit reinitialization for changed model evaluation configuration; worker-only changes preserve the parent. |
 
@@ -890,7 +894,7 @@ compares persisted source path, stored size, modification time, and preparation 
 permits reuse; changed state requires regeneration. This is intentionally metadata-based rather than
 content-digest verification.
 
-A new computation instance without persisted source state regenerates by default. Explicit reuse and
+A new `EvaluationTask` instance without persisted source state regenerates by default. Explicit reuse and
 regeneration remain later dataset-API choices. Prepared root-node files persist until manual OS removal and
 are not worker-cleanup targets.
 
@@ -1607,18 +1611,19 @@ winning.
 
 ### 5.3 Worker ownership, release, and cleanup
 
-Workers are reusable resources of the root/computation configuration, not objects whose lifetime is exclusively owned
+Workers are reusable resources of the root/`EvaluationTask` configuration, not objects whose lifetime is exclusively owned
 by a single parent task. Successive parents may reuse configured workers, online connections, a local worker process,
 and retained valid datasets according to their applicable ownership and retention rules. This does not establish exact
 online process/connection lifetimes, runtime sharing between copied computations, or automatic release on parent
 completion. The root-local startup, shutdown, and root-restart lifetime follows Section 2.4. Public allocation ownership
 remains external. Configuration removal has the following resolved scope.
 
-`remove_worker` only modifies root-side worker configuration. It has no direct worker-side action: no stop,
+`remove_worker` resolves the configured worker by its user-facing `worker_label` and only modifies root-side worker
+configuration. The resolved worker retains its `worker_id`. Removal has no direct worker-side action: no stop,
 disconnection, cleanup, reset, or resource release. If root configuration modification fails, report it explicitly;
 do not compensate with worker-control actions. Worker configuration is mutable before ordinary execution begins,
-after it finishes, or after root interruption even while old workers reach their stop boundaries; it is locked
-during ordinary active execution. Worker changes do not change model evaluation configuration, make the instance
+after it finishes, or after root interruption even while old workers reach their stop boundaries; it is locked during
+ordinary active execution. Worker changes do not change model evaluation configuration, make the instance
 unconsolidated, or create a parent. Unchanged evaluation resumes its existing parent with the revised worker
 configuration, subject to normal runtime eligibility.
 

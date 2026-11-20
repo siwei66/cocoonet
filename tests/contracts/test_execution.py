@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
+from types import MappingProxyType
 from typing import cast
 
 import numpy as np
@@ -178,8 +179,8 @@ def test_modeling_snapshot_preserves_configuration_references() -> None:
         consolidation_state=ConsolidationState.CONSOLIDATED,
         data_partition=partition,
         evaluation_config=evaluation,
-        models=(model,),
-        worker_ids=(WorkerId("worker-a"),),
+        models=MappingProxyType({model.model_label: model}),
+        worker_ids=MappingProxyType({"local-worker": WorkerId("worker-a")}),
         parent_id=ParentId("parent-a"),
     )
     same = ModelingSnapshot(
@@ -187,8 +188,8 @@ def test_modeling_snapshot_preserves_configuration_references() -> None:
         consolidation_state=ConsolidationState.CONSOLIDATED,
         data_partition=partition,
         evaluation_config=evaluation,
-        models=(model,),
-        worker_ids=(WorkerId("worker-a"),),
+        models=MappingProxyType({model.model_label: model}),
+        worker_ids=MappingProxyType({"local-worker": WorkerId("worker-a")}),
         parent_id=ParentId("parent-a"),
     )
 
@@ -196,10 +197,14 @@ def test_modeling_snapshot_preserves_configuration_references() -> None:
     assert snapshot.consolidation_state is ConsolidationState.CONSOLIDATED
     assert snapshot.data_partition is partition
     assert snapshot.evaluation_config is evaluation
-    assert snapshot.models == (model,)
-    assert snapshot.worker_ids == (WorkerId("worker-a"),)
+    assert snapshot.models["baseline"] is model
+    assert snapshot.worker_ids["local-worker"] == WorkerId("worker-a")
+    assert tuple(snapshot.models) == ("baseline",)
+    assert tuple(snapshot.worker_ids) == ("local-worker",)
     assert snapshot.parent_id == ParentId("parent-a")
     assert snapshot == same
+    assert isinstance(snapshot.models, MappingProxyType)
+    assert isinstance(snapshot.worker_ids, MappingProxyType)
 
 
 def test_modeling_snapshot_supports_incomplete_initialized_configuration() -> None:
@@ -209,15 +214,15 @@ def test_modeling_snapshot_supports_incomplete_initialized_configuration() -> No
         consolidation_state=ConsolidationState.INITIALIZED,
         data_partition=None,
         evaluation_config=None,
-        models=(),
-        worker_ids=(),
+        models=MappingProxyType({}),
+        worker_ids=MappingProxyType({}),
         parent_id=None,
     )
 
     assert snapshot.data_partition is None
     assert snapshot.evaluation_config is None
-    assert snapshot.models == ()
-    assert snapshot.worker_ids == ()
+    assert dict(snapshot.models) == {}
+    assert dict(snapshot.worker_ids) == {}
     assert snapshot.parent_id is None
 
 
@@ -228,8 +233,8 @@ def test_modeling_snapshot_rejects_field_mutation() -> None:
         consolidation_state=ConsolidationState.INITIALIZED,
         data_partition=None,
         evaluation_config=None,
-        models=(),
-        worker_ids=(),
+        models=MappingProxyType({}),
+        worker_ids=MappingProxyType({}),
         parent_id=None,
     )
 
@@ -551,8 +556,8 @@ def test_validate_modeling_snapshot_accepts_empty_initialized_snapshot() -> None
         consolidation_state=ConsolidationState.INITIALIZED,
         data_partition=None,
         evaluation_config=None,
-        models=(),
-        worker_ids=(),
+        models=MappingProxyType({}),
+        worker_ids=MappingProxyType({}),
         parent_id=None,
     )
 
@@ -560,13 +565,54 @@ def test_validate_modeling_snapshot_accepts_empty_initialized_snapshot() -> None
 
     assert snapshot.data_partition is None
     assert snapshot.evaluation_config is None
-    assert snapshot.models == ()
-    assert snapshot.worker_ids == ()
+    assert dict(snapshot.models) == {}
+    assert dict(snapshot.worker_ids) == {}
     assert snapshot.parent_id is None
+
+
+def test_validate_modeling_snapshot_preserves_mapping_order() -> None:
+    """Preserve model and worker registration order in immutable mappings."""
+    first = ModelReference(
+        model_id=ModelId("model-a"),
+        model_label="first",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+    second = ModelReference(
+        model_id=ModelId("model-b"),
+        model_label="second",
+        family=ModelFamily.PYTORCH,
+        task_kind=TaskKind.REGRESSION,
+    )
+    snapshot = ModelingSnapshot(
+        work_dir="computation-root",
+        consolidation_state=ConsolidationState.INITIALIZED,
+        data_partition=None,
+        evaluation_config=None,
+        models=MappingProxyType({"first": first, "second": second}),
+        worker_ids=MappingProxyType(
+            {
+                "first-worker": WorkerId("worker-a"),
+                "second-worker": WorkerId("worker-b"),
+            }
+        ),
+        parent_id=None,
+    )
+
+    validate_modeling_snapshot(snapshot)
+
+    assert tuple(snapshot.models) == ("first", "second")
+    assert tuple(snapshot.worker_ids) == ("first-worker", "second-worker")
 
 
 def test_validate_modeling_snapshot_preserves_parent_after_worker_edit() -> None:
     """Allow worker-only edits while retaining a consolidated parent identity."""
+    model = ModelReference(
+        model_id=ModelId("model-a"),
+        model_label="baseline",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
     snapshot = ModelingSnapshot(
         work_dir="computation-root",
         consolidation_state=ConsolidationState.CONSOLIDATED,
@@ -580,20 +626,13 @@ def test_validate_modeling_snapshot_preserves_parent_after_worker_edit() -> None
             class_labels=(),
             influence_requested=False,
         ),
-        models=(
-            ModelReference(
-                model_id=ModelId("model-a"),
-                model_label="baseline",
-                family=ModelFamily.SKLEARN,
-                task_kind=TaskKind.REGRESSION,
-            ),
-        ),
-        worker_ids=(WorkerId("worker-a"),),
+        models=MappingProxyType({model.model_label: model}),
+        worker_ids=MappingProxyType({"local-worker": WorkerId("worker-a")}),
         parent_id=ParentId("parent-a"),
     )
     edited = replace(
         snapshot,
-        worker_ids=(WorkerId("worker-b"),),
+        worker_ids=MappingProxyType({"replacement-worker": WorkerId("worker-b")}),
     )
 
     validate_modeling_snapshot(snapshot)
@@ -610,8 +649,8 @@ def test_validate_modeling_snapshot_accepts_incomplete_unconsolidated_snapshot()
         consolidation_state=ConsolidationState.UNCONSOLIDATED,
         data_partition=None,
         evaluation_config=None,
-        models=(),
-        worker_ids=(),
+        models=MappingProxyType({}),
+        worker_ids=MappingProxyType({}),
         parent_id=ParentId("parent-a"),
     )
 
@@ -649,8 +688,8 @@ def test_validate_modeling_snapshot_rejects_invalid_parent_relationship(
         consolidation_state=consolidation_state,
         data_partition=None,
         evaluation_config=None,
-        models=(),
-        worker_ids=(),
+        models=MappingProxyType({}),
+        worker_ids=MappingProxyType({}),
         parent_id=parent_id,
     )
 
@@ -665,8 +704,8 @@ def test_validate_modeling_snapshot_rejects_empty_work_dir() -> None:
         consolidation_state=ConsolidationState.INITIALIZED,
         data_partition=None,
         evaluation_config=None,
-        models=(),
-        worker_ids=(),
+        models=MappingProxyType({}),
+        worker_ids=MappingProxyType({}),
         parent_id=None,
     )
 
@@ -695,8 +734,8 @@ def test_validate_modeling_snapshot_rejects_empty_partition_identity(
             dataset_id=dataset_id,
         ),
         evaluation_config=None,
-        models=(),
-        worker_ids=(),
+        models=MappingProxyType({}),
+        worker_ids=MappingProxyType({}),
         parent_id=None,
     )
 
@@ -716,8 +755,8 @@ def test_validate_modeling_snapshot_rejects_invalid_evaluation() -> None:
             class_labels=(),
             influence_requested=False,
         ),
-        models=(),
-        worker_ids=(),
+        models=MappingProxyType({}),
+        worker_ids=MappingProxyType({}),
         parent_id=None,
     )
 
@@ -730,19 +769,21 @@ def test_validate_modeling_snapshot_rejects_invalid_evaluation() -> None:
 
 def test_validate_modeling_snapshot_rejects_duplicate_model_id() -> None:
     """Reject repeated model identities in the prospective configuration."""
-    models = (
-        ModelReference(
-            model_id=ModelId("model-a"),
-            model_label="first",
-            family=ModelFamily.SKLEARN,
-            task_kind=TaskKind.REGRESSION,
-        ),
-        ModelReference(
-            model_id=ModelId("model-a"),
-            model_label="second",
-            family=ModelFamily.PYTORCH,
-            task_kind=TaskKind.REGRESSION,
-        ),
+    models = MappingProxyType(
+        {
+            "first": ModelReference(
+                model_id=ModelId("model-a"),
+                model_label="first",
+                family=ModelFamily.SKLEARN,
+                task_kind=TaskKind.REGRESSION,
+            ),
+            "second": ModelReference(
+                model_id=ModelId("model-a"),
+                model_label="second",
+                family=ModelFamily.PYTORCH,
+                task_kind=TaskKind.REGRESSION,
+            ),
+        }
     )
     snapshot = ModelingSnapshot(
         work_dir="computation-root",
@@ -750,7 +791,7 @@ def test_validate_modeling_snapshot_rejects_duplicate_model_id() -> None:
         data_partition=None,
         evaluation_config=None,
         models=models,
-        worker_ids=(),
+        worker_ids=MappingProxyType({}),
         parent_id=None,
     )
 
@@ -761,36 +802,51 @@ def test_validate_modeling_snapshot_rejects_duplicate_model_id() -> None:
         validate_modeling_snapshot(snapshot)
 
 
-def test_validate_modeling_snapshot_rejects_model_label_collision() -> None:
-    """Reject model labels that collide under Python text equality."""
-    models = (
-        ModelReference(
-            model_id=ModelId("model-a"),
-            model_label="duplicate",
-            family=ModelFamily.SKLEARN,
-            task_kind=TaskKind.REGRESSION,
-        ),
-        ModelReference(
-            model_id=ModelId("model-b"),
-            model_label=np.str_("duplicate"),
-            family=ModelFamily.PYTORCH,
-            task_kind=TaskKind.REGRESSION,
-        ),
+def test_validate_modeling_snapshot_rejects_model_key_mismatch() -> None:
+    """Reject a model mapping key that differs from its reference label."""
+    model = ModelReference(
+        model_id=ModelId("model-a"),
+        model_label="reference-label",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
     )
     snapshot = ModelingSnapshot(
         work_dir="computation-root",
         consolidation_state=ConsolidationState.INITIALIZED,
         data_partition=None,
         evaluation_config=None,
-        models=models,
-        worker_ids=(),
+        models=MappingProxyType({"mapping-label": model}),
+        worker_ids=MappingProxyType({}),
         parent_id=None,
     )
 
     with pytest.raises(
         ValueError,
-        match=(r"models\[1\].model_label.*unique.*duplicate"),
+        match=r"models\.keys\[0\].*equal.*reference-label",
     ):
+        validate_modeling_snapshot(snapshot)
+
+
+@pytest.mark.parametrize("field", ["models", "worker_ids"])
+def test_validate_modeling_snapshot_rejects_empty_mapping_label(field: str) -> None:
+    """Reject an empty user-facing model or worker mapping label."""
+    model = ModelReference(
+        model_id=ModelId("model-a"),
+        model_label="baseline",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+    snapshot = ModelingSnapshot(
+        work_dir="computation-root",
+        consolidation_state=ConsolidationState.INITIALIZED,
+        data_partition=None,
+        evaluation_config=None,
+        models=MappingProxyType({"": model}) if field == "models" else MappingProxyType({}),
+        worker_ids=(MappingProxyType({"": WorkerId("worker-a")}) if field == "worker_ids" else MappingProxyType({})),
+        parent_id=None,
+    )
+
+    with pytest.raises(ValueError, match=rf"^{field}\.keys\[0\].*nonempty.*empty string"):
         validate_modeling_snapshot(snapshot)
 
 
@@ -801,8 +857,13 @@ def test_validate_modeling_snapshot_rejects_duplicate_worker_id() -> None:
         consolidation_state=ConsolidationState.INITIALIZED,
         data_partition=None,
         evaluation_config=None,
-        models=(),
-        worker_ids=(WorkerId("worker-a"), WorkerId("worker-a")),
+        models=MappingProxyType({}),
+        worker_ids=MappingProxyType(
+            {
+                "first-worker": WorkerId("worker-a"),
+                "second-worker": WorkerId("worker-a"),
+            }
+        ),
         parent_id=None,
     )
 
@@ -1157,8 +1218,12 @@ def test_parent_rejects_invalid_components(field: str, invalid: object) -> None:
         ("evaluation_config", "evaluation"),
         ("models", []),
         ("models", (None,)),
+        ("models", {}),
+        ("models", MappingProxyType({"baseline": None})),
         ("worker_ids", []),
         ("worker_ids", (1,)),
+        ("worker_ids", {}),
+        ("worker_ids", MappingProxyType({"local-worker": None})),
         ("work_dir", 1),
         ("consolidation_state", "initialized"),
     ],
@@ -1170,8 +1235,8 @@ def test_snapshot_rejects_invalid_component_types(field: str, invalid: object) -
         consolidation_state=ConsolidationState.INITIALIZED,
         data_partition=None,
         evaluation_config=None,
-        models=(),
-        worker_ids=(),
+        models=MappingProxyType({}),
+        worker_ids=MappingProxyType({}),
         parent_id=None,
     )
     with pytest.raises(TypeError) as error:

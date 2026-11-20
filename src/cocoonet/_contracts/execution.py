@@ -1,7 +1,9 @@
 """Configuration and fixed-execution records for internal contracts."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
 
 from cocoonet._contracts.data import PartitionReference
 from cocoonet._contracts.identity import (
@@ -263,10 +265,12 @@ class ModelingSnapshot:
     evaluation_config : EvaluationReference | None
         Active evaluation-settings reference, or ``None`` when evaluation
         settings are not currently configured.
-    models : tuple[ModelReference, ...]
-        Ordered model references in the prospective configuration.
-    worker_ids : tuple[WorkerId, ...]
-        Ordered configured execution-target identities.
+    models : Mapping[ScalarLabel, ModelReference]
+        Immutable ordered mapping from user-facing model labels to model
+        references in the prospective configuration.
+    worker_ids : Mapping[ScalarLabel, WorkerId]
+        Immutable ordered mapping from user-facing worker labels to configured
+        execution-target identities.
     parent_id : ParentId | None
         Existing committed parent-task identity. Initialized state uses
         ``None``; consolidated and unconsolidated states retain the existing
@@ -286,8 +290,8 @@ class ModelingSnapshot:
     consolidation_state: ConsolidationState
     data_partition: PartitionReference | None
     evaluation_config: EvaluationReference | None
-    models: tuple[ModelReference, ...]
-    worker_ids: tuple[WorkerId, ...]
+    models: Mapping[ScalarLabel, ModelReference]
+    worker_ids: Mapping[ScalarLabel, WorkerId]
     parent_id: ParentId | None
 
 
@@ -304,17 +308,18 @@ def validate_modeling_snapshot(value: ModelingSnapshot) -> None:  # noqa: C901
     TypeError
         If a record, container, or field has an incorrect runtime type.
     ValueError
-        If a path or identity is empty, a nested reference is invalid,
-        model IDs/labels or worker IDs are duplicated, or parent presence
-        conflicts with consolidation state.
+        If a path, label, or identity is empty, a nested reference is invalid,
+        a model key disagrees with its reference, model or worker IDs are
+        duplicated, or parent presence conflicts with consolidation state.
 
     Notes
     -----
     Incomplete configuration remains representable. Initialized state has
     no parent; consolidated and unconsolidated states retain a parent ID.
-    Local sets check configuration-scoped uniqueness without mutating input.
-    This validator does not compare snapshots, enforce model/evaluation
-    readiness, inspect files, calculate capacity, or perform transitions.
+    Mapping keys preserve registration order and define user-facing model and
+    worker lookup. Local sets check ID uniqueness without mutating input. This
+    validator does not compare snapshots, enforce model/evaluation readiness,
+    inspect files, calculate capacity, or perform transitions.
     Node usage scope: Root only - Used exclusively by the root node.
     """
     # Validate the outer record and its own fields without a recursive traversal.
@@ -326,8 +331,8 @@ def validate_modeling_snapshot(value: ModelingSnapshot) -> None:  # noqa: C901
         expected_type=ConsolidationState,
         field="consolidation_state",
     )
-    validate_declared_types(value.models, expected_type=tuple, field="models")
-    validate_declared_types(value.worker_ids, expected_type=tuple, field="worker_ids")
+    validate_declared_types(value.models, expected_type=MappingProxyType, field="models")
+    validate_declared_types(value.worker_ids, expected_type=MappingProxyType, field="worker_ids")
 
     # A configured partition reference owns two opaque identities, not file access.
     if value.data_partition is not None:
@@ -353,26 +358,27 @@ def validate_modeling_snapshot(value: ModelingSnapshot) -> None:  # noqa: C901
         except (TypeError, ValueError) as error:
             raise type(error)(f"evaluation_config is invalid: {error}") from error
 
-    # Model references are checked once; local sets enforce scoped uniqueness.
+    # Mapping keys are the public labels; referenced IDs remain independently unique.
     model_ids: set[ModelId] = set()
-    model_labels: set[ScalarLabel] = set()
-    for index, model in enumerate(value.models):
+    for index, (model_label, model) in enumerate(value.models.items()):
+        validate_label(model_label, field=f"models.keys[{index}]")
         try:
             validate_model_reference(model)
         except (TypeError, ValueError) as error:
             raise type(error)(f"models[{index}] is invalid: {error}") from error
+        if model_label != model.model_label:
+            raise ValueError(
+                f"models.keys[{index}] must equal models[{index}].model_label; "
+                f"got key {model_label!r} and reference label {model.model_label!r}."
+            )
         if model.model_id in model_ids:
             raise ValueError(f"models[{index}].model_id must be unique; duplicate ID prefix: {model.model_id!r}.")
-        if model.model_label in model_labels:
-            raise ValueError(
-                f"models[{index}].model_label must be unique; duplicate label prefix: {model.model_label!r}."
-            )
         model_ids.add(model.model_id)
-        model_labels.add(model.model_label)
 
-    # Configured worker identity is independent of availability and capacity.
+    # Worker labels are public keys; routing IDs remain independently unique.
     worker_ids: set[WorkerId] = set()
-    for index, worker_id in enumerate(value.worker_ids):
+    for index, (worker_label, worker_id) in enumerate(value.worker_ids.items()):
+        validate_label(worker_label, field=f"worker_ids.keys[{index}]")
         validate_identifier(worker_id, field=f"worker_ids[{index}]")
         if worker_id in worker_ids:
             raise ValueError(f"worker_ids[{index}] must be unique; duplicate ID prefix: {worker_id!r}.")

@@ -134,12 +134,14 @@ and bundle publication helpers. Phase 2 does not generate partitions, schedule t
 transitions, perform retention cleanup, or transfer network payloads. Later phases integrate their concrete schemas
 without changing these ownership and publication contracts.
 
-### 3. Reusable computation configuration and lifecycle foundations
+### 3. Reusable EvaluationTask configuration and lifecycle foundations
 
-With identities and storage available, build root configuration and initialization without launching scientific work.
-Support incomplete configuration, one active dataset slot, model and worker registries, and model/worker
-add/list/inspect/summary/remove capabilities with singular and bulk operations. Define bulk commit/failure behavior
-before implementing bulk conveniences; do not leave undocumented partial configuration.
+With identities and storage available, introduce `EvaluationTask` as Cocoonet's core public API for reusable mutable
+root-side evaluation configuration without launching scientific work. Support incomplete configuration, one active
+dataset slot, model and worker registries, and model/worker add/list/inspect/summary/remove capabilities with singular
+and bulk operations. Model registry operations use unique user-defined `model_label` values; worker registry operations
+use unique user-defined `worker_label` values while runtime and persistence retain opaque `worker_id` values. Define
+bulk commit/failure behavior before implementing bulk conveniences; do not leave undocumented partial configuration.
 Assign registered models positive sequential decimal `model_id` values beginning at `1`, without zero padding or reuse
 within their owning persistent scope.
 
@@ -159,10 +161,11 @@ runtime resources, duplicating accepted bundles, or creating another parent. Dat
 Worker removal is configuration-only
 and sends no stop, disconnect, cleanup, reset, or release instruction. Root reassignment must use Phase 2 validation.
 
-Before proceeding, `ModelingSnapshot` validation, copy semantics, mutation boundaries, and parent-snapshot preparation
-must be stable. Dataset registration becomes complete in Phase 4. Runnable `run()`, interruption, resume, worker
-runtime management, and external service operations remain deferred; no placeholder may silently perform those
-operations.
+`ModelingSnapshot.models` is an immutable insertion-ordered mapping from `model_label` to `ModelReference`;
+`ModelingSnapshot.worker_ids` is an immutable insertion-ordered mapping from `worker_label` to `WorkerId`. Before
+proceeding, snapshot validation, copy semantics, mutation boundaries, and parent-snapshot preparation must be stable.
+Dataset registration becomes complete in Phase 4. Runnable `run()`, interruption, resume, worker runtime management,
+and external service operations remain deferred; no placeholder may silently perform those operations.
 
 ### 4. Dataset normalization and authoritative realized partitions
 
