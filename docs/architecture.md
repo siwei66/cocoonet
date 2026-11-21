@@ -634,6 +634,13 @@ initialization operate under that input and do not redefine the unit task's mode
 | Scikit-learn-like classifier | `fit`, `predict`, `predict_proba`, and required class information. |
 | PyTorch model | Complete reconstruction/training inputs and the user's initialization choice; see Section 3.3. |
 
+During Phase 3 registration, a user-provided file-backed model is an opaque reference. Accept any existing regular
+file with a nonempty extension, resolve and retain its canonical absolute path, and impose no extension/family
+association. Do not open, read, or deserialize it. After the Phase 5 isolation boundary exists, Phase 6 dispatches an
+available user-input loader from the complete lowercase extension and validates the loaded object against the
+explicitly declared family and task kind. A referenced file changing after registration is the user's responsibility;
+Cocoonet does not lock it or add a digest or metadata-change check for this risk alone.
+
 For standard scikit-learn models, identify the supported model type, obtain parameters with `get_params`, and
 reconstruct/configure the corresponding worker-side model using `set_params` as appropriate. These parameters are
 execution inputs. Custom scikit-learn-like models receive only the required API validation for their category;
@@ -1777,7 +1784,7 @@ Use this root layout:
   execution_configuration.csv
   execution_state.csv
   models_for_transfer/
-    model_<model_id>.dill
+    model_<model_id>.<selected_model_extension>
     models_parent_<parent_id>.<archive_extension>
     models_parent_<parent_id>_<tile_id>.<archive_extension>
   attempt_results/
@@ -1820,7 +1827,7 @@ Use this worker layout:
     dataset_<dataset_id>/
   models/
     parent_<parent_id>/
-      model_<model_id>.dill
+      model_<model_id>.<selected_model_extension>
   results/
     parent_<parent_id>/
       cocoonet_metadata.csv
@@ -1997,8 +2004,12 @@ pending-delivery, retry-limit, stop, and recovery rules. Other eligible free slo
   result workbooks. Every result-workbook metadata worksheet follows the same exact two-column `field,value` contract.
   Domain data/reference worksheets retain their owning row-and-column schemas. Do not rely on automatic type or
   missing-value inference.
-- Use dill only for trusted root-local/private model payloads, trusted root-local IPC messages, and standardized
-  visualization data; do not introduce a parallel direct `pickle` path.
+- Cocoonet-managed trusted model persistence uses `.pt` for PyTorch and `.joblib` for standard scikit-learn. For
+  scikit-learn-like models, attempt `.joblib`, then `.pkl`, then `.dill`; remove only the failed attempt's incomplete
+  staged file and emit a warning before each fallback. Publish exactly one successfully serialized file and load only
+  the loader identified by that persisted suffix, without cross-format retry against the same bytes. Trusted root-local
+  IPC messages and standardized visualization data continue to use dill. User-provided referenced-file loading is a
+  separate Phase 6 input concern and does not constrain Cocoonet-managed persistence to the reference's suffix.
 - Dataset table inputs and generated CSV/Parquet transfer artifacts follow Sections 3.1 and 3.5. Their formats are
   separate from model, result, protocol, and partition persistence.
 - For root-local and private workers, only the root creates serialized model payloads, and only those workers

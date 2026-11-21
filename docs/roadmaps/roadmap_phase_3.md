@@ -59,8 +59,9 @@ Phase 3 does not implement or expose:
   generation, split realization/reuse, workbook creation, transfer preparation, or dataset artifact copying;
 - an independent general evaluation-settings API. Phase 4 installs the dataset, partition, and the first complete
   `EvaluationReference` together; later scientific phases add only the settings they own;
-- model API probing, `get_params`, `set_params`, deep copying, dill serialization, declarative public-worker model
-  schemas, reconstruction, fitting, prediction, or fixed model-transfer artifact preparation;
+- model-file reads or deserialization, model API probing, `get_params`, `set_params`, deep copying, model
+  serialization, declarative public-worker model schemas, reconstruction, fitting, prediction, or fixed model-transfer
+  artifact preparation; extension-agnostic path admission remains in scope;
 - CPU detection, model CPU-demand inspection, `effective_n_attempt` calculation, slot reservation, process creation,
   device availability validation, or GPU execution;
 - private-worker endpoint/direction configuration, public-service allocation information, authentication, networking,
@@ -103,7 +104,9 @@ Phase 3 is complete only when:
   successful removal;
 - model labels, worker labels, and worker IDs are unique in their owning active registries;
 - all configured models have one task kind, and a later active evaluation reference must agree with it;
-- model inputs remain opaque and are never called, copied, serialized, deserialized, or introspected in this phase;
+- in-memory model inputs remain opaque and are never called, copied, serialized, deserialized, or introspected in this
+  phase; a file-backed input resolves to an existing canonical regular file with a nonempty extension, preserves its
+  path without opening or reading it, and is not rejected because its extension is unfamiliar;
 - root-local and online worker entries remain configuration only, and at most one root-local worker is configured;
 - requested `n_attempt` is retained exactly as a positive integer excluding `bool`; no effective capacity is invented;
 - every bulk mutation either commits the complete validated batch in supplied order or leaves configuration, lifecycle
@@ -228,11 +231,19 @@ that the input can be reconstructed or executed. Registration rules are:
 - registry and summary order is successful registration order; removal preserves survivor order; and
 - replacing a model requires explicit remove followed by add and therefore receives a new model ID.
 
-Phase 3 stores the exact `model_input` object reference. It does not call `copy.copy`, `copy.deepcopy`, dill, pickle,
-model methods, `repr`, `get_params`, or another user-defined hook. Registry metadata and replacement are controlled,
-but Phase 3 does not claim to make an arbitrary caller-owned object deeply immutable. Phase 6 must prepare the fixed
-executable/declarative model input before Phase 13 can commit a parent. An already committed parent's prepared input,
-not a later mutation of the prospective Python object, is authoritative for its attempts.
+A file-backed input may be supplied as text or `Path`. Resolve relative input from the current console working
+directory, retain the canonical absolute `Path`, and require an existing regular file with a nonempty complete suffix.
+Phase 3 accepts arbitrary suffixes, preserves their spelling in the stored path, imposes no suffix/family association,
+and never selects or invokes a loader. Phase 6 selects an available loader from the complete lowercase extension after
+the Phase 5 isolation boundary exists. The user owns the risk of later replacement or mutation of the referenced file;
+Phase 3 adds no lock, digest, or metadata-change check.
+
+Phase 3 stores the exact in-memory `model_input` object reference or the normalized canonical `Path` for a file-backed
+input. It does not call `copy.copy`, `copy.deepcopy`, a model loader, model methods, `repr`, `get_params`, or another
+user-defined hook. Registry metadata and replacement are controlled, but Phase 3 does not claim to make an arbitrary
+caller-owned object deeply immutable. Phase 6 must prepare the fixed executable/declarative model input before Phase 13
+can commit a parent. An already committed parent's prepared input, not a later mutation of the prospective Python
+object or source file, is authoritative for its attempts.
 
 ### 4.6 Worker registry
 
@@ -705,7 +716,10 @@ descriptive here and is not executed.
 - Missing model labels and worker IDs after valid key validation raise `KeyError`.
 - A mutation attempted during `ExecutionStatus.RUNNING` raises `RuntimeError` before any in-memory or filesystem change.
 - Phase 2 `StorageError` propagates from fresh directory preparation with its chained filesystem cause.
-- Validators and failed mutations do not normalize labels, device text, worker IDs, or model inputs.
+- A missing file-backed model input raises `FileNotFoundError`; a directory, non-regular file, or extensionless file
+  raises `ValueError`. Phase 3 does not raise an unsupported-suffix or suffix/family-mismatch error.
+- Validators and failed mutations do not normalize labels, device text, worker IDs, or in-memory model inputs. Resolving
+  a file-backed model reference to its canonical absolute `Path` is the explicit model-input exception.
 - Diagnostics show bounded registry counts/keys rather than complete model objects, large batches, or payloads.
 
 All public and internal classes/functions/methods receive NumPy-style source docstrings. Every non-helper class and
@@ -775,6 +789,9 @@ Test:
 - exact model-label ordering from list and metadata ordering from summary;
 - inspect by user-facing model label;
 - duplicate label, mixed task kind, present-evaluation mismatch, invalid enum, and `None` input rejection;
+- canonical absolute model paths, relative-path resolution, arbitrary-extension acceptance, case and compound suffix
+  preservation, and directory, missing-path, and extensionless-path rejection;
+- invalid model-file bytes accepted without being read, with no loader import or call and no suffix/family association;
 - singular removal, missing-label behavior, survivor order, and incomplete zero-model configuration;
 - atomic bulk add with within-batch and existing collisions;
 - atomic bulk remove with duplicate/missing labels;
@@ -782,7 +799,7 @@ Test:
 - failed bulk operations preserving registry, state, and counter;
 - model edits applying the evaluation-edit transition; and
 - `snapshot().models` preserving registration order and mapping each label to its matching reference; and
-- no model method/API/repr/copy/dill invocation during registration, inspection, summary, removal, or copy.
+- no model method/API/repr/copy/loader invocation during registration, inspection, summary, removal, or copy.
 
 ### 10.5 `tests/configuration/test_workers.py`
 

@@ -145,6 +145,12 @@ bulk commit/failure behavior before implementing bulk conveniences; do not leave
 Assign registered models positive sequential decimal `model_id` values beginning at `1`, without zero padding or reuse
 within their owning persistent scope.
 
+For a file-backed model input, Phase 3 accepts any existing regular file with a nonempty extension, resolves its
+canonical absolute path, and retains it without reading or deserializing it. It does not infer family from the suffix or
+reject an otherwise valid reference because its format is unfamiliar. Phase 6 later dispatches an available loader from
+the complete lowercase extension inside the Phase 5 isolation boundary. File changes after registration are the user's
+responsibility and do not introduce Phase 3 locking, digesting, or metadata tracking.
+
 Retain worker device configuration and the requested positive integer `n_attempt`,
 defaulting to `1`, without starting runtime services. The worker-configuration API
 docstring must distinguish requested from effective attempt capacity, explain that
@@ -233,6 +239,7 @@ preparation settings. Do not compute content digests solely for reuse decisions.
 Before any executable model loading or invocation, establish and verify the worker-side isolation boundary using
 the contracts and data access from Phases 1–4. Choose the concrete enforcement mechanism before implementing it;
 authentication, Python conventions, API validation, and process separation alone do not satisfy the architecture.
+Phase 3 model-path admission does not authorize opening or deserializing a referenced model file.
 
 Cover executable deserialization, reconstruction, and model operations. User model code has no direct filesystem or
 network permission. Framework components resolve source references and supply in-memory data, validate outputs, and
@@ -251,10 +258,17 @@ bounded internal parallelism; optimization beyond the architectural resource pol
 
 ### 6. Scikit-learn and custom-model preparation and execution
 
-Build model adapters on Phase 5 and the stable Phase 1 prediction contracts. For root-local and private
-workers, the root prepares authoritative model inputs and may create dill model payloads; those workers may
-deserialize trusted custom models at the enforced boundary. Trust in private/local serialized model content
-belongs to the user.
+Build model adapters on Phase 5 and the stable Phase 1 prediction contracts. Dispatch user-provided referenced model
+files by their complete lowercase extension, load one model at a time inside the enforced boundary, validate the loaded
+object against its declared family and task kind, release temporary loaded objects, and fail explicitly with preserved
+path and exception context when no applicable loader exists or loading fails. Trust in private/local serialized model
+content belongs to the user.
+
+For Cocoonet-managed root-local/private persistence and transfer, use `.pt` only for PyTorch and `.joblib` only for
+standard scikit-learn. For scikit-learn-like models, attempt `.joblib`, remove its incomplete staging file and warn on
+failure, then attempt `.pkl`, clean and warn on failure, and finally attempt `.dill`. Fail if dill serialization also
+fails. Record and later dispatch only the successfully selected suffix; do not try another loader against the same
+persisted bytes. Add any loader-specific dependency, including Joblib, only in this owning phase.
 
 Implement declarative model-description support needed by public-worker integration. Supported scikit-learn
 models and compositions reconstruct from controlled component identities, hyperparameters, and declarative

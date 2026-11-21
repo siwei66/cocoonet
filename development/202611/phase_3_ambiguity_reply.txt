@@ -13,7 +13,7 @@
 
 ---
 
-4. What exact values must `snapshot()` place in `omputationSnapshot`?
+4. What exact values must `snapshot()` place in `ComputationSnapshot`?
 Keep the attributes unchanged but slightly renamed as:
 ```
 ModelingSnapshot(

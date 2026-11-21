@@ -100,6 +100,12 @@ results remain associated with their original parent and cannot enter another pa
 - Supported model inputs are scikit-learn-like regressors with `fit` and `predict`, scikit-learn-like classifiers with
   `fit`, `predict`, and `predict_proba`, and PyTorch reconstruction and training information with a user-selected
   weight initialization pattern.
+- Phase 3 accepts any existing regular user-provided model file with a nonempty extension as an opaque path reference.
+  It resolves and stores the canonical absolute path but does not infer the model family from the suffix or read or
+  deserialize the file. After the Phase 5 isolation boundary is established, Phase 6 selects the applicable user-input
+  loader from the complete lowercase extension and validates the loaded object against its declared family and task.
+  Later replacement or mutation of the referenced file is the user's responsibility; Cocoonet adds no source lock,
+  digest, or metadata-change check for this risk alone.
 - A parent model evaluation task is one fresh evaluation run created by `run()` from initialized state, containing
   exactly one dataset, one fixed task-wide evaluation configuration, and one or more models. Each model produces one
   unit task distinguished within its parent by its unique user-provided `model_label`. The parent dataset and
@@ -826,7 +832,7 @@ Before planning or implementing a phase, process project guidance in this order:
   execution_configuration.csv
   execution_state.csv
   models_for_transfer/
-    model_<model_id>.dill
+    model_<model_id>.<selected_model_extension>
     models_parent_<parent_id>.<archive_extension>
     # Or tiled:
     models_parent_<parent_id>_<tile_id>.<archive_extension>
@@ -858,11 +864,12 @@ Before planning or implementing a phase, process project guidance in this order:
   worker-managed path. Managed paths are logical paths relative to the owning managed scope, not unqualified physical
   absolute paths. The worker-created reference travels with its result and is copied unchanged; the root independently
   creates its own reference. The final root manifest lists both files, and neither is renamed into the other.
-- `models_for_transfer/` contains reusable model-transfer preparation. Trusted root-local and private paths may use the
-  shown dill file where executable deserialization is permitted; public workers still receive only supported
-  declarative specifications and non-executable model-data artifacts. The untiled and tiled archive forms are
-  alternatives. Exact archive format, size threshold, tiling, and compression settings remain deferred to the
-  responsible transfer design.
+- `models_for_transfer/` contains reusable model-transfer preparation. Managed PyTorch models use `.pt`; managed
+  standard scikit-learn models use `.joblib`; managed scikit-learn-like models attempt `.joblib`, then `.pkl`, then
+  `.dill`, warning before each fallback and retaining only the successfully selected representation. Public workers
+  still receive only supported declarative specifications and non-executable model-data artifacts. The untiled and
+  tiled archive forms are alternatives. Exact archive format, size threshold, tiling, and compression settings remain
+  deferred to the responsible transfer design.
 - The root stores only the first successfully published bundle for each model. A later duplicate never creates or
   overwrites `attempt_results/model_<model_id>/`. Rendered plots are created only when requested. The final manifest
   records which conditional result workbooks, visualization files, rendered plots, and error logs exist.
@@ -887,7 +894,7 @@ Before planning or implementing a phase, process project guidance in this order:
     dataset_<dataset_id>/
   models/
     parent_<parent_id>/
-      model_<model_id>.dill
+      model_<model_id>.<selected_model_extension>
   results/
     parent_<parent_id>/
       cocoonet_metadata.csv
@@ -918,9 +925,9 @@ Before planning or implementing a phase, process project guidance in this order:
 - A worker knows only attempts assigned to it and does not persist information about competing attempts on other
   workers. It must not allocate another attempt for the same parent/model while a published or retained bundle occupies
   that model-keyed path.
-  Workers never render plots. The shown model dill file is permitted only for root-local and private trusted execution;
-  public-worker model persistence remains non-executable. A root-local worker may directly access the configured root
-  dataset and must not create a redundant dataset copy merely to fit the worker layout.
+  Workers never render plots. The shown selected model representation is permitted only for root-local and private
+  trusted execution; public-worker model persistence remains non-executable. A root-local worker may directly access
+  the configured root dataset and must not create a redundant dataset copy merely to fit the worker layout.
 - Root `root_data_reference.xlsx`, `partition_schedules.xlsx`, and `execution_configuration.csv` are authoritative in
   their owning scopes. Root `execution_state.csv` is the authoritative persisted record of observed attempt statuses
   but is informational for progress; complete final root bundles determine model completion. Worker copies are
@@ -938,11 +945,15 @@ Before planning or implementing a phase, process project guidance in this order:
   second contains schema-controlled result metadata needed for identity, association, schema, and integrity validation,
   including the applicable parent task, model/unit, attempt, dataset/partition, fold, worker, artifact kind, and schema
   identity where applicable.
-- Use dill only for applicable trusted model payloads, trusted root-local IPC messages, and standardized visualization
-  data. Visualization dill files contain rendering data, not arbitrary plotting objects, callables, or duplicate
-  numeric reports.
-- Persistence representation and transfer preparation are separate concerns. These CSV, XLSX, and dill requirements
-  do not replace the applicable compressed Parquet preparation or result-package transfer contracts.
+- Cocoonet-managed trusted model persistence uses `.pt` for PyTorch, `.joblib` for standard scikit-learn, and an ordered
+  `.joblib` then `.pkl` then `.dill` fallback for scikit-learn-like models. Each failed scikit-learn-like serialization
+  attempt removes only its incomplete staged file and emits a warning before the next format is attempted. Loading uses
+  only the successfully persisted suffix and does not retry other loaders against the same bytes. Trusted root-local
+  IPC messages and standardized visualization data continue to use dill. Visualization dill files contain rendering
+  data, not arbitrary plotting objects, callables, or duplicate numeric reports.
+- Persistence representation and transfer preparation are separate concerns. These CSV, XLSX, model-serialization,
+  and dill requirements do not replace the applicable compressed Parquet preparation or result-package transfer
+  contracts.
 - Store each shared fact once per owning scope. Do not duplicate authoritative dataset references, partition schedules,
   execution configuration, execution state, or independently derivable result summaries. Required worker execution
   inputs, result-package staging, and acknowledged worker/root bundle copies are not competing authoritative artifacts.
@@ -1026,12 +1037,13 @@ Before planning or implementing a phase, process project guidance in this order:
   remote execution.
 - Private online workers accept Cocoonet model payloads only from their authenticated owning root through the
   designated model-transfer path. The root-local worker receives model inputs through its owning root's local
-  boundary. Both may receive and deserialize trusted dill model payloads, including supported custom models.
+  boundary. Both may receive and deserialize the trusted managed format selected for the model family, including
+  supported custom models.
 - Trust in custom or serialized model content used by private or root-local workers is the user's
   responsibility. Cocoonet does not claim that such user-supplied content is safe merely because it arrived
   through an authenticated or local boundary.
-- Public workers must reject `.pkl`, `.pickle`, `.dill`, and equivalent pickle/dill model payloads and must
-  never deserialize arbitrary Python model objects.
+- Public workers must reject executable `.pt`, `.joblib`, `.pkl`, `.pickle`, `.dill`, and equivalent serialized model
+  payloads and must never deserialize arbitrary Python model objects.
 - Public workers accept only non-executable declarative model specifications and non-executable model-data
   artifacts resolved through Cocoonet-controlled supported worker-local components.
 - User-provided model code has no direct filesystem read/write or network permission. Cocoonet manages dataset
@@ -1239,12 +1251,15 @@ Before planning or implementing a phase, process project guidance in this order:
   schedules, and two-sheet result-bundle tables under the result-data and metadata worksheet contract above. Do not rely
   on automatic type or missing-value inference. Preserve finite values, `Inf`, `-Inf`, `NaN`, and unavailable `NA`
   according to the owning schema.
-- Use dill only for explicitly designated trusted model payloads, trusted root-local IPC messages, and standardized
-  visualization-data payloads; do not introduce a direct `pickle` path.
+- Cocoonet-managed trusted model persistence uses `.pt` for PyTorch and `.joblib` for standard scikit-learn. For
+  scikit-learn-like models, attempt `.joblib`, warn before falling back to `.pkl`, warn again before falling back to
+  `.dill`, and fail if dill serialization also fails. Retain and later load only the successfully selected format.
+  Trusted root-local IPC messages and standardized visualization-data payloads continue to use dill.
 - Dataset inputs and generated CSV/Parquet transfer artifacts follow their separate input and size-based transfer
   contracts.
-- For root-local and private workers, the root may create dill model payloads, and those workers may deserialize
-  them at the designated execution boundary. Custom models are permitted under the user's trust responsibility.
+- For root-local and private workers, the root may create the applicable managed model representation, and those
+  workers may deserialize it at the designated execution boundary. Custom models are permitted under the user's trust
+  responsibility.
 - For public workers, the root sends only a declarative model specification and applicable non-executable
   model-data artifacts. Public workers reconstruct supported models locally and never deserialize root-supplied
   Python model objects.

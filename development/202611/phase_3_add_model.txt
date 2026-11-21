@@ -1,0 +1,469 @@
+I clarify the open questions you raised about `singular/bulk validation, staging, and commit mechanics;` as follows:
+
+---
+
+Open question 1: What does the shared validator receive?
+Validate separately, model validator for model integrity validation, and model label uniqueness is validated using another independent validator or validation code block.
+
+---
+
+Open question 2: Does the “operator” mutate live or staged state?
+The operator for adding model is a helper instead of public API, it is called by the `add_model` or `add_models` after validation, so that the operation is not coded redundantly. The both API methods are called before modeling, and for model addition only, so that they will not and are impossible to be called in live, and can modify a established but not started evaluation task instance.
+
+---
+
+Open question 3: Must validation and construction be two distinct passes?
+Your recommendation is approved:
+```text
+Strict two-pass processing
+1. Validate every item, updating validation-only sets.
+2. After all validation succeeds, build all registered records.
+3. Commit once.
+
+Recommendation: use strict two-pass processing because it most closely implements your requested “validator for every member, then operator for every member” rule. It also makes it explicit that no model ID is consumed before validation finishes.
+```
+
+---
+
+Open question 4: What exactly constitutes the final commit?
+Your recommendation is approved:
+```text
+Recommendation:
+1. Fully construct `new_models`, `new_next_model_number`, and `new_consolidation_state` locally.
+2. Ensure no validation, allocation-heavy construction, or user-controlled callback remains.
+3. Assign the prepared values in one bounded commit section.
+4. Do not add rollback code for extraordinary failures such as `MemoryError`.
+```
+However, please check whether I interpret the process consistently, we should align the interpretation:
+```text
+- The `new_next_model_number` is updated after successful addition of model(s), a failure in model validation will not leads to update of `new_next_model_number`.
+- A model that fails in validation will never leave any record or change to the computation instance, it fails and raises error loudly at the very beginning before any operation to the evaluation instance.
+- Accept but minimize the failure that a model may be validated successfully and fail in later addition operation, leaving potentially partially updated instance, however the partial update risk must be minimized to make the instance mutation operation simple and fast.
+```
+
+---
+
+Open question 5: Which failure wins when multiple members are invalid?
+Your recommendation is approved:
+```text
+Recommendation: validate in request order, performing each item’s local validation followed by its prospective registry checks. Raise the first encountered error. This gives deterministic, comprehensible behavior without aggregating errors.
+```
+Check locally the model integrity first, and then the interaction integrity like duplication issues of model and model_label.
+
+---
+
+Open question 6: Does an empty bulk call check execution state?
+`add_model` and `add_models` will never be called in the running of `EvaluationTask` instance. They both do not accept empty values, which is useless. A complete policy edited from your recommendation is:
+```text
+For add_models():
+1. Reject invalid collection containers.
+2. Materialize the iterable once.
+3. Reject empty input like None for add_model and empty containers and None for add_models.
+4. Apply the active-execution guard once.  # Maybe a guard is not needed because the method cannot be called when the console is busy running the task.
+5. Validate each ModelRegistration in request order.
+6. Validate labels and task-kind agreement against local prospective state.  # The model object validation must including inspect the model instance or the model reconstruction information to ensure the model itself is valid, and the inspecting must be applied to the referenced models saved in files.
+7. After all validation succeeds, build _RegisteredModel records and sequential model IDs locally.
+8. Precompute the new lifecycle state.
+9. Commit the registry, counter, and lifecycle state once.
+10. Return references in request order.  # Return a pandas table instead with these field names as column names for better appearance.
+# The configuration must also be stored somewhere as or in a configuration file right before starting the task.
+```
+For the removal: simply remove them, the removal does not need valiation and will not cause model or model label duplication. The model id simply goes forward for an instance, the model id number does not need to be continuous.
+
+---
+
+Report any remaining blocking ambiguity with clarification and example if exists.
+
+If there is no blocking remaining ambiguity, please propose minimal necessary revisions to the related dev docs to solve the ambiguities about add_model(s).
+Propose revisions file by file and with line number to locate the proposed revisions.
+Do not modify any file, propose only.
+
+
+
+=================================================================
+
+
+
+Please solve the ambiguities according to my following answers:
+
+---
+
+1. Does the shared operator mutate self?
+Recommendation is approved: `Recommendation: the shared helper should be a construction helper, not a live mutation helper.`
+
+---
+
+2. Does Phase 3 inspect or reconstruct model inputs?
+Then leave the file and model object inspecting to later phase as planned.
+
+---
+
+3. What exactly should the pandas return contain?
+- Does it apply only to add_models(), or also to singular add_model()?
+To `add_models`.
+
+- Are the columns exactly `model_id`, `model_label`, `family`, and `task_kind`?
+Your recommendation:
+```text
+Recommendation: retain ModelReference and tuple[ModelReference, ...]. They are typed, immutable, lightweight, and directly correspond to the registered metadata.
+```
+and my suggestion of a tabular return can both be supported and controled via a parameter `tabular_return: bool = True` of `add_models`.
+The intention of my suggetstion is that inexperienced users with limited programming knowledge won't get confused by the `ModelReference` instance return. As long as this return is intended for human validation and used publicly for users instead of for internal usage, my suggestion should be taken into consideration.
+
+And the columns should be slightly more specific: `model_id`, `model_label`, `family`, and `task_kind`, `model_input`. For `model_input`, it is consistent with the design, use path for model in file and use model class name for model added in memory.
+
+- Is model_input excluded?
+No. It must be included.
+
+- Should enums be retained as enum objects or converted to strings?
+For tabular return, use str only, all table dtypes are str.
+
+- What index should it use?
+Index is not important here, simply use the native index like the index for the original returned tuple of `ModelReference`.
+
+- Is the mutable DataFrame merely a detached presentation result?
+Yes, it is simply a table for model presentation only. And this behavior should also be configurable, I think you should add parameter `suppress_return: bool = False`. 
+However, please note that the `add_models` must return the newly added model references only, or the table of newly added models instead of all added models. The configured model set commonly contains numerous models like 10k or millions of models using model file paths, so never try to return the entire model set.
+So the default behavior is return newly added model reference or table of newly added models only, and can be completely silent, which is useful when user add over 10k models in one call.
+
+- Should summarize_models() also return a DataFrame for consistency?
+I think you should remove the method and add a method:
+```python
+def list_models(id: str | int | None = None, label: str | None = None, family: str | None = None, model_input: str | None = None, use_regex: bool = True, limit: int = 1000) -> pd.DataFrame: ...
+```
+So that users can list any required models according to the attribute string.
+If an attribute (column value) is not provided, the criterion is ignored.
+If no attribute (column value) is provided, return all models as planned `summarize_models`.
+If use_regex is True, use regular expressions for the searching, if False, use exact matching for searching the string.
+The limit controls the maximum rows returned, if exceeded, return only the limit number of rows, and warns user loudly for hitting the returning limit and it can configure the limit to allow more in returned df.
+
+A proper public API could be:
+```python
+def add_model(model: object, model_label: str | int) -> ModelReference: ...
+def add_models(models: dict[str, object], *, suppress_return: bool = False, tabular_return: bool = True) -> ModelReference | pd.DataFrame: ...
+def list_models(id: str | int | None = None, label: str | None = None, family: str | None = None, model_input: str | None = None, use_regex: bool = True, limit: int = 1000) -> pd.DataFrame: ...
+```
+
+---
+
+Report any remaining blocking ambiguity with clarification and example if exists.
+
+If there is no blocking remaining ambiguity, please propose minimal necessary revisions to the related dev docs to solve the ambiguities about add_model(s).
+Propose revisions file by file and with line number to locate the proposed revisions.
+Do not modify any file, propose only.
+
+
+
+=================================================================
+
+
+
+1. `family` and `task_kind` are missing
+
+I correct it as follows:
+```python
+def add_model(model: object, model_label: str, family : str = 'infer', task_kind: str = 'infer') -> ModelReference | None: ...
+def add_models(models: dict[str, object], *, suppress_return: bool = False, tabular_return: bool = True, family : Literal['infer'] | dict[str, str] | str = 'infer', task_kind: str = 'infer') -> ModelReference | pd.DataFrame | None: ...
+def list_models(id: str | None = None, label: str | None = None, family: str | None = None, model_input: str | None = None, use_regex: bool = True, limit: int = 1000) -> pd.DataFrame: ...
+```
+Change the rule and allow `family` and `task_kind` inference, this is a public API, not the internal functions, a public API must serve the users first, and the inference is deterministric in most cases.
+
+2. The controlled return type needs exact precedence
+Updated above
+
+3. `model_input` presentation is not deterministic yet
+The only possibilities are path str and model class name str. `Path` are used internally consistently and model class instances are used internally consistently. Others are not allowed as the input for this public API.
+`# reconstruction information` is extracted internally in cocoonet root and consumed internally by cocoonet workers, instead of as public input.
+
+4. Integer and empty model labels remain undefined
+Allow str only then.
+
+5. list_models() search behavior needs an exact contract
+My answers:
+```text
+- id shadows Python’s built-in id; should the parameter be model_id?
+yes, model_id
+
+- Does regular-expression matching use re.search, re.match, or re.fullmatch?
+use re.fullmatch()
+
+- Is matching case-sensitive?
+Yes.
+
+- What happens for an invalid regular expression?
+
+
+- Is limit=0 valid?
+No.
+
+- Is bool accepted as an integer limit?
+Do nothing in addition about it. False is treated as 0 and True is treated as 1 natively.
+
+- Which warning class represents truncation?
+emit UserWarning with stacklevel=2 when truncated as recommended.
+
+- Does an empty result retain all five columns with string dtype?
+Yes. 0 row df.
+
+- Does model_input filtering use the same derived display descriptor as the returned table?
+Yes. Use the column value i.e. the string of path or class name
+```
+
+6. Removal behavior remains unresolved
+`remove_models` uses the same shared infrastructure of model filtering as list. And remove the filtered models. `remove_model` uses the exact match of each provided column value. If filtering result is empty, then no model is removed, simply print `Found 0 matched models, no model is removed.`
+
+
+
+=================================================================
+
+
+
+1. Inference has no deterministic algorithm
+For files, load and infer one by one.
+
+2. Bulk family dictionary behavior is undefined
+- "infer" for infering all.
+- single str for using the same family for all models provided consistently
+- The keys of family dict[str, str] must match exactly with the keys of the dict of provided models, no missing and no extra is allowed
+- Dictionary values accept the exact ModelFamily vocabulary plus "infer".
+
+3. Return annotations remain inconsistent
+Recommendation approved:
+`def add_model(...) -> ModelReference: ...`
+
+4. Accepted model input still needs clarification
+```python
+Path("model.dill")  # Path object rather than string, accepted
+ModelClass          # class definition rather than instance, rejected
+""                  # empty path, rejected
+object()            # unsupported object, detected only in Phase 6, detected and rejected, phase 6 should be implemented in this validation process too.
+
+```
+
+5. Invalid regular-expression behavior remains unanswered
+```
+Other proposed matching rules can be made deterministic:
+- Rename id to model_id.
+- Combine multiple criteria with logical AND.
+- Use case-sensitive re.fullmatch().
+- Use complete string equality when use_regex=False.
+- Preserve registry order.
+- limit=False is invalid because it equals zero.
+- limit=True acts as limit one under the requested native boolean behavior.
+- Empty results retain the five string columns and zero-based RangeIndex.
+- Truncation emits UserWarning with stacklevel=2.
+```
+Approved.
+
+6. remove_models() cannot safely reuse limited listing unchanged
+No, never base the searching on the return of pd.DataFrame, the searching must be performed directly to the reference and model input, and include all models. the dataframe is for result representation only. Never use it for any internal process. All internal processes use the attribute directly. The type can be converted to the corresponding string and perform the filtering.
+
+7. Singular removal has no exact signature
+Provide either one is allowed. Provide two conflicting get no result. That shares the same internal logic with list_models, do not worry about this.
+
+8. Empty labels and empty bulk input
+Recommendation approved:
+```text
+- Reject model_label="" through a model-specific nonempty-label rule.
+- Reject add_models({}) with ValueError.
+- Reject models=None with TypeError.
+```
+
+
+
+=================================================================
+
+
+
+1. Loading model files in Phase 3 conflicts with phase ordering
+Then plan the functionality in phase 3 and change the rule. Propose the update to phase 3 to include all functionalities needed.
+
+2. Loading does not define how inference works
+Give up inference completely and require providing the values of family and task id.
+
+3. File stability between addition and execution is undefined
+The risk is the users' responsibility, do nothing about it. There is not need to lock file or check file meta for this risk only.
+
+4. Bulk return type remains unresolved
+Recommendation approved.
+
+5. Removal signatures and behavior remain incomplete
+See API below, this should be solved.
+
+
+
+For all public APIs use the following version, which could solve most of the ambiguities:
+```python
+def add_model(
+    model: object,
+    model_label: str,
+    family : Literal['sklearn', 'sklearn-like', 'pytorch', 'cocoonet'],
+    task_kind: Literal['regression', 'classification'],
+) -> ModelReference: ...
+
+def add_models(
+    models: dict[str, object],  # Mapping unique model labels to model inputs
+    family : Literal['sklearn', 'sklearn-like', 'pytorch', 'cocoonet'] | dict[str, Literal['sklearn', 'sklearn-like', 'pytorch', 'cocoonet']],
+    task_kind: Literal['regression', 'classification'],
+    *,
+    suppress_return: bool = False,
+    tabular_return: bool = True,
+    limit: int = 1000,
+) -> ModelReference | pd.DataFrame | None: ...
+
+def list_models(
+    label: str | None = None,
+    family: str | None = None,
+    model_input: str | None = None,
+    *,
+    use_regex: bool = True,
+    limit: int = 1000,
+) -> pd.DataFrame: ...
+
+def remove_model(
+    model_label: str,
+) -> ModelReference:
+
+def remove_models(
+    label: str | None = None,
+    family: str | None = None,
+    model_input: str | None = None,
+    *,
+    use_regex: bool = True,
+    suppress_return: bool = False,
+    tabular_return: bool = True,
+    limit: int = 1000,
+) -> ModelReference | pd.DataFrame | None: ...
+```
+
+Note:
+- This API version removes `'infer'` and `family` and `task_kind` must be provided in adding models.
+- This API remove `model_id` for users, and keep `model_id` internal usage only, for users, use the unique `model_lable` i.e. `label` defined by the users themselves.
+- Change some args and kwargs allocation
+- Change some parameter orders
+- Define clearly the remove_model and remove_models APIs.
+
+
+
+=================================================================
+
+
+
+1. Public family vocabulary conflicts with the existing contract
+
+Revise to:
+```python
+def add_model(
+    model: object,
+    model_label: str,
+    family : Literal['sklearn', 'sklearn-like', 'pytorch', 'cocoonet'],
+    task_kind: Literal['regression', 'classification'],
+) -> ModelReference: ...
+
+def add_models(
+    models: dict[str, object],  # Mapping unique model labels to model inputs
+    family : Literal['sklearn', 'sklearn-like', 'pytorch', 'cocoonet'] | dict[str, Literal['sklearn', 'sklearn-like', 'pytorch', 'cocoonet']],
+    task_kind: Literal['regression', 'classification'],
+    *,
+    suppress_return: bool = False,
+    tabular_return: bool = True,
+    limit: int = 1000,
+) -> tuple[ModelReference] | pd.DataFrame | None: ...
+
+def list_models(
+    label: str | None = None,
+    family: str | None = None,
+    model_input: str | None = None,
+    *,
+    use_regex: bool = True,
+    limit: int = 1000,
+) -> pd.DataFrame: ...
+
+def remove_model(
+    model_label: str,
+) -> ModelReference | None:
+
+def remove_models(
+    label: str | None = None,
+    family: str | None = None,
+    model_input: str | None = None,
+    *,
+    use_regex: bool = True,
+    suppress_return: bool = False,
+    tabular_return: bool = True,
+    limit: int = 1000,
+) -> tuple[ModelReference] | pd.DataFrame | None: ...
+```
+
+---
+
+2. Phase 3 file loading still lacks a loader contract
+Define all using conventional contracts for loading models
+
+---
+
+3. “All Phase 6 validation” cannot be implemented with the proposed input
+Implement the required only.
+
+---
+
+4. “Model ID is internal only” conflicts with ModelReference
+No, ModelReference must still provide model_id. There is no conflict as this is informational not operational, or you simply allow it, but keep my API unchanged.
+
+---
+
+5. Plural return types and limit behavior remain incorrect
+use `tuple[ModelReference, ...] | pd.DataFrame | None` instead.
+
+---
+
+6. Removal no-match and unfiltered behavior remain undefined
+Recommendation approved.
+
+---
+
+7. Invalid regular expressions remain unspecified
+Recommendation approved.
+
+---
+
+If there is no remaining blocking ambiguity, please propose revisions to the related dev docs for add_model(s). Propose revisions with line number for location file by file. Make minimal necessary changes in the proposed revisions.
+
+If there is blocking remaining ambiguity, please report.
+
+Do not modify any file, propose only.
+
+
+
+=================================================================
+
+
+
+1. “Conventional loading” is not a single model-loading contract
+For every file, add a function to load it. Allow dill, pkl for sklearn-like models. Allow pt and pth for torch models. Allow joblib for sklearn models and sklearn-like models.
+The permission is not a limit, but for supporting models stored in various file formats.
+
+---
+
+2. Phase 3 cannot safely deserialize before the isolation boundary exists
+`Phase 3 accepts paths but does not deserialize them; Phase 6 validates them after Phase 5 isolation.` approve this plan, defer the deserialization to phase 5 and 6.
+
+---
+
+3. Exact family admission checks are incomplete
+Currently simply accept `cocoonet` value, which is reserved for later models, but the `cocoonet` family model is not supported now, for the `cocoonet` family, simply raises error loudly and tell users that this family is currently in development and not supported.
+
+
+
+=================================================================
+
+
+
+I revise the model file schema for reference and internal usage as follows:
+- Accepted for persited model files for reference:
+Support all formats, use the method according to the user-provided model file extension.
+
+- Internal saving and loading for transferring and persistence:
+For torch models, `pt` only.
+For sklearn models, `joblib` only.
+For sklearn-like models, `joblib` by default, if `joblib` fails, warns loudly before failure and uses `pkl`, and if `pkl` fails too, warns loudly before failure and try `dill`, and fail in the end if `dill` fails too.
