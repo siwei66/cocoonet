@@ -15,6 +15,8 @@ from cocoonet._contracts.execution import (
 )
 from cocoonet._contracts.identity import ModelId, ParentId, ScalarLabel
 from cocoonet._contracts.state import ExecutionStatus
+from cocoonet._storage.paths import PathInput
+from cocoonet._storage.root_directory import prepare_root_directory
 from cocoonet.configuration import WorkerConfiguration
 
 
@@ -167,13 +169,26 @@ def prepare_parent_evaluation(
 class EvaluationTask:
     """Own reusable prospective root-side evaluation configuration.
 
+    Parameters
+    ----------
+    root_dir : PathInput
+        User-selected directory prepared as Cocoonet-managed root storage.
+    overwrite : bool, default=False
+        Whether an existing nonempty root may be cleared for fresh use.
+
+    Raises
+    ------
+    TypeError
+        If the root or overwrite value has an incorrect runtime type.
+    ValueError
+        If the root is unsafe, conflicts with a configured dataset source,
+        is an existing non-directory, or is nonempty without permission.
+
     Notes
     -----
-    This ordinary mutable class owns one dataset/evaluation slot, ordered
-    model and worker registries, lifecycle observations, and the next model
-    identity counter. It is not a parent, attempt, worker, scheduler, or
-    runtime controller. Construction and public behavior are added through
-    separately approved units.
+    Construction always performs fresh preparation and never opens or recovers
+    an existing execution. The task initially has no dataset, models, workers,
+    parent, or runtime activity.
     Node usage scope: Root - Owns reusable root-side evaluation configuration.
     """
 
@@ -187,3 +202,28 @@ class EvaluationTask:
     _models: list[_RegisteredModel]
     _workers: list[WorkerConfiguration]
     _next_model_number: int
+
+    def __init__(
+        self,
+        root_dir: PathInput,
+        /,
+        *,
+        overwrite: bool = False,
+    ) -> None:
+        """Prepare fresh root storage and initialize empty configuration."""
+        layout = prepare_root_directory(
+            root_dir,
+            dataset_sources=(),
+            overwrite=overwrite,
+        )
+
+        self._work_dir = layout.root
+        self._consolidation_state = ConsolidationState.INITIALIZED
+        self._parent_id = None
+        self._execution_status = ExecutionStatus.NOT_STARTED
+        self._data_partition = None
+        self._evaluation_config = None
+        self._dataset_sources = ()
+        self._models = []
+        self._workers = []
+        self._next_model_number = 1
