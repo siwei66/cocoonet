@@ -1,9 +1,12 @@
 """Mutable root-side evaluation configuration."""
 
 from dataclasses import dataclass
+from pathlib import Path
 
+from cocoonet._contracts.data import PartitionReference
 from cocoonet._contracts.execution import (
     ConsolidationState,
+    EvaluationReference,
     ModelingSnapshot,
     ModelReference,
     ParentEvaluation,
@@ -12,6 +15,7 @@ from cocoonet._contracts.execution import (
 )
 from cocoonet._contracts.identity import ModelId, ParentId, ScalarLabel
 from cocoonet._contracts.state import ExecutionStatus
+from cocoonet.configuration import WorkerConfiguration
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -158,3 +162,28 @@ def prepare_parent_evaluation(
     )
     validate_parent_evaluation(parent)
     return parent
+
+
+class EvaluationTask:
+    """Own reusable prospective root-side evaluation configuration.
+
+    Notes
+    -----
+    This ordinary mutable class owns one dataset/evaluation slot, ordered
+    model and worker registries, lifecycle observations, and the next model
+    identity counter. It is not a parent, attempt, worker, scheduler, or
+    runtime controller. Construction and public behavior are added through
+    separately approved units.
+    Node usage scope: Root - Owns reusable root-side evaluation configuration.
+    """
+
+    _work_dir: Path
+    _consolidation_state: ConsolidationState
+    _parent_id: ParentId | None
+    _execution_status: ExecutionStatus
+    _data_partition: PartitionReference | None
+    _evaluation_config: EvaluationReference | None
+    _dataset_sources: tuple[Path, ...]
+    _models: list[_RegisteredModel]
+    _workers: list[WorkerConfiguration]
+    _next_model_number: int
