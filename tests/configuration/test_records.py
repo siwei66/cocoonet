@@ -7,8 +7,10 @@ from typing import Any
 import pytest
 
 from cocoonet._contracts.execution import ModelFamily, TaskKind
+from cocoonet._contracts.identity import WorkerId
 from cocoonet.configuration import (
     ModelRegistration,
+    WorkerConfiguration,
     WorkerKind,
     validate_model_registration,
 )
@@ -123,3 +125,67 @@ def test_validate_model_registration_rejects_wrong_outer_record(invalid: Any) ->
     """Reject values that are not model-registration records."""
     with pytest.raises(TypeError, match="ModelRegistration"):
         validate_model_registration(invalid)
+
+
+def test_worker_configuration_preserves_local_and_online_requests() -> None:
+    """Retain worker identity, topology, device, and requested capacity."""
+    local = WorkerConfiguration(
+        worker_label="local",
+        worker_id=WorkerId("worker-local"),
+        kind=WorkerKind.ROOT_LOCAL,
+    )
+    online = WorkerConfiguration(
+        worker_label="remote",
+        worker_id=WorkerId("worker-remote"),
+        kind=WorkerKind.ONLINE,
+        device="cuda:0",
+        n_attempt=3,
+    )
+
+    assert local.worker_label == "local"
+    assert local.worker_id == WorkerId("worker-local")
+    assert local.kind is WorkerKind.ROOT_LOCAL
+    assert local.device == "cpu"
+    assert local.n_attempt == 1
+
+    assert online.worker_label == "remote"
+    assert online.worker_id == WorkerId("worker-remote")
+    assert online.kind is WorkerKind.ONLINE
+    assert online.device == "cuda:0"
+    assert online.n_attempt == 3
+
+
+def test_worker_configuration_is_frozen_slotted_and_keyword_only() -> None:
+    """Keep worker configuration immutable, compact, and explicit."""
+    configuration = WorkerConfiguration(
+        worker_label="local",
+        worker_id=WorkerId("worker-local"),
+        kind=WorkerKind.ROOT_LOCAL,
+    )
+
+    assert not hasattr(configuration, "__dict__")
+    assert all(
+        parameter.kind is Parameter.KEYWORD_ONLY for parameter in signature(WorkerConfiguration).parameters.values()
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        configuration.__setattr__("device", "cuda:0")
+
+
+def test_worker_configuration_has_only_requested_capacity() -> None:
+    """Avoid claiming calculated capacity or observed device availability."""
+    configuration = WorkerConfiguration(
+        worker_label="local",
+        worker_id=WorkerId("worker-local"),
+        kind=WorkerKind.ROOT_LOCAL,
+    )
+
+    assert tuple(field.name for field in fields(configuration)) == (
+        "worker_label",
+        "worker_id",
+        "kind",
+        "device",
+        "n_attempt",
+    )
+    assert not hasattr(configuration, "effective_n_attempt")
+    assert not hasattr(configuration, "device_available")
