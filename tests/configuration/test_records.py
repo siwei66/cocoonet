@@ -1,12 +1,17 @@
 """Tests for root-side configuration records."""
 
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 from inspect import Parameter, signature
+from typing import Any
 
 import pytest
 
 from cocoonet._contracts.execution import ModelFamily, TaskKind
-from cocoonet.configuration import ModelRegistration, WorkerKind
+from cocoonet.configuration import (
+    ModelRegistration,
+    WorkerKind,
+    validate_model_registration,
+)
 
 
 def test_worker_kind_has_exact_string_vocabulary() -> None:
@@ -58,3 +63,63 @@ def test_model_registration_is_frozen_slotted_and_keyword_only() -> None:
 
     with pytest.raises(FrozenInstanceError):
         registration.__setattr__("model_label", "replacement")
+
+
+def test_validate_model_registration_accepts_opaque_input() -> None:
+    """Accept a non-None input without changing or inspecting it."""
+    model_input = object()
+    registration = ModelRegistration(
+        model_input=model_input,
+        model_label="baseline",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+
+    validate_model_registration(registration)
+
+    assert registration.model_input is model_input
+
+
+def test_validate_model_registration_rejects_none_input() -> None:
+    """Reject the sole disallowed opaque model-input value."""
+    registration = ModelRegistration(
+        model_input=None,
+        model_label="baseline",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+
+    with pytest.raises(ValueError, match=r"^model_input must not be None\.$"):
+        validate_model_registration(registration)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        ("model_label", 1),
+        ("family", "sklearn"),
+        ("task_kind", "regression"),
+    ],
+)
+def test_validate_model_registration_rejects_invalid_metadata(
+    field: str,
+    invalid: Any,
+) -> None:
+    """Reject metadata outside its declared runtime type."""
+    registration = ModelRegistration(
+        model_input=object(),
+        model_label="baseline",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+    invalid_registration = replace(registration, **{field: invalid})
+
+    with pytest.raises(TypeError, match=field):
+        validate_model_registration(invalid_registration)
+
+
+@pytest.mark.parametrize("invalid", [None, object()])
+def test_validate_model_registration_rejects_wrong_outer_record(invalid: Any) -> None:
+    """Reject values that are not model-registration records."""
+    with pytest.raises(TypeError, match="ModelRegistration"):
+        validate_model_registration(invalid)
