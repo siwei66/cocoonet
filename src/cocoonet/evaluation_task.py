@@ -2,8 +2,15 @@
 
 from dataclasses import dataclass
 
-from cocoonet._contracts.execution import ConsolidationState, ModelReference
-from cocoonet._contracts.identity import ModelId, ScalarLabel
+from cocoonet._contracts.execution import (
+    ConsolidationState,
+    ModelingSnapshot,
+    ModelReference,
+    ParentEvaluation,
+    validate_modeling_snapshot,
+    validate_parent_evaluation,
+)
+from cocoonet._contracts.identity import ModelId, ParentId, ScalarLabel
 from cocoonet._contracts.state import ExecutionStatus
 
 
@@ -91,3 +98,63 @@ def _require_configuration_editable(
     """
     if value is ExecutionStatus.RUNNING:
         raise RuntimeError("Configuration cannot be changed while execution is running.")
+
+
+def prepare_parent_evaluation(
+    snapshot: ModelingSnapshot,
+    /,
+    *,
+    parent_id: ParentId,
+) -> ParentEvaluation:
+    """Prepare one validated parent from complete prospective configuration.
+
+    Parameters
+    ----------
+    snapshot : ModelingSnapshot
+        Valid initialized configuration containing a partition, evaluation,
+        and at least one model.
+    parent_id : ParentId
+        Caller-supplied identity for the prospective parent.
+
+    Returns
+    -------
+    ParentEvaluation
+        Validated immutable scientific context in model-registration order.
+
+    Raises
+    ------
+    TypeError
+        If the snapshot, parent identity, or nested record has an incorrect
+        runtime type.
+    ValueError
+        If the snapshot is invalid or incomplete, is not initialized, already
+        has a parent, contains inconsistent tasks, or the parent ID is empty.
+
+    Notes
+    -----
+    This function does not generate an identity, inspect workers, persist
+    files, mutate the snapshot, or commit lifecycle state.
+    Node usage scope: Root - Prepares root-side parent scientific context.
+    """
+    validate_modeling_snapshot(snapshot)
+
+    if snapshot.consolidation_state is not ConsolidationState.INITIALIZED:
+        raise ValueError(
+            "snapshot.consolidation_state must be initialized to prepare a parent; "
+            f"got {snapshot.consolidation_state.value!r}."
+        )
+    if snapshot.data_partition is None:
+        raise ValueError("snapshot.data_partition is required to prepare a parent.")
+    if snapshot.evaluation_config is None:
+        raise ValueError("snapshot.evaluation_config is required to prepare a parent.")
+    if not snapshot.models:
+        raise ValueError("snapshot.models must contain at least one model.")
+
+    parent = ParentEvaluation(
+        parent_id=parent_id,
+        partition=snapshot.data_partition,
+        evaluation=snapshot.evaluation_config,
+        models=tuple(snapshot.models.values()),
+    )
+    validate_parent_evaluation(parent)
+    return parent
