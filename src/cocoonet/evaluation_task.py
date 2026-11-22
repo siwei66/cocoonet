@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from cocoonet._contracts.execution import ModelReference
+from cocoonet._contracts.execution import ConsolidationState, ModelReference
 from cocoonet._contracts.identity import ModelId, ScalarLabel
 
 
@@ -36,3 +36,30 @@ class _RegisteredModel:
     def model_label(self) -> ScalarLabel:
         """Return the authoritative user-facing model label."""
         return self.reference.model_label
+
+
+def _consolidation_after_evaluation_edit(
+    value: ConsolidationState,
+    /,
+) -> ConsolidationState:
+    """Return the consolidation state after an evaluation edit.
+
+    Parameters
+    ----------
+    value : ConsolidationState
+        Current prospective-configuration consolidation state.
+
+    Returns
+    -------
+    ConsolidationState
+        ``UNCONSOLIDATED`` after editing a consolidated configuration;
+        otherwise the unchanged current state.
+
+    Notes
+    -----
+    Worker-only configuration changes do not use this transition.
+    Node usage scope: Root - Applies root-side evaluation-edit lifecycle state.
+    """
+    if value is ConsolidationState.CONSOLIDATED:
+        return ConsolidationState.UNCONSOLIDATED
+    return value
