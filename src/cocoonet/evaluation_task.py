@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from cocoonet._contracts.execution import ConsolidationState, ModelReference
 from cocoonet._contracts.identity import ModelId, ScalarLabel
+from cocoonet._contracts.state import ExecutionStatus
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -63,3 +64,30 @@ def _consolidation_after_evaluation_edit(
     if value is ConsolidationState.CONSOLIDATED:
         return ConsolidationState.UNCONSOLIDATED
     return value
+
+
+def _require_configuration_editable(
+    value: ExecutionStatus,
+    /,
+) -> None:
+    """Reject configuration mutation during active execution.
+
+    Parameters
+    ----------
+    value : ExecutionStatus
+        Current root-observed execution status.
+
+    Raises
+    ------
+    RuntimeError
+        If execution is currently running.
+
+    Notes
+    -----
+    ``NOT_STARTED``, ``INTERRUPTED``, and ``SETTLED`` permit prospective
+    configuration edits. This guard does not claim that old worker activity
+    has stopped after interruption.
+    Node usage scope: Root - Guards root-side configuration mutation.
+    """
+    if value is ExecutionStatus.RUNNING:
+        raise RuntimeError("Configuration cannot be changed while execution is running.")
