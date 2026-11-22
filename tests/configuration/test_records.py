@@ -13,6 +13,7 @@ from cocoonet.configuration import (
     WorkerConfiguration,
     WorkerKind,
     validate_model_registration,
+    validate_worker_configuration,
 )
 
 
@@ -189,3 +190,64 @@ def test_worker_configuration_has_only_requested_capacity() -> None:
     )
     assert not hasattr(configuration, "effective_n_attempt")
     assert not hasattr(configuration, "device_available")
+
+
+def test_validate_worker_configuration_accepts_requested_values() -> None:
+    """Accept valid local and online requested worker configurations."""
+    local = WorkerConfiguration(
+        worker_label="local",
+        worker_id=WorkerId("worker-local"),
+        kind=WorkerKind.ROOT_LOCAL,
+    )
+    online = WorkerConfiguration(
+        worker_label="remote",
+        worker_id=WorkerId("worker-remote"),
+        kind=WorkerKind.ONLINE,
+        device="cuda:0",
+        n_attempt=3,
+    )
+
+    validate_worker_configuration(local)
+    validate_worker_configuration(online)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid", "error_type"),
+    [
+        ("worker_label", 1, TypeError),
+        ("worker_id", 1, TypeError),
+        ("worker_id", WorkerId(""), ValueError),
+        ("kind", "root-local", TypeError),
+        ("device", 1, TypeError),
+        ("device", "", ValueError),
+        ("n_attempt", 0, ValueError),
+        ("n_attempt", -1, ValueError),
+        ("n_attempt", True, TypeError),
+        ("n_attempt", 1.0, TypeError),
+        ("n_attempt", "1", TypeError),
+    ],
+)
+def test_validate_worker_configuration_rejects_invalid_fields(
+    field: str,
+    invalid: Any,
+    error_type: type[Exception],
+) -> None:
+    """Reject invalid worker fields without interpreting valid requests."""
+    configuration = WorkerConfiguration(
+        worker_label="local",
+        worker_id=WorkerId("worker-local"),
+        kind=WorkerKind.ROOT_LOCAL,
+    )
+    invalid_configuration = replace(configuration, **{field: invalid})
+
+    with pytest.raises(error_type, match=field):
+        validate_worker_configuration(invalid_configuration)
+
+
+@pytest.mark.parametrize("invalid", [None, object()])
+def test_validate_worker_configuration_rejects_wrong_outer_record(
+    invalid: Any,
+) -> None:
+    """Reject values that are not worker-configuration records."""
+    with pytest.raises(TypeError, match="WorkerConfiguration"):
+        validate_worker_configuration(invalid)

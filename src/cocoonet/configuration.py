@@ -4,7 +4,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from cocoonet._contracts.execution import ModelFamily, TaskKind
-from cocoonet._contracts.identity import ScalarLabel, WorkerId, validate_label
+from cocoonet._contracts.identity import (
+    ScalarLabel,
+    WorkerId,
+    validate_identifier,
+    validate_label,
+)
 from cocoonet._type_validation import validate_declared_types
 
 
@@ -125,3 +130,42 @@ class WorkerConfiguration:
     kind: WorkerKind
     device: str = "cpu"
     n_attempt: int = 1
+
+
+def validate_worker_configuration(value: WorkerConfiguration, /) -> None:
+    """Validate one prospective worker configuration.
+
+    Parameters
+    ----------
+    value : WorkerConfiguration
+        Candidate worker identity, topology, device, and requested capacity.
+
+    Raises
+    ------
+    TypeError
+        If the record or one of its fields has an incorrect runtime type.
+    ValueError
+        If the worker identity or device is empty, or if ``n_attempt`` is not
+        positive.
+
+    Notes
+    -----
+    This validation preserves requested values without probing a device,
+    calculating effective capacity, resolving an endpoint, or checking
+    registry-scoped uniqueness and topology limits.
+    Node usage scope: Root - Validates root-side worker configuration.
+    """
+    if not isinstance(value, WorkerConfiguration):
+        validate_declared_types(value, expected_type=WorkerConfiguration)
+
+    validate_label(value.worker_label, field="worker_label")
+    validate_identifier(value.worker_id, field="worker_id")
+    validate_declared_types(value.kind, expected_type=WorkerKind, field="kind")
+
+    validate_declared_types(value.device, expected_type=str, field="device")
+    if not value.device:
+        raise ValueError("device must be a nonempty string; got an empty string.")
+
+    validate_declared_types(value.n_attempt, expected_type=int, field="n_attempt")
+    if value.n_attempt < 1:
+        raise ValueError(f"n_attempt must be a positive integer; got {value.n_attempt!r}.")
