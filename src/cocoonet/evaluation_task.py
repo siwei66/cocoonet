@@ -1,8 +1,12 @@
 """Mutable root-side evaluation configuration."""
 
+import re
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
+
+import pandas as pd
 
 from cocoonet._contracts.data import PartitionReference
 from cocoonet._contracts.execution import (
@@ -138,6 +142,93 @@ def _stage_model_registration(
         ),
         model_input=model_input,
     )
+
+
+_MODEL_TABLE_COLUMNS = (
+    "model_id",
+    "model_label",
+    "family",
+    "task_kind",
+    "model_input",
+)
+
+
+def _model_input_display(model_input: object, /) -> str:
+    """Return the public display value for one opaque model input."""
+    if isinstance(model_input, Path):
+        return str(model_input)
+    return type(model_input).__name__
+
+
+def _filter_registered_models(
+    models: list[_RegisteredModel],
+    /,
+    *,
+    label: str | None,
+    family: str | None,
+    model_input: str | None,
+    use_regex: bool,
+) -> tuple[_RegisteredModel, ...]:
+    """Return registered models matching all supplied search criteria."""
+    if type(use_regex) is not bool:
+        raise TypeError("use_regex must be a bool.")
+
+    criteria = {
+        "label": label,
+        "family": family,
+        "model_input": model_input,
+    }
+    for name, criterion in criteria.items():
+        if criterion is not None and not isinstance(criterion, str):
+            raise TypeError(f"{name} must be a string or None.")
+
+    if use_regex:
+        patterns: dict[str, re.Pattern[str]] = {}
+        for name, criterion in criteria.items():
+            if criterion is None:
+                continue
+            try:
+                patterns[name] = re.compile(criterion)
+            except re.error as error:
+                raise ValueError(f"{name} must be a valid regular expression.") from error
+
+        def matches(name: str, value: str) -> bool:
+            """Return whether one value fully matches its active pattern."""
+            pattern = patterns.get(name)
+            return pattern is None or pattern.fullmatch(value) is not None
+
+    else:
+
+        def matches(name: str, value: str) -> bool:
+            """Return whether one value equals its active criterion."""
+            criterion = criteria[name]
+            return criterion is None or value == criterion
+
+    return tuple(
+        registered
+        for registered in models
+        if matches("label", str(registered.model_label))
+        and matches("family", registered.reference.family.value)
+        and matches("model_input", _model_input_display(registered.model_input))
+    )
+
+
+def _models_to_dataframe(
+    models: tuple[_RegisteredModel, ...],
+    /,
+) -> pd.DataFrame:
+    """Build the public string-typed model registry table."""
+    rows = (
+        (
+            str(registered.model_id),
+            str(registered.model_label),
+            registered.reference.family.value,
+            registered.reference.task_kind.value,
+            _model_input_display(registered.model_input),
+        )
+        for registered in models
+    )
+    return pd.DataFrame(rows, columns=_MODEL_TABLE_COLUMNS, dtype="string")
 
 
 def _consolidation_after_evaluation_edit(
@@ -497,3 +588,72 @@ class EvaluationTask:
         self._next_model_number += 1
         self._consolidation_state = _consolidation_after_evaluation_edit(self._consolidation_state)
         return registered.reference
+
+    def list_models(
+        self,
+        label: str | None = None,
+        family: str | None = None,
+        model_input: str | None = None,
+        *,
+        use_regex: bool = True,
+        limit: int = 1000,
+    ) -> pd.DataFrame:
+        """Return registered models matching all supplied criteria.
+
+        Parameters
+        ----------
+        label : str | None, default=None
+            Model-label pattern or exact value. ``None`` ignores this field.
+        family : str | None, default=None
+            Model-family pattern or exact value. ``None`` ignores this field.
+        model_input : str | None, default=None
+            Model-input display pattern or exact value. ``None`` ignores this
+            field.
+        use_regex : bool, default=True
+            Whether criteria use case-sensitive full regular-expression
+            matching instead of exact string equality.
+        limit : int, default=1000
+            Maximum positive number of matching rows to return.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Matching models in registry order with string-typed columns.
+
+        Raises
+        ------
+        TypeError
+            If a criterion, matching mode, or limit has an invalid type.
+        ValueError
+            If a regular expression is invalid or the limit is not positive.
+
+        Warns
+        -----
+        UserWarning
+            If matching rows are truncated by ``limit``.
+
+        Notes
+        -----
+        Search reads registered attributes directly. It does not inspect model
+        files or objects, mutate configuration, or derive search data from the
+        returned presentation table.
+        """
+        if not isinstance(limit, int):
+            raise TypeError("limit must be an integer.")
+        if limit < 1:
+            raise ValueError("limit must be positive.")
+
+        matches = _filter_registered_models(
+            self._models,
+            label=label,
+            family=family,
+            model_input=model_input,
+            use_regex=use_regex,
+        )
+        if len(matches) > limit:
+            warnings.warn(
+                f"Model listing truncated to {limit} of {len(matches)} matching models.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return _models_to_dataframe(matches[:limit])

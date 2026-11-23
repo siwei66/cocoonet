@@ -526,15 +526,15 @@ class EvaluationTask:
         /,
     ) -> tuple[ModelReference, ...]
 
-    def list_models(self) -> tuple[ScalarLabel, ...]
-
-    def inspect_model(
+    def list_models(
         self,
-        model_label: ScalarLabel,
-        /,
-    ) -> ModelReference
-
-    def summarize_models(self) -> tuple[ModelReference, ...]
+        label: str | None = None,
+        family: str | None = None,
+        model_input: str | None = None,
+        *,
+        use_regex: bool = True,
+        limit: int = 1000,
+    ) -> pd.DataFrame
 
     def remove_model(
         self,
@@ -549,11 +549,12 @@ class EvaluationTask:
     ) -> tuple[ModelReference, ...]
 ```
 
-`list_models()` returns user-facing labels in registry order. `inspect_model()` returns one immutable metadata reference.
-`summarize_models()` returns every immutable metadata reference in registry order. The distinction avoids returning
-opaque executable inputs in a summary while providing both compact listing and complete configured metadata.
+`list_models()` returns matching public model metadata in registry order as a new presentation dataframe. Its string
+columns are `model_id`, `model_label`, `family`, `task_kind`, and `model_input`; the last is a safe display description,
+not the opaque executable input. Optional criteria use logical AND semantics and either case-sensitive full regular-
+expression matching or exact equality. The positive `limit` bounds the result and truncation emits `UserWarning`.
 
-Model lookup/removal uses the user-facing unique label. Phase 3 retains the exact opaque input inside
+Model removal uses the user-facing unique label. Phase 3 retains the exact opaque input inside
 `_RegisteredModel` but adds no retrieval API solely for a later consumer. Phase 6 owns the narrow private retrieval or
 preparation boundary required by its model-adapter implementation. Missing labels raise `KeyError` with the requested
 key; type/value errors are raised before lookup.
@@ -787,8 +788,9 @@ Test:
 - model IDs `1`, `2`, ... in successful registration order;
 - no ID reuse after removal and no ID consumption on failure/no-op;
 - `_RegisteredModel.model_label` and `_RegisteredModel.model_id` exposing the matching immutable reference fields;
-- exact model-label ordering from list and metadata ordering from summary;
-- inspect by user-facing model label;
+- exact public metadata, string dtypes, registry ordering, and safe model-input descriptions from listing;
+- combined exact and regular-expression filtering by label, family, and model-input description;
+- invalid criteria, matching mode, regular expression, and limit rejection, plus truncation warning behavior;
 - duplicate label, mixed task kind, present-evaluation mismatch, invalid enum, and `None` input rejection;
 - canonical absolute model paths, relative-path resolution, arbitrary-extension acceptance, case and compound suffix
   preservation, and directory, missing-path, and extensionless-path rejection;
@@ -800,7 +802,7 @@ Test:
 - failed bulk operations preserving registry, state, and counter;
 - model edits applying the evaluation-edit transition; and
 - `snapshot().models` preserving registration order and mapping each label to its matching reference; and
-- no model method/API/repr/copy/loader invocation during registration, inspection, summary, removal, or copy.
+- no model method/API/repr/copy/loader invocation during registration, listing, removal, or copy.
 
 ### 10.5 `tests/configuration/test_workers.py`
 
@@ -861,21 +863,19 @@ its production unit.
 14. Implement `initialize()` and direct safe-fresh-initialization tests.
 15. Implement `add_model()` and direct ID/task/lifecycle tests.
 16. Implement `list_models()`.
-17. Implement `inspect_model()`.
-18. Implement `summarize_models()`.
-19. Implement `remove_model()` and direct no-reuse/lifecycle tests.
-20. Implement atomic `add_models()` and direct all-or-nothing tests.
-21. Implement atomic `remove_models()` and direct all-or-nothing tests.
-22. Implement `add_worker()` and direct configuration-only tests.
-23. Implement `list_workers()`.
-24. Implement `inspect_worker()`.
-25. Implement `summarize_workers()`.
-26. Implement `remove_worker()` and direct no-side-effect tests.
-27. Implement atomic `add_workers()` and direct all-or-nothing tests.
-28. Implement atomic `remove_workers()` and direct all-or-nothing tests.
-29. Implement `EvaluationTask.__copy__()` and direct shallow-copy/no-I/O tests.
-30. Add the exact public exports in `cocoonet.__init__` and API-surface tests.
-31. Run targeted tests, the full available suite, static/format/lint checks, and a final scope, docstring, mutation,
+17. Implement `remove_model()` and direct no-reuse/lifecycle tests.
+18. Implement atomic `add_models()` and direct all-or-nothing tests.
+19. Implement atomic `remove_models()` and direct all-or-nothing tests.
+20. Implement `add_worker()` and direct configuration-only tests.
+21. Implement `list_workers()`.
+22. Implement `inspect_worker()`.
+23. Implement `summarize_workers()`.
+24. Implement `remove_worker()` and direct no-side-effect tests.
+25. Implement atomic `add_workers()` and direct all-or-nothing tests.
+26. Implement atomic `remove_workers()` and direct all-or-nothing tests.
+27. Implement `EvaluationTask.__copy__()` and direct shallow-copy/no-I/O tests.
+28. Add the exact public exports in `cocoonet.__init__` and API-surface tests.
+29. Run targeted tests, the full available suite, static/format/lint checks, and a final scope, docstring, mutation,
     side-effect, and redundancy audit.
 
 This order establishes records before validators, lifecycle rules before mutable consumers, storage-backed construction
