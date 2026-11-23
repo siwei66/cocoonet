@@ -3,7 +3,8 @@
 import os
 from dataclasses import is_dataclass
 from pathlib import Path
-from typing import get_type_hints
+from types import MappingProxyType
+from typing import Any, get_type_hints
 
 import pytest
 
@@ -11,11 +12,20 @@ from cocoonet._contracts.data import PartitionReference
 from cocoonet._contracts.execution import (
     ConsolidationState,
     EvaluationReference,
+    ModelFamily,
+    ModelReference,
+    TaskKind,
 )
-from cocoonet._contracts.identity import ParentId
+from cocoonet._contracts.identity import ModelId, ParentId, WorkerId
 from cocoonet._contracts.state import ExecutionStatus
-from cocoonet.configuration import WorkerConfiguration
-from cocoonet.evaluation_task import EvaluationTask, _RegisteredModel
+from cocoonet.configuration import (
+    WorkerConfiguration,
+    WorkerKind,
+)
+from cocoonet.evaluation_task import (
+    EvaluationTask,
+    _RegisteredModel,
+)
 
 
 def test_evaluation_task_declares_exact_owned_fields() -> None:
@@ -170,3 +180,89 @@ def test_evaluation_task_inspection_properties_are_read_only(
     assert task.root_dir == task._work_dir
     assert task.state is ConsolidationState.INITIALIZED
     assert task.parent_id is None
+
+
+def test_evaluation_task_snapshot_returns_fresh_valid_empty_view(
+    tmp_path: Path,
+) -> None:
+    """Return independent immutable mappings without storage changes."""
+    task = EvaluationTask(tmp_path / "root")
+    entries_before = tuple(sorted(entry.name for entry in task.root_dir.iterdir()))
+
+    first = task.snapshot()
+    second = task.snapshot()
+
+    assert first is not second
+    assert first.work_dir == str(task.root_dir)
+    assert first.consolidation_state is ConsolidationState.INITIALIZED
+    assert first.data_partition is None
+    assert first.evaluation_config is None
+    assert first.parent_id is None
+    assert type(first.models) is MappingProxyType
+    assert type(first.worker_ids) is MappingProxyType
+    assert first.models is not second.models
+    assert first.worker_ids is not second.worker_ids
+    assert not first.models
+    assert not first.worker_ids
+    assert tuple(sorted(entry.name for entry in task.root_dir.iterdir())) == entries_before
+
+
+def test_evaluation_task_snapshot_preserves_registry_order_and_associations(
+    tmp_path: Path,
+) -> None:
+    """Map labels to immutable identities in registration order."""
+    task = EvaluationTask(tmp_path / "root")
+    first = _RegisteredModel(
+        reference=ModelReference(
+            model_id=ModelId("1"),
+            model_label="first",
+            family=ModelFamily.SKLEARN,
+            task_kind=TaskKind.REGRESSION,
+        ),
+        model_input=object(),
+    )
+    second = _RegisteredModel(
+        reference=ModelReference(
+            model_id=ModelId("2"),
+            model_label="second",
+            family=ModelFamily.PYTORCH,
+            task_kind=TaskKind.REGRESSION,
+        ),
+        model_input=object(),
+    )
+    worker = WorkerConfiguration(
+        worker_label="local",
+        worker_id=WorkerId("worker-local"),
+        kind=WorkerKind.ROOT_LOCAL,
+    )
+    task._models.extend((first, second))
+    task._workers.append(worker)
+
+    snapshot = task.snapshot()
+
+    assert tuple(snapshot.models) == ("first", "second")
+    assert snapshot.models["first"] is first.reference
+    assert snapshot.models["second"] is second.reference
+    assert tuple(snapshot.worker_ids) == ("local",)
+    assert snapshot.worker_ids["local"] == WorkerId("worker-local")
+
+    models: Any = snapshot.models
+    worker_ids: Any = snapshot.worker_ids
+    with pytest.raises(TypeError):
+        models["replacement"] = first.reference
+    with pytest.raises(TypeError):
+        worker_ids["replacement"] = WorkerId("replacement")
+
+
+def test_evaluation_task_snapshot_validates_owned_state(
+    tmp_path: Path,
+) -> None:
+    """Reject an invalid relationship among authoritative fields."""
+    task = EvaluationTask(tmp_path / "root")
+    task._parent_id = ParentId("unexpected-parent")
+
+    with pytest.raises(
+        ValueError,
+        match=r"Initialized snapshots require parent_id=None",
+    ):
+        task.snapshot()

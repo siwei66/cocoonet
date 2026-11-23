@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 
 from cocoonet._contracts.data import PartitionReference
 from cocoonet._contracts.execution import (
@@ -261,3 +262,36 @@ class EvaluationTask:
             Existing parent identity, or ``None`` before first commitment.
         """
         return self._parent_id
+
+    def snapshot(self) -> ModelingSnapshot:
+        """Return a validated immutable view of current configuration.
+
+        Returns
+        -------
+        ModelingSnapshot
+            Fresh snapshot containing immutable ordered model and worker
+            mappings.
+
+        Raises
+        ------
+        TypeError
+            If an owned configuration value has an incorrect runtime type.
+        ValueError
+            If owned configuration values violate snapshot invariants.
+
+        Notes
+        -----
+        Snapshot construction reads only in-memory authoritative fields. It
+        does not inspect storage, models, workers, or scientific artifacts.
+        """
+        snapshot = ModelingSnapshot(
+            work_dir=str(self._work_dir),
+            consolidation_state=self._consolidation_state,
+            data_partition=self._data_partition,
+            evaluation_config=self._evaluation_config,
+            models=MappingProxyType({registered.model_label: registered.reference for registered in self._models}),
+            worker_ids=MappingProxyType({worker.worker_label: worker.worker_id for worker in self._workers}),
+            parent_id=self._parent_id,
+        )
+        validate_modeling_snapshot(snapshot)
+        return snapshot
