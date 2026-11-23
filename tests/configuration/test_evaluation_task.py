@@ -16,7 +16,14 @@ from cocoonet._contracts.execution import (
     ModelReference,
     TaskKind,
 )
-from cocoonet._contracts.identity import ModelId, ParentId, WorkerId
+from cocoonet._contracts.identity import (
+    DatasetId,
+    EvaluationConfigId,
+    ModelId,
+    ParentId,
+    PartitionId,
+    WorkerId,
+)
 from cocoonet._contracts.state import ExecutionStatus
 from cocoonet.configuration import (
     WorkerConfiguration,
@@ -266,3 +273,114 @@ def test_evaluation_task_snapshot_validates_owned_state(
         match=r"Initialized snapshots require parent_id=None",
     ):
         task.snapshot()
+
+
+def test_evaluation_task_initialize_retains_prospective_configuration(
+    tmp_path: Path,
+) -> None:
+    """Prepare a new root and retain all prospective configuration."""
+    first_root = tmp_path / "first-root"
+    second_root = tmp_path / "second-root"
+    source = tmp_path / "dataset-source.csv"
+    source.write_text("sample_label,y\nsample,1\n", encoding="utf-8")
+
+    task = EvaluationTask(first_root)
+    partition = PartitionReference(
+        partition_id=PartitionId("partition-a"),
+        dataset_id=DatasetId("dataset-a"),
+    )
+    evaluation = EvaluationReference(
+        configuration_id=EvaluationConfigId("evaluation-a"),
+        task_kind=TaskKind.REGRESSION,
+        class_labels=(),
+        influence_requested=False,
+    )
+    registered = _RegisteredModel(
+        reference=ModelReference(
+            model_id=ModelId("1"),
+            model_label="baseline",
+            family=ModelFamily.SKLEARN,
+            task_kind=TaskKind.REGRESSION,
+        ),
+        model_input=object(),
+    )
+    worker = WorkerConfiguration(
+        worker_label="local",
+        worker_id=WorkerId("worker-local"),
+        kind=WorkerKind.ROOT_LOCAL,
+    )
+
+    task._data_partition = partition
+    task._evaluation_config = evaluation
+    task._dataset_sources = (source,)
+    task._models.append(registered)
+    task._workers.append(worker)
+    task._next_model_number = 2
+    task._consolidation_state = ConsolidationState.CONSOLIDATED
+    task._parent_id = ParentId("existing-parent")
+    task._execution_status = ExecutionStatus.SETTLED
+    models = task._models
+    workers = task._workers
+
+    task.initialize(second_root)
+
+    assert task.root_dir == second_root.resolve()
+    assert task.state is ConsolidationState.INITIALIZED
+    assert task.parent_id is None
+    assert task._execution_status is ExecutionStatus.NOT_STARTED
+    assert task._data_partition is partition
+    assert task._evaluation_config is evaluation
+    assert task._dataset_sources == (source,)
+    assert task._models is models
+    assert task._workers is workers
+    assert task._models == [registered]
+    assert task._workers == [worker]
+    assert task._next_model_number == 2
+    assert source.read_text(encoding="utf-8") == "sample_label,y\nsample,1\n"
+    assert {entry.name for entry in second_root.iterdir()} == {
+        "cocoonet_metadata.csv",
+        "models_for_transfer",
+        "attempt_results",
+        "logs",
+    }
+
+
+def test_evaluation_task_initialize_failure_preserves_all_fields(
+    tmp_path: Path,
+) -> None:
+    """Leave task state unchanged when fresh preparation is rejected."""
+    task = EvaluationTask(tmp_path / "current-root")
+    task._consolidation_state = ConsolidationState.UNCONSOLIDATED
+    task._parent_id = ParentId("existing-parent")
+    task._execution_status = ExecutionStatus.INTERRUPTED
+    task._next_model_number = 4
+    before = task.__dict__.copy()
+
+    target = tmp_path / "nonempty-target"
+    target.mkdir()
+    retained = target / "retained.txt"
+    retained.write_text("retained", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"must be empty when overwrite=False"):
+        task.initialize(target)
+
+    assert task.__dict__ == before
+    assert retained.read_text(encoding="utf-8") == "retained"
+
+
+def test_evaluation_task_initialize_rejects_running_before_filesystem_work(
+    tmp_path: Path,
+) -> None:
+    """Apply the active-execution guard before preparing the target root."""
+    task = EvaluationTask(tmp_path / "current-root")
+    task._execution_status = ExecutionStatus.RUNNING
+    target = tmp_path / "unused-target"
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"Configuration cannot be changed while execution is running",
+    ):
+        task.initialize(target)
+
+    assert task.root_dir == (tmp_path / "current-root").resolve()
+    assert not target.exists()

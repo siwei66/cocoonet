@@ -295,3 +295,50 @@ class EvaluationTask:
         )
         validate_modeling_snapshot(snapshot)
         return snapshot
+
+    def initialize(
+        self,
+        root_dir: PathInput,
+        /,
+        *,
+        overwrite: bool = False,
+    ) -> None:
+        """Prepare a fresh root while retaining prospective configuration.
+
+        Parameters
+        ----------
+        root_dir : PathInput
+            User-selected directory to prepare as fresh managed root storage.
+        overwrite : bool, default=False
+            Whether an existing nonempty target root may be cleared.
+
+        Raises
+        ------
+        RuntimeError
+            If execution is currently running.
+        TypeError
+            If the root or overwrite value has an incorrect runtime type.
+        ValueError
+            If the target root is unsafe, conflicts with a retained dataset
+            source, is an existing non-directory, or is nonempty without
+            permission.
+
+        Notes
+        -----
+        Preparation is fresh initialization, not recovery. Models, workers,
+        dataset/evaluation references, source paths, registry order, and the
+        next model counter remain prospective configuration.
+        """
+        _require_configuration_editable(self._execution_status)
+        dataset_sources = tuple(self._dataset_sources)
+
+        layout = prepare_root_directory(
+            root_dir,
+            dataset_sources=dataset_sources,
+            overwrite=overwrite,
+        )
+
+        self._work_dir = layout.root
+        self._consolidation_state = ConsolidationState.INITIALIZED
+        self._parent_id = None
+        self._execution_status = ExecutionStatus.NOT_STARTED
