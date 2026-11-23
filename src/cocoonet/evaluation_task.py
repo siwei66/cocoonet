@@ -8,17 +8,23 @@ from cocoonet._contracts.data import PartitionReference
 from cocoonet._contracts.execution import (
     ConsolidationState,
     EvaluationReference,
+    ModelFamily,
     ModelingSnapshot,
     ModelReference,
     ParentEvaluation,
+    TaskKind,
     validate_modeling_snapshot,
     validate_parent_evaluation,
 )
 from cocoonet._contracts.identity import ModelId, ParentId, ScalarLabel
 from cocoonet._contracts.state import ExecutionStatus
-from cocoonet._storage.paths import PathInput
+from cocoonet._storage.paths import PathInput, resolve_physical_path
 from cocoonet._storage.work_directory import prepare_work_directory
-from cocoonet.configuration import WorkerConfiguration
+from cocoonet.configuration import (
+    ModelRegistration,
+    WorkerConfiguration,
+    validate_model_registration,
+)
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -51,6 +57,87 @@ class _RegisteredModel:
     def model_label(self) -> ScalarLabel:
         """Return the authoritative user-facing model label."""
         return self.reference.model_label
+
+
+def _stage_model_registration(
+    registration: ModelRegistration,
+    /,
+    *,
+    model_id: ModelId,
+    existing_models: list[_RegisteredModel],
+    evaluation_config: EvaluationReference | None,
+) -> _RegisteredModel:
+    """Validate and stage one model without mutating task state.
+
+    Parameters
+    ----------
+    registration : ModelRegistration
+        Prospective opaque model input and declared metadata.
+    model_id : ModelId
+        Identity reserved by the caller's staged model counter.
+    existing_models : list[_RegisteredModel]
+        Current or staged registry used for collision and task checks.
+    evaluation_config : EvaluationReference | None
+        Current task-wide evaluation reference, when configured.
+
+    Returns
+    -------
+    _RegisteredModel
+        Validated immutable registration ready for a bounded commit.
+
+    Raises
+    ------
+    TypeError
+        If registration metadata has an incorrect runtime type.
+    ValueError
+        If the input path is invalid, the label is already registered, or
+        the task kind conflicts with staged scientific configuration.
+
+    Notes
+    -----
+    This helper performs validation and staging only. It does not mutate a
+    registry, consume an ID, change lifecycle state, or read a model file.
+    Node usage scope: Root - Stages root-side model registry additions.
+    """
+    validate_model_registration(registration)
+
+    if any(existing.model_label == registration.model_label for existing in existing_models):
+        raise ValueError(f"model_label must be unique; duplicate label: " f"{registration.model_label!r}.")
+
+    if existing_models:
+        expected_task = existing_models[0].reference.task_kind
+        if registration.task_kind is not expected_task:
+            raise ValueError(
+                "task_kind must match existing models; "
+                f"expected {expected_task.value!r}, "
+                f"got {registration.task_kind.value!r}."
+            )
+
+    if evaluation_config is not None and registration.task_kind is not evaluation_config.task_kind:
+        raise ValueError(
+            "task_kind must match evaluation_config.task_kind; "
+            f"expected {evaluation_config.task_kind.value!r}, "
+            f"got {registration.task_kind.value!r}."
+        )
+
+    model_input = registration.model_input
+    if isinstance(model_input, (str, Path)):
+        model_path = resolve_physical_path(model_input)
+        if not model_path.exists() or not model_path.is_file():
+            raise ValueError("model_input path must identify an existing regular file; " f"got {str(model_path)!r}.")
+        if not model_path.suffix:
+            raise ValueError("model_input path must have a nonempty extension; " f"got {str(model_path)!r}.")
+        model_input = model_path
+
+    return _RegisteredModel(
+        reference=ModelReference(
+            model_id=model_id,
+            model_label=registration.model_label,
+            family=registration.family,
+            task_kind=registration.task_kind,
+        ),
+        model_input=model_input,
+    )
 
 
 def _consolidation_after_evaluation_edit(
@@ -349,3 +436,64 @@ class EvaluationTask:
         self._consolidation_state = ConsolidationState.INITIALIZED
         self._parent_id = None
         self._execution_status = ExecutionStatus.NOT_STARTED
+
+    def add_model(
+        self,
+        model_input: object,
+        /,
+        *,
+        model_label: ScalarLabel,
+        family: ModelFamily,
+        task_kind: TaskKind,
+    ) -> ModelReference:
+        """Add one opaque model input to prospective configuration.
+
+        Parameters
+        ----------
+        model_input : object
+            In-memory opaque input, or an existing model-file path supplied as
+            text or ``Path``.
+        model_label : ScalarLabel
+            User-facing label unique within the active model registry.
+        family : ModelFamily
+            Explicit model-construction family.
+        task_kind : TaskKind
+            Explicit regression or classification task.
+
+        Returns
+        -------
+        ModelReference
+            Immutable metadata for the newly registered model.
+
+        Raises
+        ------
+        RuntimeError
+            If execution is currently running.
+        TypeError
+            If registration metadata has an incorrect runtime type.
+        ValueError
+            If the input or metadata conflicts with current configuration.
+
+        Notes
+        -----
+        File-backed inputs are resolved without being opened or deserialized.
+        The registry and counter change only after all staging checks succeed.
+        """
+        _require_configuration_editable(self._execution_status)
+
+        registered = _stage_model_registration(
+            ModelRegistration(
+                model_input=model_input,
+                model_label=model_label,
+                family=family,
+                task_kind=task_kind,
+            ),
+            model_id=ModelId(str(self._next_model_number)),
+            existing_models=self._models,
+            evaluation_config=self._evaluation_config,
+        )
+
+        self._models.append(registered)
+        self._next_model_number += 1
+        self._consolidation_state = _consolidation_after_evaluation_edit(self._consolidation_state)
+        return registered.reference
