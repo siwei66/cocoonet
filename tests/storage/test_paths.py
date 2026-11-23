@@ -19,7 +19,7 @@ from cocoonet._storage.paths import (
     _is_path_within,
     _paths_equal,
     _validate_dataset_id,
-    _validate_managed_root_against,
+    _validate_managed_work_dir_against,
     _validate_parent_id,
     _validate_positive_decimal_identifier,
     build_root_storage_layout,
@@ -30,8 +30,8 @@ from cocoonet._storage.paths import (
     root_bundle_publication_paths,
     root_trusted_model_dill_path,
     validate_dataset_source_ownership,
-    validate_managed_root,
-    validate_root_ownership,
+    validate_managed_work_dir,
+    validate_work_dir_ownership,
     worker_bundle_publication_paths,
     worker_dataset_directory,
     worker_trusted_model_dill_path,
@@ -83,7 +83,7 @@ def test_path_records_preserve_exact_immutable_slotted_schemas(
     )
     expected_fields = (
         (
-            "root",
+            "work_dir",
             "metadata_csv",
             "root_data_reference_xlsx",
             "partition_schedules_xlsx",
@@ -96,7 +96,7 @@ def test_path_records_preserve_exact_immutable_slotted_schemas(
             "root_error_log",
         ),
         (
-            "root",
+            "work_dir",
             "datasets",
             "models",
             "results",
@@ -273,23 +273,23 @@ def test_discover_protected_locations_is_deterministic_and_unique() -> None:
         assert not any(_paths_equal(candidate, previous) for previous in first[:index])
 
 
-def test_managed_root_matrix_rejects_only_anchor_equality(
+def test_managed_work_dir_matrix_rejects_only_anchor_equality(
     tmp_path: Path,
 ) -> None:
     """Allow ordinary descendants while rejecting an anchor itself."""
     anchor = resolve_physical_path(Path(tmp_path.anchor))
     candidate = resolve_physical_path(tmp_path / "candidate")
 
-    _validate_managed_root_against(candidate, (anchor,))
+    _validate_managed_work_dir_against(candidate, (anchor,))
 
     with pytest.raises(
         ValueError,
         match=r"must not equal filesystem anchor",
     ):
-        _validate_managed_root_against(anchor, (anchor,))
+        _validate_managed_work_dir_against(anchor, (anchor,))
 
 
-def test_managed_root_matrix_rejects_risky_containment_directions(
+def test_managed_work_dir_matrix_rejects_risky_containment_directions(
     tmp_path: Path,
 ) -> None:
     """Reject equality and both containment directions for risky paths."""
@@ -302,26 +302,26 @@ def test_managed_root_matrix_rejects_risky_containment_directions(
     for candidate in (equal, descendant, ancestor):
         with pytest.raises(
             ValueError,
-            match=(r"Managed root .* must not equal, contain, or be contained " r"within protected location"),
+            match=(r"Managed root node working directory .* must not equal, contain, or be contained "),
         ):
-            _validate_managed_root_against(candidate, (protected,))
+            _validate_managed_work_dir_against(candidate, (protected,))
 
-    _validate_managed_root_against(disjoint, (protected,))
+    _validate_managed_work_dir_against(disjoint, (protected,))
 
 
-def test_validate_managed_root_accepts_safe_absolute_user_path(
+def test_validate_managed_work_dir_accepts_safe_absolute_user_path(
     tmp_path: Path,
 ) -> None:
     """Return a canonical safe absolute user-specified path without creating it."""
-    candidate = tmp_path / "safe_root"
+    candidate = tmp_path / "safe-work-dir"
 
-    validated = validate_managed_root(candidate)
+    validated = validate_managed_work_dir(candidate)
 
     assert validated == resolve_physical_path(candidate)
     assert not candidate.exists()
 
 
-def test_validate_managed_root_resolves_safe_relative_user_path(
+def test_validate_managed_work_dir_resolves_safe_relative_user_path(
     tmp_path: Path,
 ) -> None:
     """Resolve a relative user path from the current working directory."""
@@ -329,16 +329,16 @@ def test_validate_managed_root_resolves_safe_relative_user_path(
 
     try:
         os.chdir(tmp_path)
-        validated = validate_managed_root(Path("relative_root"))
+        validated = validate_managed_work_dir(Path("relative-work-dir"))
     finally:
         os.chdir(original_working_directory)
 
-    expected = resolve_physical_path(tmp_path / "relative_root")
+    expected = resolve_physical_path(tmp_path / "relative-work-dir")
     assert validated == expected
     assert not expected.exists()
 
 
-def test_validate_managed_root_uses_discovered_protections() -> None:
+def test_validate_managed_work_dir_uses_discovered_protections() -> None:
     """Reject the loaded Cocoonet package through production discovery."""
     module_file = storage_paths.__file__
     assert module_file is not None
@@ -348,103 +348,103 @@ def test_validate_managed_root_uses_discovered_protections() -> None:
         ValueError,
         match=r"protected location",
     ):
-        validate_managed_root(package_directory)
+        validate_managed_work_dir(package_directory)
 
 
 def test_dataset_source_ownership_enforces_asymmetric_containment(
     tmp_path: Path,
 ) -> None:
-    """Reject sources inside the root while permitting the inverse."""
-    root = tmp_path / "managed_root"
-    equal_source = root
-    contained_source = root / "dataset.csv"
-    containing_source = root.parent
-    disjoint_source = root.parent / "dataset.csv"
+    """Reject sources inside the work directory while permitting the inverse."""
+    work_dir = tmp_path / "managed-work-dir"
+    equal_source = work_dir
+    contained_source = work_dir / "dataset.csv"
+    containing_source = work_dir.parent
+    disjoint_source = work_dir.parent / "dataset.csv"
 
     for source in (equal_source, contained_source):
         with pytest.raises(
             ValueError,
-            match=(r"Dataset source .* must not equal or be contained within " r"managed root"),
+            match=(r"Dataset source .* must not equal or be contained within " r"root node working directory"),
         ):
-            validate_dataset_source_ownership(root, source)
+            validate_dataset_source_ownership(work_dir, source)
 
-    canonical_root, canonical_containing = validate_dataset_source_ownership(root, containing_source)
-    assert canonical_root == resolve_physical_path(root)
+    canonical_work_dir, canonical_containing = validate_dataset_source_ownership(work_dir, containing_source)
+    assert canonical_work_dir == resolve_physical_path(work_dir)
     assert canonical_containing == resolve_physical_path(containing_source)
 
-    canonical_root, canonical_disjoint = validate_dataset_source_ownership(root, disjoint_source)
-    assert canonical_root == resolve_physical_path(root)
+    canonical_work_dir, canonical_disjoint = validate_dataset_source_ownership(work_dir, disjoint_source)
+    assert canonical_work_dir == resolve_physical_path(work_dir)
     assert canonical_disjoint == resolve_physical_path(disjoint_source)
 
-    assert not root.exists()
+    assert not work_dir.exists()
     assert not contained_source.exists()
     assert not disjoint_source.exists()
 
 
-def test_validate_root_ownership_preserves_source_order(
+def test_validate_work_dir_ownership_preserves_source_order(
     tmp_path: Path,
 ) -> None:
     """Materialize and return the complete canonical source collection."""
-    root = tmp_path / "managed_root"
+    work_dir = tmp_path / "managed-work-dir"
     first = tmp_path / "first.csv"
     second = tmp_path / "second.csv"
     sources = (source for source in (first, second))
 
-    canonical_root, canonical_sources = validate_root_ownership(
-        root,
+    canonical_work_dir, canonical_sources = validate_work_dir_ownership(
+        work_dir,
         sources,
     )
 
-    assert canonical_root == resolve_physical_path(root)
+    assert canonical_work_dir == resolve_physical_path(work_dir)
     assert canonical_sources == (
         resolve_physical_path(first),
         resolve_physical_path(second),
     )
-    assert not root.exists()
+    assert not work_dir.exists()
     assert not first.exists()
     assert not second.exists()
 
 
-def test_validate_root_ownership_rejects_duplicate_canonical_sources(
+def test_validate_work_dir_ownership_rejects_duplicate_canonical_sources(
     tmp_path: Path,
 ) -> None:
     """Reject duplicate source associations without filesystem mutation."""
-    root = tmp_path / "managed_root"
+    work_dir = tmp_path / "managed-work-dir"
     source = tmp_path / "dataset.csv"
 
     with pytest.raises(
         ValueError,
         match=r"sources\[1\] duplicates canonical source sources\[0\]",
     ):
-        validate_root_ownership(root, (source, source))
+        validate_work_dir_ownership(work_dir, (source, source))
 
-    assert not root.exists()
+    assert not work_dir.exists()
     assert not source.exists()
 
 
-def test_validate_root_ownership_rejects_conflict_after_materialization(
+def test_validate_work_dir_ownership_rejects_conflict_after_materialization(
     tmp_path: Path,
 ) -> None:
     """Reject a conflicting collection without creating any supplied path."""
-    root = tmp_path / "managed_root"
+    work_dir = tmp_path / "managed-work-dir"
     outside = tmp_path / "outside.csv"
-    conflicting = root / "inside.csv"
+    conflicting = work_dir / "inside.csv"
 
     with pytest.raises(
         ValueError,
-        match=r"Dataset source .* managed root",
+        match=r"Dataset source .* root node working directory",
     ):
-        validate_root_ownership(
-            root,
+        validate_work_dir_ownership(
+            work_dir,
             (outside, conflicting),
         )
 
-    assert not root.exists()
+    assert not work_dir.exists()
     assert not outside.exists()
     assert not conflicting.exists()
 
 
-def test_validate_root_ownership_rejects_path_as_source_collection(
+def test_validate_work_dir_ownership_rejects_path_as_source_collection(
     tmp_path: Path,
 ) -> None:
     """Reject one path passed where a source collection is required."""
@@ -452,8 +452,8 @@ def test_validate_root_ownership_rejects_path_as_source_collection(
         TypeError,
         match=r"^sources must be an iterable of path inputs; got ",
     ):
-        validate_root_ownership(
-            tmp_path / "managed_root",
+        validate_work_dir_ownership(
+            tmp_path / "managed-work-dir",
             tmp_path / "dataset.csv",  # type: ignore[arg-type]
         )
 
@@ -607,24 +607,24 @@ def test_positive_decimal_identifier_rejects_boolean_value() -> None:
 def test_build_root_storage_layout_returns_exact_paths_without_io(
     tmp_path: Path,
 ) -> None:
-    """Build every required root path without creating filesystem entries."""
-    candidate = tmp_path / "managed_root"
-    canonical_root = resolve_physical_path(candidate)
+    """Build root-node paths without creating filesystem entries."""
+    candidate = tmp_path / "managed-work-dir"
+    canonical_work_dir = resolve_physical_path(candidate)
 
     layout = build_root_storage_layout(candidate)
 
     assert layout == RootStorageLayout(
-        root=canonical_root,
-        metadata_csv=canonical_root / "cocoonet_metadata.csv",
-        root_data_reference_xlsx=(canonical_root / "root_data_reference.xlsx"),
-        partition_schedules_xlsx=(canonical_root / "partition_schedules.xlsx"),
-        execution_configuration_csv=(canonical_root / "execution_configuration.csv"),
-        execution_state_csv=canonical_root / "execution_state.csv",
-        models_for_transfer=canonical_root / "models_for_transfer",
-        attempt_results=canonical_root / "attempt_results",
-        logs=canonical_root / "logs",
-        root_running_log=canonical_root / "logs" / "root_running.log",
-        root_error_log=canonical_root / "logs" / "root_error.log",
+        work_dir=canonical_work_dir,
+        metadata_csv=canonical_work_dir / "cocoonet_metadata.csv",
+        root_data_reference_xlsx=(canonical_work_dir / "root_data_reference.xlsx"),
+        partition_schedules_xlsx=(canonical_work_dir / "partition_schedules.xlsx"),
+        execution_configuration_csv=(canonical_work_dir / "execution_configuration.csv"),
+        execution_state_csv=canonical_work_dir / "execution_state.csv",
+        models_for_transfer=canonical_work_dir / "models_for_transfer",
+        attempt_results=canonical_work_dir / "attempt_results",
+        logs=canonical_work_dir / "logs",
+        root_running_log=canonical_work_dir / "logs" / "root_running.log",
+        root_error_log=canonical_work_dir / "logs" / "root_error.log",
     )
     assert not candidate.exists()
 
@@ -634,15 +634,15 @@ def test_build_worker_storage_layout_returns_exact_paths_without_io(
 ) -> None:
     """Build every top-level worker path without creating entries."""
     candidate = tmp_path / "worker"
-    canonical_root = resolve_physical_path(candidate)
+    canonical_work_dir = resolve_physical_path(candidate)
 
     layout = build_worker_storage_layout(candidate)
 
     assert layout == WorkerStorageLayout(
-        root=canonical_root,
-        datasets=canonical_root / "datasets",
-        models=canonical_root / "models",
-        results=canonical_root / "results",
+        work_dir=canonical_work_dir,
+        datasets=canonical_work_dir / "datasets",
+        models=canonical_work_dir / "models",
+        results=canonical_work_dir / "results",
     )
     assert not candidate.exists()
 
@@ -691,25 +691,25 @@ def test_build_worker_parent_storage_layout_rejects_invalid_parent_id(
 def test_build_worker_parent_storage_layout_rejects_results_escape(
     tmp_path: Path,
 ) -> None:
-    """Reject a results directory outside the worker root."""
-    root = resolve_physical_path(tmp_path / "worker")
+    """Reject results outside the worker node working directory."""
+    work_dir = resolve_physical_path(tmp_path / "worker")
     worker = WorkerStorageLayout(
-        root=root,
-        datasets=root / "datasets",
-        models=root / "models",
-        results=root.parent / "outside_results",
+        work_dir=work_dir,
+        datasets=work_dir / "datasets",
+        models=work_dir / "models",
+        results=work_dir.parent / "outside_results",
     )
 
     with pytest.raises(
         ValueError,
-        match=r"Worker results path .* must be contained within worker root",
+        match=r"Worker results path .* must be contained within worker node working directory",
     ):
         build_worker_parent_storage_layout(
             worker,
             ParentId("0123456789abcdef"),
         )
 
-    assert not root.exists()
+    assert not work_dir.exists()
     assert not worker.results.exists()
 
 
@@ -799,24 +799,24 @@ def test_unit_paths_reject_layout_escape(
     tmp_path: Path,
 ) -> None:
     """Reject model and dataset base directories outside their roots."""
-    root_path = resolve_physical_path(tmp_path / "root")
+    work_dir_path = resolve_physical_path(tmp_path / "root-work-dir")
     root = RootStorageLayout(
-        root=root_path,
-        metadata_csv=root_path / "cocoonet_metadata.csv",
-        root_data_reference_xlsx=(root_path / "root_data_reference.xlsx"),
-        partition_schedules_xlsx=(root_path / "partition_schedules.xlsx"),
-        execution_configuration_csv=(root_path / "execution_configuration.csv"),
-        execution_state_csv=root_path / "execution_state.csv",
-        models_for_transfer=root_path.parent / "outside_models",
-        attempt_results=root_path / "attempt_results",
-        logs=root_path / "logs",
-        root_running_log=root_path / "logs" / "root_running.log",
-        root_error_log=root_path / "logs" / "root_error.log",
+        work_dir=work_dir_path,
+        metadata_csv=work_dir_path / "cocoonet_metadata.csv",
+        root_data_reference_xlsx=(work_dir_path / "root_data_reference.xlsx"),
+        partition_schedules_xlsx=(work_dir_path / "partition_schedules.xlsx"),
+        execution_configuration_csv=(work_dir_path / "execution_configuration.csv"),
+        execution_state_csv=work_dir_path / "execution_state.csv",
+        models_for_transfer=work_dir_path.parent / "outside_models",
+        attempt_results=work_dir_path / "attempt_results",
+        logs=work_dir_path / "logs",
+        root_running_log=work_dir_path / "logs" / "root_running.log",
+        root_error_log=work_dir_path / "logs" / "root_error.log",
     )
 
     worker_path = resolve_physical_path(tmp_path / "worker")
     worker = WorkerStorageLayout(
-        root=worker_path,
+        work_dir=worker_path,
         datasets=worker_path.parent / "outside_datasets",
         models=worker_path.parent / "outside_models",
         results=worker_path / "results",
@@ -824,13 +824,13 @@ def test_unit_paths_reject_layout_escape(
 
     with pytest.raises(
         ValueError,
-        match=r"Root model directory .* must be contained within root",
+        match=r"Root model directory .* must be contained within root node working directory",
     ):
         root_trusted_model_dill_path(root, ModelId("1"))
 
     with pytest.raises(
         ValueError,
-        match=r"Worker datasets directory .* must be contained within worker root",
+        match=r"Worker datasets directory .* must be contained within worker node working directory",
     ):
         worker_dataset_directory(
             worker,
@@ -839,7 +839,7 @@ def test_unit_paths_reject_layout_escape(
 
     with pytest.raises(
         ValueError,
-        match=r"Worker models directory .* must be contained within worker root",
+        match=r"Worker models directory .* must be contained within worker node working directory",
     ):
         worker_trusted_model_dill_path(
             worker,
@@ -847,7 +847,7 @@ def test_unit_paths_reject_layout_escape(
             ModelId("1"),
         )
 
-    assert not root_path.exists()
+    assert not work_dir_path.exists()
     assert not worker_path.exists()
 
 
@@ -897,7 +897,7 @@ def test_bundle_publication_paths_reject_invalid_model_id(
     tmp_path: Path,
 ) -> None:
     """Reject invalid model text before constructing bundle paths."""
-    root = build_root_storage_layout(tmp_path / "root")
+    root = build_root_storage_layout(tmp_path / "root-work-dir")
     worker = build_worker_storage_layout(tmp_path / "worker")
     parent = build_worker_parent_storage_layout(
         worker,
@@ -930,7 +930,7 @@ def test_bundle_publication_paths_reject_layout_escape(
     root = build_root_storage_layout(tmp_path / "root")
     escaped_root = replace(
         root,
-        attempt_results=root.root.parent / "outside_root_results",
+        attempt_results=root.work_dir.parent / "outside_root_results",
     )
 
     worker = build_worker_storage_layout(tmp_path / "worker")
@@ -945,7 +945,7 @@ def test_bundle_publication_paths_reject_layout_escape(
 
     with pytest.raises(
         ValueError,
-        match=r"Root attempt-results directory .* must be contained within root",
+        match=r"Root attempt-results directory .* must be contained within root node working directory",
     ):
         root_bundle_publication_paths(
             escaped_root,

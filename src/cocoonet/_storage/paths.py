@@ -140,7 +140,7 @@ def _is_path_within(path: Path, parent: Path, /) -> bool:
 
 
 def discover_protected_locations() -> tuple[Path, ...]:
-    """Discover canonical filesystem locations unsafe for managed roots.
+    """Discover filesystem locations unsafe for root node working directories.
 
     Returns
     -------
@@ -210,17 +210,17 @@ def discover_protected_locations() -> tuple[Path, ...]:
     return tuple(protected)
 
 
-def _validate_managed_root_against(
-    root: Path,
+def _validate_managed_work_dir_against(
+    work_dir: Path,
     protected_locations: tuple[Path, ...],
     /,
 ) -> None:
-    """Validate one canonical root against explicit protected locations.
+    """Validate a canonical root node working directory against protected locations.
 
     Parameters
     ----------
-    root
-        Canonical candidate managed root.
+    work_dir
+        Canonical candidate root node working directory.
     protected_locations
         Canonical locations that the candidate must not endanger.
 
@@ -245,35 +245,42 @@ def _validate_managed_root_against(
         )
 
         if is_filesystem_anchor:
-            if _paths_equal(root, protected):
-                raise ValueError(f"Managed root {str(root)!r} must not equal filesystem " f"anchor {str(protected)!r}.")
+            if _paths_equal(work_dir, protected):
+                raise ValueError(
+                    f"Managed root node working directory {str(work_dir)!r} must not equal filesystem "
+                    f"anchor {str(protected)!r}."
+                )
             continue
 
-        if _paths_equal(root, protected) or _is_path_within(root, protected) or _is_path_within(protected, root):
+        if (
+            _paths_equal(work_dir, protected)
+            or _is_path_within(work_dir, protected)
+            or _is_path_within(protected, work_dir)
+        ):
             raise ValueError(
-                f"Managed root {str(root)!r} must not equal, contain, or be "
+                f"Managed root node working directory {str(work_dir)!r} must not equal, contain, or be "
                 f"contained within protected location {str(protected)!r}."
             )
 
 
-def validate_managed_root(root: PathInput, /) -> Path:
-    """Canonicalize and validate a user-specified managed root.
+def validate_managed_work_dir(work_dir: PathInput, /) -> Path:
+    """Canonicalize and validate a user-specified root node working directory.
 
     Parameters
     ----------
-    root
-        Absolute or relative user-specified working directory. Relative paths
-        resolve from the current working directory.
+    work_dir
+        Absolute or relative user-specified root node working directory.
+        Relative paths resolve from the current console working directory.
 
     Returns
     -------
     pathlib.Path
-        Canonical validated managed-root path.
+        Canonical validated root node working directory path.
 
     Raises
     ------
     TypeError
-        If ``root`` is not a string-producing path-like value.
+        If ``work_dir`` is not a string-producing path-like value.
     ValueError
         If the path is invalid or conflicts with a protected location.
     StorageError
@@ -286,128 +293,132 @@ def validate_managed_root(root: PathInput, /) -> Path:
 
     Node usage scope: Root - Protects user-selected managed storage.
     """
-    canonical_root = resolve_physical_path(root)
-    _validate_managed_root_against(
-        canonical_root,
+    canonical_work_dir = resolve_physical_path(work_dir)
+    _validate_managed_work_dir_against(
+        canonical_work_dir,
         discover_protected_locations(),
     )
-    return canonical_root
+    return canonical_work_dir
 
 
 def _validate_canonical_dataset_source_ownership(
-    root: Path,
+    work_dir: Path,
     source: Path,
     /,
 ) -> None:
-    """Validate one canonical source against one canonical managed root.
+    """Validate a source against a canonical root node working directory.
 
     Parameters
     ----------
-    root
-        Canonical managed-root path.
+    work_dir
+        Canonical root node working directory path.
     source
         Canonical user-owned dataset-source path.
 
     Raises
     ------
     ValueError
-        If the source equals or is contained within the managed root.
+        If the source equals or is contained within the working directory.
 
     Notes
     -----
-    A managed root contained within the source is permitted. This pure helper
-    performs no filesystem access or protected-location validation.
+    A root node working directory contained within the source is permitted.
+    This pure helper performs no filesystem access or protected-location
+    validation.
 
     Node usage scope: Root - Protects user-owned dataset sources.
     """
-    if _paths_equal(source, root) or _is_path_within(source, root):
+    if _paths_equal(source, work_dir) or _is_path_within(source, work_dir):
         raise ValueError(
-            f"Dataset source {str(source)!r} must not equal or be contained " f"within managed root {str(root)!r}."
+            f"Dataset source {str(source)!r} must not equal or be contained within "
+            f"root node working directory {str(work_dir)!r}."
         )
 
 
 def validate_dataset_source_ownership(
-    root: PathInput,
+    work_dir: PathInput,
     source: PathInput,
     /,
 ) -> tuple[Path, Path]:
-    """Validate one managed-root and dataset-source ownership boundary.
+    """Validate a root node working directory and dataset-source boundary.
 
     Parameters
     ----------
-    root
-        Absolute or relative managed-root path.
+    work_dir
+        Absolute or relative root node working directory path.
     source
         Absolute or relative user-owned dataset-source path.
 
     Returns
     -------
     tuple[pathlib.Path, pathlib.Path]
-        Canonical root and source paths.
+        Canonical root node working directory and source paths.
 
     Raises
     ------
     TypeError
         If either input is not a string-producing path-like value.
     ValueError
-        If the source equals or is contained within the root.
+        If the source equals or is contained within the working directory.
     StorageError
         If either path cannot be physically resolved.
 
     Notes
     -----
-    This function performs no filesystem mutation. Protected-root validation
-    is a separate boundary.
+    This function performs no filesystem mutation. Protected-location
+    validation is a separate boundary.
 
     Node usage scope: Root - Protects user-owned dataset sources.
     """
-    canonical_root = resolve_physical_path(root)
+    canonical_work_dir = resolve_physical_path(work_dir)
     canonical_source = resolve_physical_path(source)
     _validate_canonical_dataset_source_ownership(
-        canonical_root,
+        canonical_work_dir,
         canonical_source,
     )
-    return canonical_root, canonical_source
+    return canonical_work_dir, canonical_source
 
 
-def validate_root_ownership(
-    root: PathInput,
+def validate_work_dir_ownership(
+    work_dir: PathInput,
     sources: Iterable[PathInput],
     /,
 ) -> tuple[Path, tuple[Path, ...]]:
-    """Validate a root against a complete dataset-source collection.
+    """Validate a root node working directory against all dataset sources.
 
     Parameters
     ----------
-    root
-        Absolute or relative managed-root path.
+    work_dir
+        Absolute or relative root node working directory path.
     sources
         Dataset-source paths to materialize and validate as one collection.
 
     Returns
     -------
     tuple[pathlib.Path, tuple[pathlib.Path, ...]]
-        Canonical root and ordered canonical source paths.
+        Canonical root node working directory and ordered canonical source
+        paths.
 
     Raises
     ------
     TypeError
-        If the root, collection, or a source has an incorrect runtime type.
+        If the working directory, collection, or a source has an incorrect
+        runtime type.
     ValueError
-        If a source conflicts with the root or duplicates another canonical
-        source.
+        If a source conflicts with the working directory or duplicates
+        another canonical source.
     StorageError
         If a path cannot be physically resolved.
 
     Notes
     -----
     The complete collection is materialized and canonicalized before ownership
-    checks. This function performs no filesystem mutation or protected-root
+    checks. This function performs no filesystem mutation or protected-location
     validation.
 
     Node usage scope: Root - Protects user-owned dataset sources.
     """
-    canonical_root = resolve_physical_path(root)
+    canonical_work_dir = resolve_physical_path(work_dir)
 
     if isinstance(sources, (str, bytes, os.PathLike)) or not isinstance(
         sources,
@@ -427,11 +438,11 @@ def validate_root_ownership(
                 )
 
         _validate_canonical_dataset_source_ownership(
-            canonical_root,
+            canonical_work_dir,
             source,
         )
 
-    return canonical_root, canonical_sources
+    return canonical_work_dir, canonical_sources
 
 
 @validate_args
@@ -527,7 +538,7 @@ def _validate_positive_decimal_identifier(
 
 @dataclass(frozen=True, slots=True)
 class RootStorageLayout:
-    """Collect the semantic paths belonging to one root storage directory.
+    """Collect paths belonging to one root node working directory.
 
     Notes
     -----
@@ -536,7 +547,7 @@ class RootStorageLayout:
     Node usage scope: Root only - Used exclusively by the root node.
     """
 
-    root: Path
+    work_dir: Path
     metadata_csv: Path
     root_data_reference_xlsx: Path
     partition_schedules_xlsx: Path
@@ -551,7 +562,7 @@ class RootStorageLayout:
 
 @dataclass(frozen=True, slots=True)
 class WorkerStorageLayout:
-    """Collect the top-level semantic paths belonging to one worker.
+    """Collect paths belonging to one worker node working directory.
 
     Notes
     -----
@@ -560,7 +571,7 @@ class WorkerStorageLayout:
     Node usage scope: Worker only - Used exclusively by worker nodes.
     """
 
-    root: Path
+    work_dir: Path
     datasets: Path
     models: Path
     results: Path
@@ -601,27 +612,27 @@ class BundlePublicationPaths:
     final: Path
 
 
-def build_root_storage_layout(root: PathInput, /) -> RootStorageLayout:
-    """Build the semantic storage paths for one root directory.
+def build_root_storage_layout(work_dir: PathInput, /) -> RootStorageLayout:
+    """Build storage paths for one root node working directory.
 
     Parameters
     ----------
-    root
-        Absolute or relative root storage path.
+    work_dir
+        Absolute or relative root node working directory path.
 
     Returns
     -------
     RootStorageLayout
-        Immutable collection of canonical root storage paths.
+        Immutable collection of canonical root node storage paths.
 
     Raises
     ------
     TypeError
-        If ``root`` is not a string-producing path-like value.
+        If ``work_dir`` is not a string-producing path-like value.
     ValueError
-        If the root path contains an embedded NUL character.
+        If the working directory path contains an embedded NUL character.
     StorageError
-        If the root path cannot be physically resolved.
+        If the working directory path cannot be physically resolved.
 
     Notes
     -----
@@ -631,31 +642,31 @@ def build_root_storage_layout(root: PathInput, /) -> RootStorageLayout:
 
     Node usage scope: Root - Defines the root persistence layout.
     """
-    canonical_root = resolve_physical_path(root)
-    logs = canonical_root / "logs"
+    canonical_work_dir = resolve_physical_path(work_dir)
+    logs = canonical_work_dir / "logs"
 
     return RootStorageLayout(
-        root=canonical_root,
-        metadata_csv=canonical_root / "cocoonet_metadata.csv",
-        root_data_reference_xlsx=(canonical_root / "root_data_reference.xlsx"),
-        partition_schedules_xlsx=(canonical_root / "partition_schedules.xlsx"),
-        execution_configuration_csv=(canonical_root / "execution_configuration.csv"),
-        execution_state_csv=canonical_root / "execution_state.csv",
-        models_for_transfer=canonical_root / "models_for_transfer",
-        attempt_results=canonical_root / "attempt_results",
+        work_dir=canonical_work_dir,
+        metadata_csv=canonical_work_dir / "cocoonet_metadata.csv",
+        root_data_reference_xlsx=(canonical_work_dir / "root_data_reference.xlsx"),
+        partition_schedules_xlsx=(canonical_work_dir / "partition_schedules.xlsx"),
+        execution_configuration_csv=(canonical_work_dir / "execution_configuration.csv"),
+        execution_state_csv=canonical_work_dir / "execution_state.csv",
+        models_for_transfer=canonical_work_dir / "models_for_transfer",
+        attempt_results=canonical_work_dir / "attempt_results",
         logs=logs,
         root_running_log=logs / "root_running.log",
         root_error_log=logs / "root_error.log",
     )
 
 
-def build_worker_storage_layout(root: PathInput, /) -> WorkerStorageLayout:
+def build_worker_storage_layout(work_dir: PathInput, /) -> WorkerStorageLayout:
     """Build the top-level semantic storage paths for one worker.
 
     Parameters
     ----------
-    root
-        Absolute or relative worker storage path.
+    work_dir
+        Absolute or relative worker node working directory path.
 
     Returns
     -------
@@ -665,11 +676,11 @@ def build_worker_storage_layout(root: PathInput, /) -> WorkerStorageLayout:
     Raises
     ------
     TypeError
-        If ``root`` is not a string-producing path-like value.
+        If ``work_dir`` is not a string-producing path-like value.
     ValueError
-        If the root path contains an embedded NUL character.
+        If the working directory path contains an embedded NUL character.
     StorageError
-        If the root path cannot be physically resolved.
+        If the working directory path cannot be physically resolved.
 
     Notes
     -----
@@ -678,13 +689,13 @@ def build_worker_storage_layout(root: PathInput, /) -> WorkerStorageLayout:
 
     Node usage scope: Worker - Defines the top-level worker persistence layout.
     """
-    canonical_root = resolve_physical_path(root)
+    canonical_work_dir = resolve_physical_path(work_dir)
 
     return WorkerStorageLayout(
-        root=canonical_root,
-        datasets=canonical_root / "datasets",
-        models=canonical_root / "models",
-        results=canonical_root / "results",
+        work_dir=canonical_work_dir,
+        datasets=canonical_work_dir / "datasets",
+        models=canonical_work_dir / "models",
+        results=canonical_work_dir / "results",
     )
 
 
@@ -714,7 +725,7 @@ def build_worker_parent_storage_layout(
         If an argument has an incorrect runtime type.
     ValueError
         If the parent identifier is invalid or the results directory escapes
-        the worker root.
+        the worker node working directory.
     StorageError
         If a supplied layout path cannot be physically resolved.
 
@@ -727,12 +738,12 @@ def build_worker_parent_storage_layout(
     """
     _validate_parent_id(parent_id)
 
-    canonical_root = resolve_physical_path(layout.root)
+    canonical_work_dir = resolve_physical_path(layout.work_dir)
     canonical_results = resolve_physical_path(layout.results)
-    if not _is_path_within(canonical_results, canonical_root):
+    if not _is_path_within(canonical_results, canonical_work_dir):
         raise ValueError(
             f"Worker results path {str(canonical_results)!r} must be contained "
-            f"within worker root {str(canonical_root)!r}."
+            f"within worker node working directory {str(canonical_work_dir)!r}."
         )
 
     parent_root = canonical_results / f"parent_{parent_id}"
@@ -774,7 +785,7 @@ def root_trusted_model_dill_path(
         If an argument has an incorrect runtime type.
     ValueError
         If the model identifier is invalid or the model directory escapes the
-        root.
+        root node working directory.
     StorageError
         If a supplied layout path cannot be physically resolved.
 
@@ -790,11 +801,12 @@ def root_trusted_model_dill_path(
         field="model_id",
     )
 
-    canonical_root = resolve_physical_path(layout.root)
+    canonical_work_dir = resolve_physical_path(layout.work_dir)
     canonical_models = resolve_physical_path(layout.models_for_transfer)
-    if not _is_path_within(canonical_models, canonical_root):
+    if not _is_path_within(canonical_models, canonical_work_dir):
         raise ValueError(
-            f"Root model directory {str(canonical_models)!r} must be " f"contained within root {str(canonical_root)!r}."
+            f"Root model directory {str(canonical_models)!r} must be contained within "
+            f"root node working directory {str(canonical_work_dir)!r}."
         )
 
     return canonical_models / f"model_{model_id}.dill"
@@ -826,7 +838,7 @@ def worker_dataset_directory(
         If an argument has an incorrect runtime type.
     ValueError
         If the dataset identifier is invalid or the datasets directory escapes
-        the worker root.
+        the worker node working directory.
     StorageError
         If a supplied layout path cannot be physically resolved.
 
@@ -838,12 +850,12 @@ def worker_dataset_directory(
     """
     _validate_dataset_id(dataset_id)
 
-    canonical_root = resolve_physical_path(layout.root)
+    canonical_work_dir = resolve_physical_path(layout.work_dir)
     canonical_datasets = resolve_physical_path(layout.datasets)
-    if not _is_path_within(canonical_datasets, canonical_root):
+    if not _is_path_within(canonical_datasets, canonical_work_dir):
         raise ValueError(
             f"Worker datasets directory {str(canonical_datasets)!r} must be "
-            f"contained within worker root {str(canonical_root)!r}."
+            f"contained within worker node working directory {str(canonical_work_dir)!r}."
         )
 
     return canonical_datasets / f"dataset_{dataset_id}"
@@ -878,7 +890,7 @@ def worker_trusted_model_dill_path(
         If an argument has an incorrect runtime type.
     ValueError
         If an identifier is invalid or the models directory escapes the worker
-        root.
+        node working directory.
     StorageError
         If a supplied layout path cannot be physically resolved.
 
@@ -895,12 +907,12 @@ def worker_trusted_model_dill_path(
         field="model_id",
     )
 
-    canonical_root = resolve_physical_path(layout.root)
+    canonical_work_dir = resolve_physical_path(layout.work_dir)
     canonical_models = resolve_physical_path(layout.models)
-    if not _is_path_within(canonical_models, canonical_root):
+    if not _is_path_within(canonical_models, canonical_work_dir):
         raise ValueError(
             f"Worker models directory {str(canonical_models)!r} must be "
-            f"contained within worker root {str(canonical_root)!r}."
+            f"contained within worker node working directory {str(canonical_work_dir)!r}."
         )
 
     return canonical_models / f"parent_{parent_id}" / f"model_{model_id}.dill"
@@ -932,7 +944,7 @@ def root_bundle_publication_paths(
         If an argument has an incorrect runtime type.
     ValueError
         If the model identifier is invalid or the attempt-results directory
-        escapes the root.
+        escapes the root node working directory.
     StorageError
         If a supplied layout path cannot be physically resolved.
 
@@ -948,13 +960,13 @@ def root_bundle_publication_paths(
         field="model_id",
     )
 
-    canonical_root = resolve_physical_path(layout.root)
+    canonical_work_dir = resolve_physical_path(layout.work_dir)
     canonical_attempt_results = resolve_physical_path(layout.attempt_results)
-    if not _is_path_within(canonical_attempt_results, canonical_root):
+    if not _is_path_within(canonical_attempt_results, canonical_work_dir):
         raise ValueError(
             f"Root attempt-results directory "
-            f"{str(canonical_attempt_results)!r} must be contained within root "
-            f"{str(canonical_root)!r}."
+            f"{str(canonical_attempt_results)!r} must be contained within root node working directory "
+            f"{str(canonical_work_dir)!r}."
         )
 
     model_name = f"model_{model_id}"

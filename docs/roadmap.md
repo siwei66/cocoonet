@@ -104,8 +104,9 @@ scientific and lifecycle semantics; this review does not itself authorize code c
 ### 2. Filesystem ownership and durable persistence foundations
 
 Build on Phase 1 to establish the storage boundary before any configuration operation can prepare files. Implement
-root-directory preparation and bidirectional ownership validation: dataset source paths must neither equal nor lie
-inside the managed root, and a proposed root must be checked against every configured source path, including paths
+root node working directory preparation and bidirectional ownership validation: dataset source paths must neither equal nor lie
+inside the root node working directory, and a proposed working directory must be checked against every configured
+source path, including paths
 retained by a copied instance. Accept absolute and relative root specifications: resolve absolute paths directly and
 relative paths from the current console working directory, using the user-provided directory directly. Resolve canonical physical
 locations, reject a filesystem anchor itself, and reject a root that equals, contains, or is contained within a Python
@@ -162,7 +163,7 @@ edits are in-memory operations; Phase 4 supplies the explicit dataset/partition 
 ordinary active-execution locks and prospective edits after root interruption. Model evaluation configuration changes
 require a new parent and explicit reinitialization; worker-only changes preserve the existing parent.
 
-Ordinary copying preserves configuration, root directory, lifecycle state, and existing parent identity without cloning
+Ordinary copying preserves configuration, root node working directory, lifecycle state, and existing parent identity without cloning
 runtime resources, duplicating accepted bundles, or creating another parent. Dataset removal removes references only.
 Worker removal is configuration-only
 and sends no stop, disconnect, cleanup, reset, or release instruction. Root reassignment must use Phase 2 validation.
@@ -221,7 +222,7 @@ excluding booleans, and positive-integer tensor-shape parsing. Standardized clas
 column limit for any required wide result schema. Reject inadmissible types, nonfinite numeric input, conversion
 collisions, malformed shapes, and invalid class labels without cleansing or rewriting them.
 
-Generate one managed `<root_dir>/root_data_reference.xlsx`. For file-backed samples, sources are the actual X-bearing
+Generate one managed `<work_dir>/root_data_reference.xlsx`. For file-backed samples, sources are the actual X-bearing
 files; for inline samples, sources are the input tables. Managed metadata and reference workbooks are not sample
 sources.
 

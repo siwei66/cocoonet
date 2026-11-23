@@ -235,35 +235,35 @@ evaluation configuration; it is not a committed parent evaluation task. Its immu
 configuration requires a new parent, while unchanged model evaluation configuration resumes the existing parent, with
 or without worker configuration changes. An ordinary copy preserves those same identity rules.
 
-#### Root directory and initialization
+#### Root node working directory and initialization
 
-Construction requires a user-provided root working directory. `overwrite` defaults to `False`. Absolute and relative
+Construction requires a user-provided root node working directory. `overwrite` defaults to `False`. Absolute and relative
 specifications are accepted. Resolve an absolute path directly and resolve a relative path from the current console
 working directory. Use the user-provided directory directly as Cocoonet-managed persistent storage. User-provided
 dataset source paths are user-owned and must remain outside it.
 
-Before creating, changing, or deleting persistent files, resolve the proposed root to its canonical physical location
+Before creating, changing, or deleting persistent files, resolve the proposed working directory to its canonical physical location
 and reject a filesystem anchor itself. For a Python installation or package-installation directory, the installed
-Cocoonet package directory, or the complete Cocoonet source repository tree, reject a proposed root that equals,
+Cocoonet package directory, or the complete Cocoonet source repository tree, reject a proposed working directory that equals,
 contains, or is contained within that risky location. Do not reject an otherwise safe path merely because it is
 absolute.
 
 Enforce the following ownership invariant for every configured dataset source path:
 
 ```text
-dataset_path == root_dir                   -> fail explicitly
-dataset_path is contained within root_dir  -> fail explicitly
-dataset_path is outside root_dir           -> passes the ownership check
+dataset_path == work_dir                   -> fail explicitly
+dataset_path is contained within work_dir  -> fail explicitly
+dataset_path is outside work_dir           -> passes the ownership check
 ```
 
 Validate this invariant in both configuration directions:
 
-- When adding a dataset or changing a source path, validate it against the current root working directory.
-- When initializing, changing, or reassigning the root directory, validate the proposed directory against every
+- When adding a dataset or changing a source path, validate it against the current root node working directory.
+- When initializing, changing, or reassigning the root node working directory, validate the proposed directory against every
   existing configured dataset source path before modifying persistent files. This includes dataset configuration
   retained by a copied instance.
 
-A conflicting root-directory configuration fails explicitly without creating, changing, or deleting persistent
+A conflicting root node working directory configuration fails explicitly without creating, changing, or deleting persistent
 files. A conflicting dataset configuration also fails explicitly. This is a computation-configuration invariant,
 not a check confined to `add_dataset()` or `initialize()`. Outside paths must still satisfy other dataset requirements.
 Equality and containment concern canonical physical filesystem locations.
@@ -281,10 +281,10 @@ After ownership validation succeeds, apply the existing directory preparation ru
 | Exists and is nonempty, `overwrite=True` | Explicitly replace its contents and prepare it; state becomes `initialized`. |
 
 Overwrite is an explicit opt-in to destructive fresh-directory preparation. `initialize(...)` similarly establishes
-the filesystem boundary for a fresh execution, possibly using a new root directory. It must not silently adopt old
+the filesystem boundary for a fresh execution, possibly using a new root node working directory. It must not silently adopt old
 persisted execution state as belonging to changed configuration. Exact initialization arguments remain deferred.
 Recovery never clears or freshly initializes the existing execution's directory. Because configured dataset sources
-are outside the managed root, clearing/replacement needs no dataset-path exclusions. Existing partition persistence
+are outside the managed work directory, clearing/replacement needs no dataset-path exclusions. Existing partition persistence
 and recovery protections still apply.
 
 #### Configuration and consolidation states
@@ -322,7 +322,7 @@ changes remain subject to the ordinary execution lock and post-interruption rule
 availability, ownership, readiness, and applicable cleanup.
 
 ```text
-construct / initialize(root_dir, ...) -> initialized
+construct / initialize(work_dir, ...) -> initialized
 initialized + configure in memory    -> initialized
 initialized + run()                  -> persist configuration -> fresh parent -> consolidated
 consolidated + unchanged evaluation  -> same parent / resume, with or without worker changes
@@ -340,7 +340,7 @@ and worker inactivity are distinct: permission to edit is not permission to reus
 
 #### Copying, reuse, and recovery
 
-An ordinary copy reproduces instance attributes, including current configuration, root directory, and lifecycle state.
+An ordinary copy reproduces instance attributes, including current configuration, root node working directory, and lifecycle state.
 It does not allocate a new directory or parent, clear files, reset state, or clone live workers, connections, attempts,
 or accepted result bundles. A consolidated copy remains consolidated and refers to the same persisted execution.
 Model evaluation configuration edits to either copy or original follow the same transition to unconsolidated;
@@ -372,7 +372,7 @@ execution, and subsequent permitted reuse or recovery. No exact method ordering 
 
 | Area | Required capabilities |
 | --- | --- |
-| Initialization | Prepare a root directory explicitly for fresh execution, with overwrite behavior. |
+| Initialization | Prepare a root node working directory explicitly for fresh execution, with overwrite behavior. |
 | Dataset | Add/set with partition preparation or validated reuse, inspect, remove configuration references. |
 | Models | Add one/multiple, list/inspect, summary, remove one/multiple by unique user-facing `model_label`. |
 | Workers | Add one/multiple, list/inspect, summary, configuration-only remove one/multiple by unique user-facing `worker_label`; separate dataset/all-user-data cleanup and public release. |
@@ -593,7 +593,7 @@ The standardized field contracts are:
 Cocoonet does not impute, drop, replace, clip, or otherwise cleanse invalid or nonfinite dataset values.
 Users must provide deterministic, valid input.
 
-Dataset preparation generates one managed `<root_dir>/root_data_reference.xlsx` for the current dataset. It records
+Dataset preparation generates one managed `<work_dir>/root_data_reference.xlsx` for the current dataset. It records
 generated IDs, labels, groups, masks, targets, source associations, and tensor metadata. It is not user input.
 
 For file-backed samples, source references identify the actual X-bearing files named by the input table.
@@ -741,7 +741,7 @@ evaluated against the same dataset under the same evaluation configuration. Requ
 and training inputs remain part of each supplied model and do not override the parent's evaluation settings.
 
 Root-side `add_dataset()` establishes the dataset and its complete realized partition schedule together. Validate
-dataset source paths against the current root working directory under Section 2.3 before accepting the configuration
+dataset source paths against the current root node working directory under Section 2.3 before accepting the configuration
 or persisting a new partition:
 
 - With an existing `split_path`, load the persisted partition and validate it against the supplied dataset. Do not
@@ -1673,7 +1673,7 @@ Service notifications follow the supplied external interface rather than an inve
 
 ### 5.4 Root restart and progress reconciliation
 
-Resume/recovery preserves the existing parent, root directory, scientific configuration, authoritative
+Resume/recovery preserves the existing parent, root node working directory, scientific configuration, authoritative
 `partition_schedules.xlsx`, and complete model-keyed root bundles. It does not invoke fresh initialization or create a
 new parent.
 
@@ -1727,11 +1727,11 @@ convenience API is optional. Explicit initialization/overwrite prepares the sele
 under Section 2.3. It must remain distinct from recovery and from worker-side dataset cleanup.
 
 Root-side user-provided dataset files are user-owned and their configured source paths must remain outside the
-Cocoonet-managed root working directory. Enforce Section 2.3's ownership invariant for both dataset-path and
-root-directory configuration changes, including copied configurations, before accepting the proposed configuration.
+Cocoonet-managed root node working directory. Enforce Section 2.3's ownership invariant for both dataset-path and
+root node working directory configuration changes, including copied configurations, before accepting the proposed configuration.
 Cocoonet stores references and its own dataset identity, generated sample IDs, configuration, task state, and partition
 information. It does not delete, move, rename, garbage-collect, or otherwise modify the underlying user source data.
-Dataset removal removes references/configuration only. Managed root contents may be cleared or replaced under the
+Dataset removal removes references/configuration only. Managed work-directory contents may be cleared or replaced under the
 existing persistence/overwrite rules without selective dataset-path preservation.
 The authoritative partition workbook is a Cocoonet-generated artifact under the partition/recovery contract, not an
 object of worker-dataset cleanup; it is not a user-provided dataset source path.
@@ -1757,7 +1757,7 @@ and readiness invariant.
 
 ### 6.2 Managed persistence layout and authority
 
-One root working directory represents one parent execution. Accepted results are keyed by model; attempt identity
+One root node working directory represents one parent execution. Accepted results are keyed by model; attempt identity
 remains in execution state, manifests, workbook metadata, failures, and protocol messages.
 
 `execution_state.csv` is a schema-controlled wide CSV with the exact header:
@@ -2383,9 +2383,10 @@ Model evaluation configuration changes require a new parent; worker-only changes
 which resumes when evaluation configuration is unchanged. Blank advice entries do not introduce alternatives to
 those resolved contracts.
 
-The root-directory overwrite question is resolved by the ownership invariant in Sections 2.3 and 6.1: configured
-user dataset source paths cannot equal or lie within the managed root. Validate both dataset-path and root-directory
-changes; reject a conflicting root before modifying persistent files. Managed-root overwrite therefore needs no
+The root node working directory overwrite question is resolved by the ownership invariant in Sections 2.3 and 6.1:
+configured user dataset source paths cannot equal or lie within the managed work directory. Validate dataset-path and
+work-directory changes; reject a conflicting working directory before modifying persistent files. Work-directory
+overwrite therefore needs no
 dataset-path exclusions. Dataset removal remains reference-only, and existing partition/recovery protections apply.
 
 The deferred decisions listed in Section 10 remain implementation boundaries, not permission to alter the resolved

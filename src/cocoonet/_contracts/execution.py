@@ -362,6 +362,8 @@ def validate_modeling_snapshot(value: ModelingSnapshot) -> None:  # noqa: C901
     model_ids: set[ModelId] = set()
     for index, (model_label, model) in enumerate(value.models.items()):
         validate_label(model_label, field=f"models.keys[{index}]")
+        if not model_label:
+            raise ValueError(f"models.keys[{index}] must be a nonempty string; got an empty string.")
         try:
             validate_model_reference(model)
         except (TypeError, ValueError) as error:
@@ -379,6 +381,8 @@ def validate_modeling_snapshot(value: ModelingSnapshot) -> None:  # noqa: C901
     worker_ids: set[WorkerId] = set()
     for index, (worker_label, worker_id) in enumerate(value.worker_ids.items()):
         validate_label(worker_label, field=f"worker_ids.keys[{index}]")
+        if not worker_label:
+            raise ValueError(f"worker_ids.keys[{index}] must be a nonempty string; got an empty string.")
         validate_identifier(worker_id, field=f"worker_ids[{index}]")
         if worker_id in worker_ids:
             raise ValueError(f"worker_ids[{index}] must be unique; duplicate ID prefix: {worker_id!r}.")

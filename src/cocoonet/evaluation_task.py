@@ -17,7 +17,7 @@ from cocoonet._contracts.execution import (
 from cocoonet._contracts.identity import ModelId, ParentId, ScalarLabel
 from cocoonet._contracts.state import ExecutionStatus
 from cocoonet._storage.paths import PathInput
-from cocoonet._storage.root_directory import prepare_root_directory
+from cocoonet._storage.work_directory import prepare_work_directory
 from cocoonet.configuration import WorkerConfiguration
 
 
@@ -172,18 +172,22 @@ class EvaluationTask:
 
     Parameters
     ----------
-    root_dir : PathInput
-        User-selected directory prepared as Cocoonet-managed root storage.
+    work_dir : PathInput
+        User-selected root node working directory prepared as Cocoonet-managed
+        storage.
     overwrite : bool, default=False
-        Whether an existing nonempty root may be cleared for fresh use.
+        Whether an existing nonempty root node working directory may be
+        cleared for fresh use.
 
     Raises
     ------
     TypeError
-        If the root or overwrite value has an incorrect runtime type.
+        If the working directory or overwrite value has an incorrect runtime
+        type.
     ValueError
-        If the root is unsafe, conflicts with a configured dataset source,
-        is an existing non-directory, or is nonempty without permission.
+        If the working directory is unsafe, conflicts with a configured
+        dataset source, is an existing non-directory, or is nonempty without
+        permission.
 
     Notes
     -----
@@ -206,19 +210,19 @@ class EvaluationTask:
 
     def __init__(
         self,
-        root_dir: PathInput,
+        work_dir: PathInput,
         /,
         *,
         overwrite: bool = False,
     ) -> None:
-        """Prepare fresh root storage and initialize empty configuration."""
-        layout = prepare_root_directory(
-            root_dir,
+        """Prepare the root node working directory and empty configuration."""
+        layout = prepare_work_directory(
+            work_dir,
             dataset_sources=(),
             overwrite=overwrite,
         )
 
-        self._work_dir = layout.root
+        self._work_dir = layout.work_dir
         self._consolidation_state = ConsolidationState.INITIALIZED
         self._parent_id = None
         self._execution_status = ExecutionStatus.NOT_STARTED
@@ -230,13 +234,13 @@ class EvaluationTask:
         self._next_model_number = 1
 
     @property
-    def root_dir(self) -> Path:
-        """Return the canonical Cocoonet-managed root directory.
+    def work_dir(self) -> Path:
+        """Return the canonical Cocoonet-managed root node working directory.
 
         Returns
         -------
         Path
-            Canonical physical root path returned by storage preparation.
+            Canonical physical path returned by storage preparation.
         """
         return self._work_dir
 
@@ -298,30 +302,33 @@ class EvaluationTask:
 
     def initialize(
         self,
-        root_dir: PathInput,
+        work_dir: PathInput,
         /,
         *,
         overwrite: bool = False,
     ) -> None:
-        """Prepare a fresh root while retaining prospective configuration.
+        """Prepare a fresh working directory while retaining configuration.
 
         Parameters
         ----------
-        root_dir : PathInput
-            User-selected directory to prepare as fresh managed root storage.
+        work_dir : PathInput
+            User-selected root node working directory to prepare as fresh
+            managed storage.
         overwrite : bool, default=False
-            Whether an existing nonempty target root may be cleared.
+            Whether an existing nonempty target working directory may be
+            cleared.
 
         Raises
         ------
         RuntimeError
             If execution is currently running.
         TypeError
-            If the root or overwrite value has an incorrect runtime type.
+            If the working directory or overwrite value has an incorrect
+            runtime type.
         ValueError
-            If the target root is unsafe, conflicts with a retained dataset
-            source, is an existing non-directory, or is nonempty without
-            permission.
+            If the target working directory is unsafe, conflicts with a
+            retained dataset source, is an existing non-directory, or is
+            nonempty without permission.
 
         Notes
         -----
@@ -332,13 +339,13 @@ class EvaluationTask:
         _require_configuration_editable(self._execution_status)
         dataset_sources = tuple(self._dataset_sources)
 
-        layout = prepare_root_directory(
-            root_dir,
+        layout = prepare_work_directory(
+            work_dir,
             dataset_sources=dataset_sources,
             overwrite=overwrite,
         )
 
-        self._work_dir = layout.root
+        self._work_dir = layout.work_dir
         self._consolidation_state = ConsolidationState.INITIALIZED
         self._parent_id = None
         self._execution_status = ExecutionStatus.NOT_STARTED

@@ -57,15 +57,15 @@ def test_evaluation_task_is_an_ordinary_mutable_class() -> None:
     assert "__slots__" not in EvaluationTask.__dict__
 
 
-def test_evaluation_task_constructs_missing_root_with_empty_configuration(
+def test_evaluation_task_constructs_missing_work_dir_with_empty_configuration(
     tmp_path: Path,
 ) -> None:
-    """Prepare a missing root and initialize empty prospective state."""
-    root = tmp_path / "root"
+    """Prepare a missing root node working directory and empty state."""
+    work_dir = tmp_path / "work-dir"
 
-    task = EvaluationTask(root)
+    task = EvaluationTask(work_dir)
 
-    assert task._work_dir == root.resolve()
+    assert task._work_dir == work_dir.resolve()
     assert task._consolidation_state is ConsolidationState.INITIALIZED
     assert task._parent_id is None
     assert task._execution_status is ExecutionStatus.NOT_STARTED
@@ -76,61 +76,61 @@ def test_evaluation_task_constructs_missing_root_with_empty_configuration(
     assert task._workers == []
     assert task._next_model_number == 1
 
-    assert {entry.name for entry in root.iterdir()} == {
+    assert {entry.name for entry in work_dir.iterdir()} == {
         "cocoonet_metadata.csv",
         "models_for_transfer",
         "attempt_results",
         "logs",
     }
-    assert not (root / "root_data_reference.xlsx").exists()
-    assert not (root / "partition_schedules.xlsx").exists()
-    assert not (root / "execution_configuration.csv").exists()
-    assert not (root / "execution_state.csv").exists()
+    assert not (work_dir / "root_data_reference.xlsx").exists()
+    assert not (work_dir / "partition_schedules.xlsx").exists()
+    assert not (work_dir / "execution_configuration.csv").exists()
+    assert not (work_dir / "execution_state.csv").exists()
 
 
-def test_evaluation_task_constructs_existing_empty_root(
+def test_evaluation_task_constructs_existing_empty_work_dir(
     tmp_path: Path,
 ) -> None:
     """Prepare an existing empty user-selected directory."""
-    root = tmp_path / "root"
-    root.mkdir()
+    work_dir = tmp_path / "work-dir"
+    work_dir.mkdir()
 
-    task = EvaluationTask(root)
+    task = EvaluationTask(work_dir)
 
-    assert task._work_dir == root.resolve()
-    assert (root / "cocoonet_metadata.csv").is_file()
+    assert task._work_dir == work_dir.resolve()
+    assert (work_dir / "cocoonet_metadata.csv").is_file()
 
 
-def test_evaluation_task_rejects_nonempty_root_without_overwrite(
+def test_evaluation_task_rejects_nonempty_work_dir_without_overwrite(
     tmp_path: Path,
 ) -> None:
     """Reject recovery-like construction and preserve existing contents."""
-    root = tmp_path / "root"
-    root.mkdir()
-    retained = root / "retained.txt"
+    work_dir = tmp_path / "work-dir"
+    work_dir.mkdir()
+    retained = work_dir / "retained.txt"
     retained.write_text("retained", encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"must be empty when overwrite=False"):
-        EvaluationTask(root)
+        EvaluationTask(work_dir)
 
     assert retained.read_text(encoding="utf-8") == "retained"
-    assert {entry.name for entry in root.iterdir()} == {"retained.txt"}
+    assert {entry.name for entry in work_dir.iterdir()} == {"retained.txt"}
 
 
-def test_evaluation_task_overwrite_prepares_fresh_root(
+def test_evaluation_task_overwrite_prepares_fresh_work_dir(
     tmp_path: Path,
 ) -> None:
-    """Clear an explicitly authorized root before fresh construction."""
-    root = tmp_path / "root"
-    root.mkdir()
-    stale = root / "stale.txt"
+    """Clear an authorized root node working directory before construction."""
+    work_dir = tmp_path / "work-dir"
+    work_dir.mkdir()
+    stale = work_dir / "stale.txt"
     stale.write_text("stale", encoding="utf-8")
 
-    task = EvaluationTask(root, overwrite=True)
+    task = EvaluationTask(work_dir, overwrite=True)
 
-    assert task._work_dir == root.resolve()
+    assert task._work_dir == work_dir.resolve()
     assert not stale.exists()
-    assert {entry.name for entry in root.iterdir()} == {
+    assert {entry.name for entry in work_dir.iterdir()} == {
         "cocoonet_metadata.csv",
         "models_for_transfer",
         "attempt_results",
@@ -138,28 +138,28 @@ def test_evaluation_task_overwrite_prepares_fresh_root(
     }
 
 
-def test_evaluation_task_resolves_relative_root_from_console_directory(
+def test_evaluation_task_resolves_relative_work_dir_from_console_directory(
     tmp_path: Path,
 ) -> None:
-    """Resolve a relative root from the current console working directory."""
+    """Resolve a relative work directory from the console working directory."""
     previous_directory = Path.cwd()
     os.chdir(tmp_path)
     try:
-        task = EvaluationTask(Path("relative-root"))
+        task = EvaluationTask(Path("relative-work-dir"))
     finally:
         os.chdir(previous_directory)
 
-    assert task._work_dir == (tmp_path / "relative-root").resolve()
+    assert task._work_dir == (tmp_path / "relative-work-dir").resolve()
 
 
 def test_evaluation_task_inspection_properties_return_owned_values(
     tmp_path: Path,
 ) -> None:
-    """Expose canonical root and lifecycle facts without filesystem changes."""
-    task = EvaluationTask(tmp_path / "root")
+    """Expose the canonical work directory and lifecycle facts without I/O."""
+    task = EvaluationTask(tmp_path / "work-dir")
     entries_before = tuple(sorted(entry.name for entry in task._work_dir.iterdir()))
 
-    assert task.root_dir == task._work_dir
+    assert task.work_dir == task._work_dir
     assert task.state is ConsolidationState.INITIALIZED
     assert task.parent_id is None
     assert tuple(sorted(entry.name for entry in task._work_dir.iterdir())) == entries_before
@@ -168,7 +168,7 @@ def test_evaluation_task_inspection_properties_return_owned_values(
 @pytest.mark.parametrize(
     ("name", "replacement"),
     [
-        ("root_dir", Path("replacement")),
+        ("work_dir", Path("replacement")),
         ("state", ConsolidationState.CONSOLIDATED),
         ("parent_id", ParentId("replacement")),
     ],
@@ -179,12 +179,12 @@ def test_evaluation_task_inspection_properties_are_read_only(
     replacement: object,
 ) -> None:
     """Reject assignment through every public inspection property."""
-    task = EvaluationTask(tmp_path / "root")
+    task = EvaluationTask(tmp_path / "work-dir")
 
     with pytest.raises(AttributeError):
         task.__setattr__(name, replacement)
 
-    assert task.root_dir == task._work_dir
+    assert task.work_dir == task._work_dir
     assert task.state is ConsolidationState.INITIALIZED
     assert task.parent_id is None
 
@@ -193,14 +193,14 @@ def test_evaluation_task_snapshot_returns_fresh_valid_empty_view(
     tmp_path: Path,
 ) -> None:
     """Return independent immutable mappings without storage changes."""
-    task = EvaluationTask(tmp_path / "root")
-    entries_before = tuple(sorted(entry.name for entry in task.root_dir.iterdir()))
+    task = EvaluationTask(tmp_path / "work-dir")
+    entries_before = tuple(sorted(entry.name for entry in task.work_dir.iterdir()))
 
     first = task.snapshot()
     second = task.snapshot()
 
     assert first is not second
-    assert first.work_dir == str(task.root_dir)
+    assert first.work_dir == str(task.work_dir)
     assert first.consolidation_state is ConsolidationState.INITIALIZED
     assert first.data_partition is None
     assert first.evaluation_config is None
@@ -211,14 +211,14 @@ def test_evaluation_task_snapshot_returns_fresh_valid_empty_view(
     assert first.worker_ids is not second.worker_ids
     assert not first.models
     assert not first.worker_ids
-    assert tuple(sorted(entry.name for entry in task.root_dir.iterdir())) == entries_before
+    assert tuple(sorted(entry.name for entry in task.work_dir.iterdir())) == entries_before
 
 
 def test_evaluation_task_snapshot_preserves_registry_order_and_associations(
     tmp_path: Path,
 ) -> None:
     """Map labels to immutable identities in registration order."""
-    task = EvaluationTask(tmp_path / "root")
+    task = EvaluationTask(tmp_path / "work-dir")
     first = _RegisteredModel(
         reference=ModelReference(
             model_id=ModelId("1"),
@@ -265,7 +265,7 @@ def test_evaluation_task_snapshot_validates_owned_state(
     tmp_path: Path,
 ) -> None:
     """Reject an invalid relationship among authoritative fields."""
-    task = EvaluationTask(tmp_path / "root")
+    task = EvaluationTask(tmp_path / "work-dir")
     task._parent_id = ParentId("unexpected-parent")
 
     with pytest.raises(
@@ -278,13 +278,13 @@ def test_evaluation_task_snapshot_validates_owned_state(
 def test_evaluation_task_initialize_retains_prospective_configuration(
     tmp_path: Path,
 ) -> None:
-    """Prepare a new root and retain all prospective configuration."""
-    first_root = tmp_path / "first-root"
-    second_root = tmp_path / "second-root"
+    """Prepare a new work directory and retain prospective configuration."""
+    first_work_dir = tmp_path / "first-work-dir"
+    second_work_dir = tmp_path / "second-work-dir"
     source = tmp_path / "dataset-source.csv"
     source.write_text("sample_label,y\nsample,1\n", encoding="utf-8")
 
-    task = EvaluationTask(first_root)
+    task = EvaluationTask(first_work_dir)
     partition = PartitionReference(
         partition_id=PartitionId("partition-a"),
         dataset_id=DatasetId("dataset-a"),
@@ -322,9 +322,9 @@ def test_evaluation_task_initialize_retains_prospective_configuration(
     models = task._models
     workers = task._workers
 
-    task.initialize(second_root)
+    task.initialize(second_work_dir)
 
-    assert task.root_dir == second_root.resolve()
+    assert task.work_dir == second_work_dir.resolve()
     assert task.state is ConsolidationState.INITIALIZED
     assert task.parent_id is None
     assert task._execution_status is ExecutionStatus.NOT_STARTED
@@ -337,7 +337,7 @@ def test_evaluation_task_initialize_retains_prospective_configuration(
     assert task._workers == [worker]
     assert task._next_model_number == 2
     assert source.read_text(encoding="utf-8") == "sample_label,y\nsample,1\n"
-    assert {entry.name for entry in second_root.iterdir()} == {
+    assert {entry.name for entry in second_work_dir.iterdir()} == {
         "cocoonet_metadata.csv",
         "models_for_transfer",
         "attempt_results",
@@ -349,7 +349,7 @@ def test_evaluation_task_initialize_failure_preserves_all_fields(
     tmp_path: Path,
 ) -> None:
     """Leave task state unchanged when fresh preparation is rejected."""
-    task = EvaluationTask(tmp_path / "current-root")
+    task = EvaluationTask(tmp_path / "current-work-dir")
     task._consolidation_state = ConsolidationState.UNCONSOLIDATED
     task._parent_id = ParentId("existing-parent")
     task._execution_status = ExecutionStatus.INTERRUPTED
@@ -371,8 +371,8 @@ def test_evaluation_task_initialize_failure_preserves_all_fields(
 def test_evaluation_task_initialize_rejects_running_before_filesystem_work(
     tmp_path: Path,
 ) -> None:
-    """Apply the active-execution guard before preparing the target root."""
-    task = EvaluationTask(tmp_path / "current-root")
+    """Apply the active-execution guard before preparing the target work directory."""
+    task = EvaluationTask(tmp_path / "current-work-dir")
     task._execution_status = ExecutionStatus.RUNNING
     target = tmp_path / "unused-target"
 
@@ -382,5 +382,5 @@ def test_evaluation_task_initialize_rejects_running_before_filesystem_work(
     ):
         task.initialize(target)
 
-    assert task.root_dir == (tmp_path / "current-root").resolve()
+    assert task.work_dir == (tmp_path / "current-work-dir").resolve()
     assert not target.exists()

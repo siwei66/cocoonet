@@ -17,20 +17,20 @@ workers use synchronized datasets. Scientific auditability, transparency, and re
   Successful construction/initialization sets `state = initialized`. Initialization is distinct from recovery.
   Accept absolute and relative working-directory specifications. Resolve an absolute path directly and resolve a
   relative path from the current console working directory. Use the user-provided directory directly.
-  The root working directory is Cocoonet-managed persistent storage; configured user-owned dataset source paths must
+  The root node working directory is Cocoonet-managed persistent storage; configured user-owned dataset source paths must
   remain outside it. Validate this ownership boundary before preparing or clearing the directory.
-- Reject an unsafe managed root before creating, changing, or deleting any persistent file. Protected locations include
+- Reject an unsafe root node working directory before creating, changing, or deleting any persistent file. Protected locations include
   filesystem anchors, Python installation and package-installation directories, the installed Cocoonet package
   directory, and the complete Cocoonet source repository tree. Reject a filesystem anchor itself. For the other listed
-  risky locations, reject a proposed root that equals, contains, or is contained within the location. Do not reject an
+  risky locations, reject a proposed working directory that equals, contains, or is contained within the location. Do not reject an
   otherwise safe path merely because it is absolute. Apply the checks to canonical physical locations so path aliases
   cannot bypass them.
-- Reject a dataset source path equal to or contained within the root working directory. Enforce this configuration
-  invariant in both directions: validate dataset addition/path changes against the current root, and validate root
+- Reject a dataset source path equal to or contained within the root node working directory. Enforce this configuration
+  invariant in both directions: validate dataset addition/path changes against the current working directory, and validate work-directory
   initialization/change/reassignment against every existing configured dataset source path, including paths retained
   by a copied instance. A conflicting root configuration fails explicitly without modifying persistent files;
   a conflicting dataset configuration also fails explicitly. An outside path satisfies this ownership check.
-  Managed root contents may be cleared under the existing persistence/overwrite rules without dataset-path exclusions.
+  Managed work-directory contents may be cleared under the existing persistence/overwrite rules without dataset-path exclusions.
 - Incomplete configuration is valid before run: dataset setup may be pending and model/worker counts may be zero.
   Ordinary configuration edits change in-memory attributes only; they do not create, modify, or delete files.
   `add_dataset()` is the explicit artifact-preparation exception: it realizes or validates and persists the current
@@ -78,14 +78,14 @@ workers use synchronized datasets. Scientific auditability, transparency, and re
   initialization may replace the selected working directory with the user's overwrite opt-in; it is not recovery.
 
 ```text
-constructor / initialize(root_dir, ...) -> initialized
+constructor / initialize(work_dir, ...) -> initialized
 initialized + configuration edits      -> initialized
 initialized + run()                    -> persist configuration -> new parent -> consolidated
 consolidated + unchanged evaluation    -> same parent / resume, with or without worker changes
 consolidated + permitted evaluation edit -> unconsolidated
 unconsolidated + run()                 -> reject
 unconsolidated + initialize(...)       -> initialized -> fresh run permitted
-copy(evaluation_task)                -> same attributes, root directory, and lifecycle state
+copy(evaluation_task)                -> same attributes, root node working directory, and lifecycle state
 ```
 
 Attempt termination has three distinct meanings. `interrupted` records parent interruption and is terminal for that
@@ -258,7 +258,7 @@ results remain associated with their original parent and cannot enter another pa
 - Input standardization and storage/transfer translation are separate. Standardization applies the field
   contracts above. Translation changes only the storage representation of already-standardized data and
   must preserve its values, sample associations, and semantics exactly.
-- Dataset preparation creates exactly one managed `<root_dir>/root_data_reference.xlsx` for the computation's
+- Dataset preparation creates exactly one managed `<work_dir>/root_data_reference.xlsx` for the computation's
   current dataset. It contains generated sample IDs and standardized labels, groups, masks, targets, source
   associations, and tensor metadata.
 - For file-backed input, the user input table identifies the actual file or files containing each sample's
@@ -774,7 +774,7 @@ Before planning or implementing a phase, process project guidance in this order:
   preparation as applicable. Mandatory release cleanup remains applicable.
 - Each representation contains at least one source dataset file. Source references are dataset-root-relative paths
   interpreted with its `dataset_id`, independently of machine-specific storage paths.
-- Root user-provided dataset source paths remain outside the Cocoonet-managed root working directory, under the user's
+- Root user-provided dataset source paths remain outside the Cocoonet-managed root node working directory, under the user's
   filesystem control. Apply the bidirectional configuration validation in Project Overview. Cocoonet manages references
   and its own identity/configuration/partition/task metadata; it must not delete, move, rename, garbage-collect, or
   otherwise modify the underlying user source data. Dataset removal drops configuration references only. Root partition
@@ -819,7 +819,7 @@ Before planning or implementing a phase, process project guidance in this order:
   evidence: persist and validate exact identities and associations inside the artifacts. Hashes used for integrity,
   change detection, or another documented purpose remain permitted.
 - Preserve the logical parent/model-unit/attempt hierarchy in execution metadata and lifecycle state. Filesystem
-  persistence deliberately compresses that hierarchy: one root working directory represents one parent, so it has no
+  persistence deliberately compresses that hierarchy: one root node working directory represents one parent, so it has no
   parent subdirectory, and accepted results are keyed by model rather than by attempt. Attempt identity remains in
   execution state, bundle metadata, failure records, manifests, and protocol messages.
 - Use this root persistence layout:

@@ -10,8 +10,8 @@ This roadmap plans only Phase 2 of [the project roadmap](../roadmap.md). It appl
 
 Phase 2 establishes the small private storage boundary needed by later phases:
 
-- reject unsafe managed roots and root/dataset-source ownership conflicts before any persistent mutation;
-- prepare or reopen visible root storage without touching user-owned dataset sources;
+- reject unsafe root node working directories and work-directory/dataset-source ownership conflicts before mutation;
+- prepare or reopen visible root node storage without touching user-owned dataset sources;
 - construct the fixed semantic root and worker paths;
 - persist compatibility metadata and lifecycle evidence in schema-controlled UTF-8 CSV;
 - publish one file or one immutable result-bundle directory atomically; and
@@ -32,9 +32,9 @@ schema, invariant, or failure rule requires a roadmap amendment before implement
 Phase 2 implements:
 
 1. canonical physical-path resolution;
-2. protected-location discovery and managed-root validation;
-3. dataset-source/root ownership validation in both configuration directions;
-4. fresh root preparation and existing-root opening;
+2. protected-location discovery and managed-work-directory validation;
+3. dataset-source/work-directory ownership validation in both configuration directions;
+4. fresh work-directory preparation and existing-work-directory opening;
 5. exact root and worker layout path builders;
 6. the `cocoonet_metadata.csv` schema and codec;
 7. a minimal snapshot and CSV codec for durable Phase 1 execution evidence;
@@ -81,8 +81,8 @@ implementation must not import pandas, NumPy, torch, or dill.
 
 Phase 2 is complete only when:
 
-- every destructive root operation first validates the canonical physical target and all configured dataset sources;
-- missing, empty, nonempty, overwrite, non-directory, symlink/alias, and protected-root cases behave as specified;
+- every destructive work-directory operation first validates the canonical physical target and all configured sources;
+- missing, empty, nonempty, overwrite, non-directory, symlink/alias, and protected-work-directory cases behave as specified;
 - all constructed paths exactly match Architecture Section 6.2;
 - no hidden `.cocoonet` store, hashed artifact filename, or opaque path identity is introduced;
 - compatibility metadata and execution state round-trip through strict deterministic UTF-8 CSV;
@@ -105,7 +105,7 @@ Phase 2 is complete only when:
 Resolution must also work for a missing final path: resolve the nearest existing ancestor physically, then append the
 missing lexical suffix without creating it.
 
-Managed-root specifications may be absolute or relative. Resolve an absolute root directly and resolve a relative root
+Root node working directory specifications may be absolute or relative. Resolve an absolute path directly and a relative path
 from the current console working directory. Use the user-provided directory directly. An otherwise safe absolute path
 remains valid.
 
@@ -116,20 +116,21 @@ Validation must not create, clear, rename, or remove any path.
 
 ### 4.2 Dataset-source ownership
 
-For a candidate managed root `R` and every configured dataset source `S`:
+For a candidate root node working directory `WD` and every configured dataset source `S`:
 
-- reject `S == R`;
-- reject `S` contained in `R`;
-- allow `R` contained in `S` for this ownership rule alone; and
+- reject `S == WD`;
+- reject `S` contained in `WD`;
+- allow `WD` contained in `S` for this ownership rule alone; and
 - allow disjoint paths.
 
 The permitted inverse containment is intentional: the contract protects user source data from being inside a directory
-that Cocoonet may clear. Protected-location validation remains independent and may still reject `R`.
+that Cocoonet may clear. Protected-location validation remains independent and may still reject `WD`.
 
-The same validator is used when adding or changing a source and when initializing, changing, or reassigning a root.
-Validate the complete source collection before mutation. Report the conflicting source and canonical root.
+The same validator is used when adding or changing a source and when initializing, changing, or reassigning a work
+directory. Validate the complete source collection before mutation. Report the conflicting source and canonical work
+directory.
 
-### 4.3 Protected managed roots
+### 4.3 Protected root node working directories
 
 Protected locations comprise:
 
@@ -139,11 +140,11 @@ Protected locations comprise:
 - the installed Cocoonet package directory; and
 - the complete Cocoonet source repository tree when running from a source checkout.
 
-The candidate root is validated against canonical physical locations before any write. Reject equality with a
+The candidate work directory is validated against canonical physical locations before any write. Reject equality with a
 filesystem anchor. For every other listed risky location, reject equality, a candidate ancestor, or a candidate
-descendant. Report the candidate root and protected location; do not reject a path solely because it is absolute.
+descendant. Report the candidate work directory and protected location; do not reject a path solely because it is absolute.
 
-### 4.4 Root preparation and opening
+### 4.4 Root node working directory preparation and opening
 
 Fresh preparation has these outcomes:
 
@@ -156,15 +157,15 @@ Fresh preparation has these outcomes:
 
 Rules:
 
-- Validate the root and every source before creating or clearing anything.
-- Clearing is confined to the already validated root. Do not follow directory symlinks or junctions into their targets.
+- Validate the work directory and every source before creating or clearing anything.
+- Clearing is confined to the validated work directory. Do not follow directory symlinks or junctions into targets.
 - Never modify, move, rename, or delete a dataset source.
 - Fresh preparation creates only the Phase 2-owned entries: `cocoonet_metadata.csv`,
   `models_for_transfer/`, `attempt_results/`, and `logs/`.
 - Later phases create dataset, configuration, state, model, and result artifacts when their owning operation succeeds.
 - A preparation failure must not be reported as success. Phase 2 does not promise rollback of an arbitrary operating
   system failure during an explicitly authorized clear.
-- Opening an existing root is non-destructive. It requires a directory and a valid final `cocoonet_metadata.csv`.
+- Opening an existing work directory is non-destructive. It requires a directory and valid final metadata.
   A stale `cocoonet_metadata.csv.partial` is ignored when the final file is valid and is never promoted or deleted.
 - Fresh preparation and opening/recovery remain distinct operations.
 
@@ -175,7 +176,7 @@ Path builders return paths only; they do not create directories or validate arti
 Root layout:
 
 ~~~text
-<root>/
+<work_dir>/
   cocoonet_metadata.csv
   root_data_reference.xlsx
   partition_schedules.xlsx
@@ -288,6 +289,7 @@ src/cocoonet/_storage/
   paths.py
   publication.py
   metadata.py
+  work_directory.py
   execution_state.py
   logging.py
 ~~~
@@ -304,7 +306,7 @@ type PathInput = str | os.PathLike[str]
 
 @dataclass(frozen=True, slots=True)
 class RootStorageLayout:
-    root: Path
+    work_dir: Path
     metadata_csv: Path
     root_data_reference_xlsx: Path
     partition_schedules_xlsx: Path
@@ -318,7 +320,7 @@ class RootStorageLayout:
 
 @dataclass(frozen=True, slots=True)
 class WorkerStorageLayout:
-    root: Path
+    work_dir: Path
     datasets: Path
     models: Path
     results: Path
@@ -479,7 +481,7 @@ attributes.
 def resolve_physical_path(path: PathInput, /) -> Path
 ~~~
 
-Return the canonical physical path without mutation, including for a missing suffix. Managed-root callers preserve an
+Return the canonical physical path without mutation, including for a missing suffix. Managed-work-directory callers preserve an
 absolute input and resolve a relative input from the current console working directory.
 
 ~~~python
@@ -490,37 +492,37 @@ Return deterministic, deduplicated canonical protected paths for the current int
 installed Cocoonet package, source checkout, and relevant filesystem anchors. It performs discovery only.
 
 ~~~python
-def validate_managed_root(root: PathInput, /) -> Path
+def validate_managed_work_dir(work_dir: PathInput, /) -> Path
 ~~~
 
-Canonicalize and validate one absolute or relative root against every discovered protected location using the approved
-matrix. A private pure containment helper accepts explicit canonical paths for direct tests; production validation
-cannot replace or omit discovered protections.
+Canonicalize and validate one absolute or relative root node working directory against every discovered protected
+location using the approved matrix. A private pure containment helper accepts explicit canonical paths for direct
+tests; production validation cannot replace or omit discovered protections.
 
 ~~~python
 def validate_dataset_source_ownership(
-    root: PathInput,
+    work_dir: PathInput,
     source: PathInput,
     /,
 ) -> tuple[Path, Path]
 ~~~
 
-Validate one canonical root/source pair and return the canonical paths.
+Validate one canonical root-node-work-directory/source pair and return the canonical paths.
 
 ~~~python
-def validate_root_ownership(
-    root: PathInput,
+def validate_work_dir_ownership(
+    work_dir: PathInput,
     sources: Iterable[PathInput],
     /,
 ) -> tuple[Path, tuple[Path, ...]]
 ~~~
 
-Validate the root and the entire materialized source collection before mutation. Reject duplicate canonical sources so
-a caller cannot accidentally persist ambiguous duplicate associations.
+Validate the root node working directory and the entire materialized source collection before mutation. Reject
+duplicate canonical sources so a caller cannot accidentally persist ambiguous duplicate associations.
 
 ~~~python
-def build_root_storage_layout(root: PathInput, /) -> RootStorageLayout
-def build_worker_storage_layout(root: PathInput, /) -> WorkerStorageLayout
+def build_root_storage_layout(work_dir: PathInput, /) -> RootStorageLayout
+def build_worker_storage_layout(work_dir: PathInput, /) -> WorkerStorageLayout
 def build_worker_parent_storage_layout(
     layout: WorkerStorageLayout,
     parent_id: ParentId,
@@ -612,8 +614,8 @@ Capture current version data, validate the record, and encode/decode the exact s
 cross-node compatibility; later worker connection code owns that comparison.
 
 ~~~python
-def prepare_root_directory(
-    root: PathInput,
+def prepare_work_directory(
+    work_dir: PathInput,
     /,
     *,
     dataset_sources: Iterable[PathInput] = (),
@@ -622,11 +624,11 @@ def prepare_root_directory(
 ~~~
 
 Validate all ownership first, apply the fresh-preparation matrix, create only Phase 2-owned directories, write current
-root metadata through immutable staged publication, and return the layout.
+root node metadata through immutable staged publication, and return the layout.
 
 ~~~python
-def open_root_directory(
-    root: PathInput,
+def open_work_directory(
+    work_dir: PathInput,
     /,
     *,
     dataset_sources: Iterable[PathInput] = (),
@@ -700,7 +702,7 @@ Phase 2 creates no worker runtime.
 ### 7.1 Exception policy
 
 - Incorrect Python argument types raise `TypeError` with the field name, expected type, and observed type.
-- Invalid values, unsafe roots, ownership conflicts, malformed schemas, and invalid identifiers raise `ValueError` with
+- Invalid values, unsafe work directories, ownership conflicts, malformed schemas, and invalid identifiers raise `ValueError` with
   the relevant path or field and the violated invariant.
 - Operational filesystem, encoding, synchronization, and publication failures raise `StorageError` with the operation
   and exact target path, chaining the original exception.
@@ -740,11 +742,11 @@ filesystem calls merely to force operating-system failures.
 Test:
 
 - existing and missing-suffix canonical resolution;
-- direct absolute-root resolution and direct relative-root resolution from the current console working directory;
+- direct absolute-work-directory and relative-work-directory resolution from the current console working directory;
 - alias, symlink, case-normalization, equality, and component-aware containment;
 - direct filesystem-anchor rejection, each risky protected-location containment direction, and acceptance of an
   otherwise safe absolute path;
-- source equal to root, source below root, root below source, and disjoint paths;
+- source equal to work directory, source below it, work directory below source, and disjoint paths;
 - validation of all sources before any mutation;
 - non-string path-like values and embedded NUL rejection;
 - exact root/worker paths;
@@ -778,16 +780,16 @@ Test:
 - invalid version components and release level; and
 - no executable or dill deserialization path.
 
-### 8.4 `tests/storage/test_root_directory.py`
+### 8.4 `tests/storage/test_work_directory.py`
 
 Test:
 
 - missing, empty, nonempty, overwrite, and non-directory cases;
-- unsafe/protected root rejection before mutation;
+- unsafe/protected root node working directory rejection before mutation;
 - source conflict rejection before mutation;
 - outside user sources remaining byte-for-byte unchanged;
-- explicit clearing confined to the validated root;
-- root symlink/junction and nested-link safety where supported;
+- explicit clearing confined to the validated root node working directory;
+- work-directory symlink/junction and nested-link safety where supported;
 - exact initial directories and absence of later-phase artifacts;
 - final metadata publication;
 - non-destructive opening;
@@ -838,7 +840,7 @@ Each numbered item is one approval unit unless the user explicitly approves a sm
 2. Add path/layout records with no I/O.
 3. Implement `resolve_physical_path()` and containment primitives.
 4. Implement protected-location discovery.
-5. Implement managed-root validation.
+5. Implement managed-work-directory validation.
 6. Implement dataset-source and aggregate ownership validation.
 7. Implement semantic identifier validators.
 8. Implement root layout construction.
@@ -852,8 +854,8 @@ Each numbered item is one approval unit unless the user explicitly approves a sm
 16. Implement exact staged-bundle discard.
 17. Add `NodeRole`, `CocoonetMetadata`, and their validators.
 18. Implement compatibility metadata capture and CSV codec.
-19. Implement fresh root preparation.
-20. Implement non-destructive root opening.
+19. Implement fresh root node working directory preparation.
+20. Implement non-destructive root node working directory opening.
 21. Add `ExecutionStateRecord` and record-sequence validation using the established Phase 1 `AttemptStatus`.
 22. Implement deterministic six-column execution-state CSV encoding.
 23. Implement strict six-column execution-state CSV decoding.
@@ -904,9 +906,9 @@ remain usable: `ArtifactId` identifies the immutable result bundle, and Phase 2 
 
 ## 12. Consistency report
 
-### 12.1 Resolved protected-root rule
+### 12.1 Resolved protected-work-directory rule
 
-Absolute and relative managed-root specifications are permitted. Absolute paths resolve directly. Relative paths
+Absolute and relative root node working directory specifications are permitted. Absolute paths resolve directly. Relative paths
 resolve from the current console working directory, and the user-provided directory is used directly. Reject a
 filesystem anchor itself. For Python installation/package-installation directories, the installed
 Cocoonet package directory, and the complete source repository, reject equality, a candidate ancestor, or a candidate

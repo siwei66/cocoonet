@@ -37,7 +37,7 @@ the root development and architecture documents.
 Phase 3 implements:
 
 1. the public mutable `EvaluationTask` class and its top-level package export;
-2. construction with a required user-provided root directory and `overwrite=False` by default;
+2. construction with a required user-provided root node working directory and `overwrite=False` by default;
 3. explicit fresh `initialize()` using Phase 2 ownership and protected-root checks;
 4. one optional dataset/partition/evaluation slot, initially empty and not publicly populated until Phase 4;
 5. an ordered registry of opaque model inputs and their `ModelReference` metadata;
@@ -144,9 +144,10 @@ process, or result bundle. Later runtime components own those facts.
 
 ### 4.2 Fresh initialization and root ownership
 
-`EvaluationTask(root_dir, overwrite=False)` and `initialize(root_dir, overwrite=False)` use
-`prepare_root_directory()` from Phase 2. They accept absolute and relative path-like specifications through that
-boundary, use the canonical returned `RootStorageLayout.root`, and never reproduce root-safety logic locally.
+`EvaluationTask(work_dir, overwrite=False)` and `initialize(work_dir, overwrite=False)` use
+`prepare_work_directory()` from Phase 2. They accept absolute and relative path-like specifications through that
+boundary, use the canonical returned `RootStorageLayout.work_dir`, and never reproduce work-directory safety logic
+locally.
 
 Before mutation, initialization passes the complete currently configured physical dataset-source collection to Phase
 2. In Phase 3 that collection is empty because no public dataset installation exists; the field and call path are
@@ -164,7 +165,7 @@ Fresh initialization retains prospective model, worker, and future prepared-data
 or copy Phase 4 artifacts. Phase 4 must integrate artifact publication before it can install a nonempty dataset slot
 that survives initialization as runnable configuration. Until then the slot remains empty in normal Phase 3 use.
 
-If directory preparation fails, the `EvaluationTask` object's existing root, configuration, counters, and lifecycle fields
+If directory preparation fails, the `EvaluationTask` object's existing work directory, configuration, counters, and lifecycle fields
 remain unchanged. Phase 2's documented operating-system failure behavior for an explicitly authorized filesystem clear
 still applies to the target directory.
 
@@ -298,7 +299,7 @@ of already validated Python containers. These methods perform no persistent I/O.
 `copy.copy(evaluation_task)` is the only Phase 3 copy API. `EvaluationTask.__copy__()` bypasses `__init__`, performs no root
 validation or preparation, and creates no parent/model/worker identity. The copy receives:
 
-- the same immutable root layout value and root directory;
+- the same immutable root layout value and root node working directory;
 - the same consolidation state, parent identity, execution observation, partition/evaluation references, and source
   path tuple;
 - new model and worker registry containers preserving order;
@@ -394,7 +395,7 @@ _workers: list[WorkerConfiguration]
 _next_model_number: int
 ```
 
-The class stores the canonical `RootStorageLayout.root` returned by Phase 2 as `_work_dir`; it does not retain a second
+The class stores the canonical `RootStorageLayout.work_dir` returned by Phase 2 as `_work_dir`; it does not retain a second
 root representation. It does not use `slots`, allowing later approved phases to add owned runtime/configuration fields
 without a storage-layout migration. It does not expose the mutable lists. No duplicate mapping is maintained beside
 each list; `snapshot()` derives immutable mappings on demand. The small ordered registries use direct scans, avoiding
@@ -445,14 +446,14 @@ In `src/cocoonet/evaluation_task.py`:
 class EvaluationTask:
     def __init__(
         self,
-        root_dir: PathInput,
+        work_dir: PathInput,
         /,
         *,
         overwrite: bool = False,
     ) -> None
 
     @property
-    def root_dir(self) -> Path
+    def work_dir(self) -> Path
 
     @property
     def state(self) -> ConsolidationState
@@ -464,7 +465,7 @@ class EvaluationTask:
 
     def initialize(
         self,
-        root_dir: PathInput,
+        work_dir: PathInput,
         /,
         *,
         overwrite: bool = False,
@@ -474,7 +475,7 @@ class EvaluationTask:
 ```
 
 Constructor behavior is real fresh preparation, not recovery. `initialize()` requires an explicit directory argument;
-reinitializing the current root therefore remains an explicit call with the same path and, when nonempty, explicit
+reinitializing the current work directory therefore remains an explicit call with the same path and, when nonempty, explicit
 `overwrite=True`. There is no implicit current-directory fallback.
 
 `snapshot()` constructs and validates exactly:
@@ -502,7 +503,7 @@ ModelingSnapshot(
 ```
 
 The newly built dictionaries preserve registration order; `MappingProxyType` prevents mutation of the snapshot's
-nested mappings. `root_dir` returns `_work_dir`, the canonical `Path` returned by Phase 2. `state` and `parent_id`
+nested mappings. `work_dir` returns `_work_dir`, the canonical `Path` returned by Phase 2. `state` and `parent_id`
 expose lifecycle facts without permitting assignment.
 
 ### 6.2 Model registry API
@@ -632,7 +633,7 @@ helpers retain source docstrings without becoming public API.
 ### 7.1 `EvaluationTask.__init__`
 
 - Validate `overwrite` through the Phase 2 call path.
-- Call `prepare_root_directory(root_dir, dataset_sources=(), overwrite=overwrite)` exactly once.
+- Call `prepare_work_directory(work_dir, dataset_sources=(), overwrite=overwrite)` exactly once.
 - Assign object fields only after successful preparation.
 - Set empty registries, no dataset/evaluation, model counter `1`, initialized state, no parent, and `NOT_STARTED`.
 - Do not call another public mutation method or create a worker/model/dataset artifact.
@@ -641,7 +642,7 @@ helpers retain source docstrings without becoming public API.
 
 - Apply the active-execution guard before filesystem work.
 - Snapshot the current prospective configuration fields and full dataset source tuple.
-- Call `prepare_root_directory()` with the proposed root and retained sources.
+- Call `prepare_work_directory()` with the proposed root node working directory and retained sources.
 - Only after success, replace `_work_dir`, set initialized/no-parent/not-started, and retain prospective configuration,
   registry order, and next model counter.
 - Do not open/recover old state, assign model IDs again, or alter source files.
@@ -768,14 +769,14 @@ Test:
 
 - construction with a missing and existing empty root;
 - explicit overwrite behavior delegated to real Phase 2 preparation;
-- canonical absolute `root_dir` after relative input;
+- canonical absolute `work_dir` after relative input;
 - initial state, parent, snapshot, counter behavior, and empty registries;
 - exact Phase 2 initial filesystem entries and absence of dataset/execution/worker artifacts;
 - construction failure leaving no partially returned object;
 - fresh initialization to a new root;
 - failed initialization leaving object fields unchanged;
 - successful initialization retaining prospective registries/counter and resetting state/parent/execution observation;
-- no open/recovery behavior for a nonempty existing root without overwrite;
+- no open/recovery behavior for a nonempty existing work directory without overwrite;
 - `snapshot()` returning a new validated immutable record; and
 - exact top-level public exports with no private helper export.
 
@@ -832,7 +833,7 @@ Test:
 ### 10.7 Existing regression coverage and checks
 
 - Run the directly affected Phase 1 execution/data/state contract tests.
-- Run the Phase 2 path/root-directory tests used by construction and initialization.
+- Run the Phase 2 path/work-directory tests used by construction and initialization.
 - Run the full configured pytest suite in an environment containing declared dependencies.
 - Run mypy, Black `--check`, and Ruff under `pyproject.toml`.
 - Add no suppression, dependency, documentation-build claim, or unrelated test suite.
@@ -854,7 +855,7 @@ its production unit.
 9. Implement `prepare_parent_evaluation()` and complete/incomplete snapshot tests.
 10. Declare the mutable `EvaluationTask` class and owned field annotations without behavior.
 11. Implement `EvaluationTask.__init__()` with real Phase 2 fresh preparation and direct tests.
-12. Implement `root_dir`, `state`, and `parent_id` read-only properties as an explicitly approved inspection bundle, or
+12. Implement `work_dir`, `state`, and `parent_id` read-only properties as an explicitly approved inspection bundle, or
     separately if bundle approval is not given.
 13. Implement `snapshot()` and direct validation/immutability tests.
 14. Implement `initialize()` and direct safe-fresh-initialization tests.
@@ -911,7 +912,7 @@ committed in Phase 3. Phases 6 and 13 must establish and consume a fixed prepare
 
 - Cocoonet's core public API and mutable prospective configuration object is named `EvaluationTask`; construction
   always means fresh preparation and does not create a committed parent evaluation task.
-- `initialize()` requires an explicit root path and is also fresh preparation, never recovery.
+- `initialize()` requires an explicit root node working directory path and is also fresh preparation, never recovery.
 - The immutable Phase 1 root-side modeling record is named `ModelingSnapshot` with fields `work_dir`,
   `consolidation_state`, `data_partition`, `evaluation_config`, `models`, `worker_ids`, and `parent_id`.
   `models` is a fresh immutable insertion-ordered `MappingProxyType` from `model_label` to `ModelReference`, and
