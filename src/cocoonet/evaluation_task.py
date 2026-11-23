@@ -227,3 +227,37 @@ class EvaluationTask:
         self._models = []
         self._workers = []
         self._next_model_number = 1
+
+    @property
+    def root_dir(self) -> Path:
+        """Return the canonical Cocoonet-managed root directory.
+
+        Returns
+        -------
+        Path
+            Canonical physical root path returned by storage preparation.
+        """
+        return self._work_dir
+
+    @property
+    def state(self) -> ConsolidationState:
+        """Return the prospective configuration consolidation state.
+
+        Returns
+        -------
+        ConsolidationState
+            Relationship between current evaluation configuration and its
+            committed parent.
+        """
+        return self._consolidation_state
+
+    @property
+    def parent_id(self) -> ParentId | None:
+        """Return the existing committed parent identity, if any.
+
+        Returns
+        -------
+        ParentId | None
+            Existing parent identity, or ``None`` before first commitment.
+        """
+        return self._parent_id

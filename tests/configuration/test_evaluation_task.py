@@ -133,3 +133,40 @@ def test_evaluation_task_resolves_relative_root_from_console_directory(
         os.chdir(previous_directory)
 
     assert task._work_dir == (tmp_path / "relative-root").resolve()
+
+
+def test_evaluation_task_inspection_properties_return_owned_values(
+    tmp_path: Path,
+) -> None:
+    """Expose canonical root and lifecycle facts without filesystem changes."""
+    task = EvaluationTask(tmp_path / "root")
+    entries_before = tuple(sorted(entry.name for entry in task._work_dir.iterdir()))
+
+    assert task.root_dir == task._work_dir
+    assert task.state is ConsolidationState.INITIALIZED
+    assert task.parent_id is None
+    assert tuple(sorted(entry.name for entry in task._work_dir.iterdir())) == entries_before
+
+
+@pytest.mark.parametrize(
+    ("name", "replacement"),
+    [
+        ("root_dir", Path("replacement")),
+        ("state", ConsolidationState.CONSOLIDATED),
+        ("parent_id", ParentId("replacement")),
+    ],
+)
+def test_evaluation_task_inspection_properties_are_read_only(
+    tmp_path: Path,
+    name: str,
+    replacement: object,
+) -> None:
+    """Reject assignment through every public inspection property."""
+    task = EvaluationTask(tmp_path / "root")
+
+    with pytest.raises(AttributeError):
+        task.__setattr__(name, replacement)
+
+    assert task.root_dir == task._work_dir
+    assert task.state is ConsolidationState.INITIALIZED
+    assert task.parent_id is None
