@@ -10,10 +10,21 @@ I find the roadmap of worker management is improperly designed. Please propose r
 
 ---
 
-3. Revise the API of `add_worker` as follows:
+3. Revise the API of `add_worker` and `add_workers` as follows:
 
 ```python
 def add_worker(
+    self,
+    worker_id: WorkerId,
+    worker_label: ScalarLabel,
+    /,
+    *,
+    n_attempt: int | None = None,
+    n_cpu_per_attempt: int = 1,
+    memory_reserve_pct: float = 20.0,
+    ) -> WorkerConfiguration
+
+def add_workers(
     self,
     worker_id: WorkerId,
     worker_label: ScalarLabel,
@@ -43,3 +54,41 @@ This supports models with different memory requirements without estimating their
 
 ---
 
+4. Revise the API of `list_workers` as follows:
+
+```python
+def list_workers(
+    self,
+    worker_id: str | None = None,
+    worker_label: str | None = None,
+    n_cpu_available: int | None = None,
+    kind: str | None = None,
+    device: str | None = None,
+    *,
+    use_regex: bool = True,
+    limit: int = 1000,
+)
+```
+
+---
+
+5. Revise the API of `remove_worker` and `remove_workers` as follows:
+
+```python
+def remove_worker(
+    self,
+    worker_id: str | None = None,
+)
+
+def remove_workers(
+    self,
+    worker_id: str | None = None,
+    worker_label: str | None = None,
+    n_cpu_available: int | None = None,
+    kind: str | None = None,
+    device: str | None = None,
+    *,
+    use_regex: bool = True,
+    limit: int = 1000,
+)
+```

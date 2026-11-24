@@ -75,7 +75,6 @@ def test_evaluation_task_constructs_missing_work_dir_with_empty_configuration(
     assert task._models == []
     assert task._workers == []
     assert task._next_model_number == 1
-
     assert {entry.name for entry in work_dir.iterdir()} == {
         "cocoonet_metadata.csv",
         "models_for_transfer",
@@ -86,6 +85,17 @@ def test_evaluation_task_constructs_missing_work_dir_with_empty_configuration(
     assert not (work_dir / "partition_schedules.xlsx").exists()
     assert not (work_dir / "execution_configuration.csv").exists()
     assert not (work_dir / "execution_state.csv").exists()
+
+
+def test_evaluation_task_work_directory_arguments_accept_keywords(
+    tmp_path: Path,
+) -> None:
+    """Accept explicit working directories by keyword in public APIs."""
+    task = EvaluationTask(work_dir=tmp_path / "first-work-dir")
+
+    task.initialize(work_dir=tmp_path / "second-work-dir")
+
+    assert task.work_dir == (tmp_path / "second-work-dir").resolve()
 
 
 def test_evaluation_task_constructs_existing_empty_work_dir(

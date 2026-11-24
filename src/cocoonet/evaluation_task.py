@@ -389,7 +389,6 @@ class EvaluationTask:
     def __init__(
         self,
         work_dir: PathInput,
-        /,
         *,
         overwrite: bool = False,
     ) -> None:
@@ -481,7 +480,6 @@ class EvaluationTask:
     def initialize(
         self,
         work_dir: PathInput,
-        /,
         *,
         overwrite: bool = False,
     ) -> None:
@@ -531,7 +529,6 @@ class EvaluationTask:
     def add_model(
         self,
         model_input: object,
-        /,
         *,
         model_label: ScalarLabel,
         family: ModelFamily,
@@ -661,7 +658,6 @@ class EvaluationTask:
     def remove_model(
         self,
         model_label: str,
-        /,
     ) -> ModelReference | None:
         """Remove the model registered under one exact label.
 

@@ -456,7 +456,6 @@ class EvaluationTask:
     def __init__(
         self,
         work_dir: PathInput,
-        /,
         *,
         overwrite: bool = False,
     ) -> None
@@ -475,7 +474,6 @@ class EvaluationTask:
     def initialize(
         self,
         work_dir: PathInput,
-        /,
         *,
         overwrite: bool = False,
     ) -> None
@@ -522,7 +520,6 @@ class EvaluationTask:
     def add_model(
         self,
         model_input: object,
-        /,
         *,
         model_label: ScalarLabel,
         family: ModelFamily,
@@ -553,7 +550,6 @@ class EvaluationTask:
     def remove_model(
         self,
         model_label: str,
-        /,
     ) -> ModelReference | None
 
     def remove_models(
@@ -595,7 +591,6 @@ class EvaluationTask:
     def add_worker(
         self,
         worker_id: WorkerId,
-        /,
         *,
         worker_label: ScalarLabel,
         kind: WorkerKind,
@@ -606,7 +601,6 @@ class EvaluationTask:
     def add_workers(
         self,
         workers: Iterable[WorkerConfiguration],
-        /,
     ) -> tuple[WorkerConfiguration, ...]
 
     def list_workers(self) -> tuple[ScalarLabel, ...]
@@ -614,7 +608,6 @@ class EvaluationTask:
     def inspect_worker(
         self,
         worker_label: ScalarLabel,
-        /,
     ) -> WorkerConfiguration
 
     def summarize_workers(self) -> tuple[WorkerConfiguration, ...]
@@ -622,13 +615,11 @@ class EvaluationTask:
     def remove_worker(
         self,
         worker_label: ScalarLabel,
-        /,
     ) -> WorkerConfiguration
 
     def remove_workers(
         self,
         worker_labels: Iterable[ScalarLabel],
-        /,
     ) -> tuple[WorkerConfiguration, ...]
 ```
 

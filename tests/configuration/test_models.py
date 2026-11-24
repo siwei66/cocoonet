@@ -98,6 +98,21 @@ def test_add_model_assigns_sequential_ids_and_preserves_opaque_inputs(
     assert tuple(task.snapshot().models) == ("first", "second")
 
 
+def test_singular_model_arguments_accept_keywords(tmp_path: Path) -> None:
+    """Accept model inputs and labels by keyword in public APIs."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    reference = task.add_model(
+        model_input=object(),
+        model_label="baseline",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+
+    removed = task.remove_model(model_label="baseline")
+
+    assert removed is reference
+
+
 def test_add_model_changes_consolidated_state_and_preserves_parent(
     tmp_path: Path,
 ) -> None:

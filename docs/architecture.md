@@ -281,8 +281,8 @@ After ownership validation succeeds, apply the existing directory preparation ru
 | Exists and is nonempty, `overwrite=True` | Explicitly replace its contents and prepare it; state becomes `initialized`. |
 
 Overwrite is an explicit opt-in to destructive fresh-directory preparation.
-`EvaluationTask(work_dir: PathInput, /, *, overwrite: bool = False)` and
-`initialize(work_dir: PathInput, /, *, overwrite: bool = False) -> None` both require an explicit root node working
+`EvaluationTask(work_dir: PathInput, *, overwrite: bool = False)` and
+`initialize(work_dir: PathInput, *, overwrite: bool = False) -> None` both require an explicit root node working
 directory. Initialization similarly establishes the filesystem boundary for a fresh execution, possibly using a new
 root node working directory, and must not silently adopt old persisted execution state as belonging to changed
 configuration.
