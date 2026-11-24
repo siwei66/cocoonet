@@ -1,0 +1,45 @@
+I find the roadmap of worker management is improperly designed. Please propose revisions to dev docs including roadmaps and the implementation proposal according to my following correction on interpretation and the expected contract:
+
+---
+
+1. Same as model management, worker management applies the similar APIs as add_worker, add_workers, list_workers, remove_worker and remove_workers
+
+---
+
+2. Listing and removing methods also applies the similar design with stage helpers, and also filtered according to the worker properties from add_worker
+
+---
+
+3. Revise the API of `add_worker` as follows:
+
+```python
+def add_worker(
+    self,
+    worker_id: WorkerId,
+    worker_label: ScalarLabel,
+    /,
+    *,
+    n_attempt: int | None = None,
+    n_cpu_per_attempt: int = 1,
+    memory_reserve_pct: float = 20.0,
+    ) -> WorkerConfiguration
+```
+
+- `n_attempt=None` means by default using number limit of attempts as the number of CPU cores - 1 (1 reserved for the cocoonet worker scheduling process).
+- And the `n_cpu_per_attempt` is for the n_jobs for sklearn models and the number of worker or number of threads for torch models. Passing the number directly to the corresponding modeling parameters.
+- The memory reserving policy and strategy is as follows:
+
+```text
+Use a shared worker-level memory pool rather than fixed per-attempt allocations.
+
+Reserve a configurable percentage of worker RAM for the operating system and Cocoonet control; all active attempts dynamically share the remainder. Start a new attempt only when `n_attempt` permits it and available RAM is above the reserve threshold. Under memory pressure, stop new allocations and resume when memory recovers.
+
+Place all attempt process trees in an aggregate OS memory-containment group while keeping the worker controller outside it. If the shared pool is exhausted, contain the failure within the attempt group and report the affected attempt as failed; other workers and the coordinator remain unaffected.
+
+This supports models with different memory requirements without estimating their peak usage. It is a lightweight safeguard, not a guarantee that every active attempt survives aggregate exhaustion.
+```
+
+- `kind: WorkerKind` and `device: str` are the worker properties and not belongs to part of the root worker adding attributes, they are fixed for the corresponding worker and can be configured at the worker side, instead of in the `add_model` of root node EvaluationTask instance. After root node connected with the worker, the `kind`, `device` and `n_cpu_available` is retrieved from the worker node. For the root local worker, the `kind` is retrieved internally directly.
+
+---
+

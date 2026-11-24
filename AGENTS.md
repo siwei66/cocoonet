@@ -311,16 +311,17 @@ results remain associated with their original parent and cannot enter another pa
   are absent.
 - Dataset registration includes root-side split preparation and inspection through `add_dataset()`. `run()` consumes
   the current validated dataset and partition; it does not invent a missing split or require a separate split call.
-- Required public capabilities are initialization, dataset add/set with split preparation, inspect/remove, and
-  model/worker add/list/inspect/summary/remove, with singular and bulk add/remove; `run`, interruption, recovery,
-  and configuration modification/copy/reuse under the lifecycle rules. A general root-file clearing API is optional.
+- Required public capabilities are initialization; dataset add/set with split preparation, inspect/remove; model
+  add/list/remove; and worker add/list/inspect/summary/remove, with singular and bulk forms of each add/remove operation.
+  Required lifecycle capabilities include `run`, interruption, recovery, and configuration modification/copy/reuse. A
+  general root-file clearing API is optional.
   Every configured worker has a user-defined `worker_label` unique within its `EvaluationTask` and a distinct opaque
   `worker_id`. Public worker registry operations identify workers by `worker_label`; runtime routing, connection
   matching, attempt records, protocol messages, and `execution_state.csv` continue to use `worker_id`.
-  Singular mutations are the primitive semantic
-  actions; bulk operations are explicit conveniences. Define their commit/partial-failure behavior before
-  implementation; do not silently leave undocumented partial configuration after validation failure. Exact names,
-  signatures, return types, aliases, and containers remain deferred.
+  Singular mutations are the primitive semantic actions; bulk operations are explicit conveniences. Define their
+  commit/partial-failure behavior before implementation; do not silently leave undocumented partial configuration
+  after validation failure. Approved phase-specific contracts govern exact names, signatures, return types, aliases,
+  and containers already established by implementation; those not yet established remain deferred.
 - Local-only, online-only, and mixed execution are supported. The root-local worker and online workers are
   independently optional and must be explicitly configured for normal evaluation; root coordination alone is not an
   execution target.

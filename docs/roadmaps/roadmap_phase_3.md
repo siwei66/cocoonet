@@ -1,6 +1,7 @@
 # Phase 3: Reusable EvaluationTask configuration and lifecycle foundations
 
-Status: proposed; implementation requires separate approval.
+Status: in progress; `EvaluationTask` construction, initialization, inspection, and model-registry methods through
+`remove_models()` are implemented through separately approved units.
 
 ## 1. Authority, goal, and approval boundary
 
@@ -44,7 +45,8 @@ Phase 3 implements:
 6. positive sequential model-ID assignment beginning at `1`, with no reuse after removal;
 7. an ordered registry of root-local or online worker configuration records;
 8. requested worker device text and positive requested `n_attempt`, defaulting to `1`;
-9. public singular and bulk model/worker add, list, inspect, summarize, and remove operations;
+9. public singular and bulk model add/remove operations, filterable model listing, and the separately planned worker
+   add/list/inspect/summary/remove operations;
 10. all-or-nothing bulk validation and commit behavior;
 11. model-evaluation edits changing consolidated state to unconsolidated, while worker-only edits preserve it;
 12. a configuration-edit guard for later active-execution integration;
@@ -109,8 +111,9 @@ Phase 3 is complete only when:
   path without opening or reading it, and is not rejected because its extension is unfamiliar;
 - root-local and online worker entries remain configuration only, and at most one root-local worker is configured;
 - requested `n_attempt` is retained exactly as a positive integer excluding `bool`; no effective capacity is invented;
-- every bulk mutation either commits the complete validated batch in supplied order or leaves configuration, lifecycle
-  state, and the next model-ID counter unchanged;
+- bulk addition commits the complete validated model dictionary in supplied order, bulk removal commits every filter
+  match in registry order, and either operation leaves configuration, lifecycle state, and the next model-ID counter
+  unchanged when validation fails;
 - model add/remove and prepared-dataset/evaluation replacement use the evaluation-edit transition, while worker-only
   edits preserve consolidation and parent identity;
 - fresh initialization validates every retained dataset source before filesystem mutation, retains prospective
@@ -192,8 +195,8 @@ consolidated   -> unconsolidated
 unconsolidated -> unconsolidated
 ```
 
-For a successful **worker-only edit**, consolidation and `parent_id` are unchanged. A rejected or empty bulk operation
-changes neither configuration nor lifecycle state. Inspection never changes state.
+For a successful **worker-only edit**, consolidation and `parent_id` are unchanged. A rejected bulk operation or a
+zero-match model removal changes neither configuration nor lifecycle state. Inspection never changes state.
 
 ### 4.4 One active dataset/evaluation slot
 
@@ -229,7 +232,7 @@ that the input can be reconstructed or executed. Registration rules are:
 - labels are unique in the active registry using the existing standardized `ScalarLabel` equality semantics;
 - every active model has the same `TaskKind`;
 - if an evaluation reference is present, every model task kind equals it;
-- registry and summary order is successful registration order; removal preserves survivor order; and
+- registry and listing order is successful registration order; removal preserves survivor order; and
 - replacing a model requires explicit remove followed by add and therefore receives a new model ID.
 
 A file-backed input may be supplied as text or `Path`. Resolve relative input from the current console working
@@ -281,18 +284,23 @@ control derives `C = N - 1`, `J = max(per-attempt demand)`, keeps `A = n_attempt
 once to `A - 1` when permitted, and otherwise rejects without changing model/framework settings. GPU execution later
 uses one Cocoonet attempt slot. Phase 3 performs none of those calculations.
 
-### 4.7 Bulk atomicity
+### 4.7 Implemented model bulk atomicity
 
-Bulk methods materialize their iterable once, reject a path/string/bytes object used as the collection, validate every
-entry and every collision against a staged copy, and commit one final registry/counter/state replacement only after all
-validation succeeds.
+`add_models()` accepts a nonempty insertion-ordered dictionary from model label to opaque input. `family` is either one
+`ModelFamily` applied to every entry or a dictionary whose key set exactly matches the model dictionary. All
+registrations are validated against a staged registry and counter before one bounded commit. Assigned IDs follow model
+dictionary order and are consumed only by a successful complete commit; an empty model dictionary is invalid.
 
-For bulk add, assigned model IDs follow supplied order and are consumed only at commit. For bulk remove, requested keys
-must be unique and every key must exist before any removal. Empty bulk inputs are successful no-ops returning `()` and
-do not change lifecycle state.
+`remove_models()` accepts optional `label`, `family`, and model-input-display criteria, combined with logical AND. At
+least one criterion is required, and matching uses case-sensitive full regular expressions by default or exact equality
+when `use_regex=False`. It resolves every match from authoritative registry attributes before replacing the registry;
+the presentation `limit` never limits which matching models are removed. No match returns `None`, reports that zero
+models matched, and changes no state.
 
-There is no rollback framework: all validation occurs before in-memory commit, and the commit is a bounded assignment
-of already validated Python containers. These methods perform no persistent I/O.
+Both methods support a suppressed return, a tuple of immutable references, or a detached string-typed presentation
+dataframe. The default dataframe return is limited to `limit` rows and warns on truncation without truncating the
+committed addition or removal. There is no rollback framework: validation precedes a bounded assignment of already
+validated Python containers, and these methods perform no persistent I/O.
 
 ### 4.8 Copy semantics
 
@@ -339,8 +347,9 @@ class WorkerConfiguration:
     n_attempt: int = 1
 ```
 
-`ModelRegistration` exists primarily for atomic bulk input. The opaque input is not validated beyond rejecting
-`None`; family-specific validity belongs to Phases 6 and 10. Construction alone does not register anything.
+`ModelRegistration` is the shared validation/staging record constructed internally by singular and bulk model
+addition; it is not the public bulk container. The opaque input is not validated beyond rejecting `None`;
+family-specific validity belongs to Phases 6 and 10. Construction alone does not register anything.
 
 `WorkerConfiguration` is both the singular result and the bulk input record. Future connection/device-specific phases
 must add their own associated records rather than overloading `device` or `kind` with endpoints, credentials, public
@@ -373,10 +382,10 @@ class _RegisteredModel:
     def model_label(self) -> ScalarLabel
 ```
 
-The private record keeps the authoritative Phase 3 association once. Public list/summary methods return immutable
-metadata and never return the internal registry list. The two properties expose the corresponding immutable
-`ModelReference` fields without storing duplicate independently maintained identity or label state. The future
-model-preparation component defines its own narrow opaque-input retrieval boundary in Phase 6.
+The private record keeps the authoritative Phase 3 association once. Public model listing returns a detached
+presentation dataframe and never returns the internal registry list. The two properties expose the corresponding
+immutable `ModelReference` fields without storing duplicate independently maintained identity or label state. The
+future model-preparation component defines its own narrow opaque-input retrieval boundary in Phase 6.
 
 ### 5.3 Mutable EvaluationTask fields
 
@@ -522,9 +531,14 @@ class EvaluationTask:
 
     def add_models(
         self,
-        registrations: Iterable[ModelRegistration],
-        /,
-    ) -> tuple[ModelReference, ...]
+        models: dict[str, object],
+        family: ModelFamily | dict[str, ModelFamily],
+        task_kind: TaskKind,
+        *,
+        suppress_return: bool = False,
+        tabular_return: bool = True,
+        limit: int = 1000,
+    ) -> tuple[ModelReference, ...] | pd.DataFrame | None
 
     def list_models(
         self,
@@ -538,26 +552,41 @@ class EvaluationTask:
 
     def remove_model(
         self,
-        model_label: ScalarLabel,
+        model_label: str,
         /,
-    ) -> ModelReference
+    ) -> ModelReference | None
 
     def remove_models(
         self,
-        model_labels: Iterable[ScalarLabel],
-        /,
-    ) -> tuple[ModelReference, ...]
+        label: str | None = None,
+        family: str | None = None,
+        model_input: str | None = None,
+        *,
+        use_regex: bool = True,
+        suppress_return: bool = False,
+        tabular_return: bool = True,
+        limit: int = 1000,
+    ) -> tuple[ModelReference, ...] | pd.DataFrame | None
 ```
 
 `list_models()` returns matching public model metadata in registry order as a new presentation dataframe. Its string
 columns are `model_id`, `model_label`, `family`, `task_kind`, and `model_input`; the last is a safe display description,
 not the opaque executable input. Optional criteria use logical AND semantics and either case-sensitive full regular-
 expression matching or exact equality. The positive `limit` bounds the result and truncation emits `UserWarning`.
+All implemented tabular `limit` controls retain Python's native `bool` relationship: `limit=True` behaves as one,
+while `limit=False` fails positive-limit validation.
 
-Model removal uses the user-facing unique label. Phase 3 retains the exact opaque input inside
-`_RegisteredModel` but adds no retrieval API solely for a later consumer. Phase 6 owns the narrow private retrieval or
-preparation boundary required by its model-adapter implementation. Missing labels raise `KeyError` with the requested
-key; type/value errors are raised before lookup.
+`add_models()` uses dictionary order for registration and accepts either one family or a per-model family dictionary
+with the same key set. Its return controls affect only the representation returned after the complete batch is
+committed.
+
+`remove_model()` uses exact user-facing label equality, returns the removed immutable reference, and returns `None` with
+a zero-match message when the label is absent. `remove_models()` uses the same filters as `list_models()`, requires at
+least one filter, and removes every match regardless of the presentation limit. Its return controls mirror
+`add_models()`. Successful singular and bulk removals preserve survivor order and never reuse model IDs.
+
+Phase 3 retains the exact opaque input inside `_RegisteredModel` but adds no retrieval API solely for a later consumer.
+Phase 6 owns the narrow private retrieval or preparation boundary required by its model-adapter implementation.
 
 ### 6.3 Worker registry API
 
@@ -652,8 +681,9 @@ helpers retain source docstrings without becoming public API.
 
 - Properties return immutable/scalar owned values.
 - `snapshot()` builds directly from current authoritative fields and validates the result once.
-- List/summary methods return new tuples.
-- Inspect methods validate the requested key and return the immutable stored record, not a registry container.
+- `list_models()` returns a new detached dataframe with the fixed public string schema and never returns a registry
+  container or opaque input object.
+- Planned worker list/summary methods return new tuples, and planned worker inspection returns an immutable record.
 - No inspection reads or writes persistent files, probes a worker, or validates a model API.
 
 ### 7.4 Singular model mutations
@@ -662,19 +692,22 @@ helpers retain source docstrings without becoming public API.
 - Validate a temporary `ModelRegistration`, active edit permission, label/task agreement, and current evaluation
   agreement before assigning the next ID or changing state.
 - Append one `_RegisteredModel`, increment the counter once, and then apply the evaluation-edit transition.
-- `remove_model()` validates and resolves the label before mutation, removes exactly one record, preserves survivor
-  order and the counter, then applies the evaluation-edit transition.
+- `remove_model()` validates the label before lookup. A match removes exactly one record, preserves survivor order and
+  the counter, and applies the evaluation-edit transition; no match returns `None` after a zero-match message and does
+  not mutate state.
 - Neither operation modifies the opaque model input.
 
 ### 7.5 Bulk model mutations
 
-- Materialize and validate the entire collection.
-- Stage against copies of the registry and counter using the singular semantic checks without calling the mutating
-  public singular method.
-- Detect duplicates within the batch and against existing labels.
-- For removal, resolve every unique label before staging survivors.
+- Require a nonempty model dictionary for addition and accept one shared family or a family dictionary with the same
+  key set.
+- Stage additions against copies of the registry and counter using the singular semantic checks without calling the
+  mutating public singular method; dictionary keys inherently provide the batch's unique labels.
+- For removal, require at least one filter and resolve every matching record before staging survivors.
 - Commit registry, counter, and one lifecycle transition only after all checks succeed.
-- Return records in supplied request order.
+- Preserve supplied dictionary order for additions and registry order for removals.
+- Apply `suppress_return`, `tabular_return`, and `limit` only to the returned representation; a tabular limit never
+  narrows the committed mutation.
 
 ### 7.6 Singular and bulk worker mutations
 
@@ -710,12 +743,13 @@ descriptive here and is not executed.
 
 ## 9. Validation and error behavior
 
-- Wrong Python argument/record types raise `TypeError` with field path, expected type, observed type, and bounded value
-  information under root `AGENTS.md`.
+- Wrong Python argument/record types raise `TypeError` identifying the invalid field and expected kind. Shared record
+  validators additionally provide their bounded observed-value diagnostics under root `AGENTS.md`.
 - Invalid values, duplicate keys, mixed model task kinds, conflicting evaluation task kind, more than one root-local
   worker, nonpositive `n_attempt`, and inconsistent dataset/evaluation presence raise `ValueError` with expected and
   observed conditions.
-- Missing model labels and worker IDs after valid key validation raise `KeyError`.
+- A valid singular model label or bulk model filter that matches no model returns `None`, prints the zero-match message,
+  and leaves configuration unchanged. Planned worker lookup/removal misses raise `KeyError`.
 - A mutation attempted during `ExecutionStatus.RUNNING` raises `RuntimeError` before any in-memory or filesystem change.
 - Phase 2 `StorageError` propagates from fresh directory preparation with its chained filesystem cause.
 - A missing file-backed model input raises `FileNotFoundError`; a directory, non-regular file, or extensionless file
@@ -796,9 +830,11 @@ Test:
   preservation, and directory, missing-path, and extensionless-path rejection;
 - invalid model-file bytes accepted without being read, with no loader import or call and no suffix/family association;
 - singular removal, missing-label behavior, survivor order, and incomplete zero-model configuration;
-- atomic bulk add with within-batch and existing collisions;
-- atomic bulk remove with duplicate/missing labels;
-- generator materialization exactly once and string/bytes collection rejection;
+- atomic ordered dictionary bulk add with shared or exactly key-aligned per-model families;
+- filter-based atomic bulk removal with combined exact or regular-expression criteria and required nonempty filtering;
+- dataframe, immutable-reference tuple, and suppressed-return modes for bulk additions and removals;
+- presentation-limit warnings that do not truncate the committed bulk mutation;
+- empty bulk-addition, mismatched family-key, invalid filter, invalid return-control, and no-match behavior;
 - failed bulk operations preserving registry, state, and counter;
 - model edits applying the evaluation-edit transition; and
 - `snapshot().models` preserving registration order and mapping each label to its matching reference; and
@@ -933,18 +969,14 @@ committed in Phase 3. Phases 6 and 13 must establish and consume a fixed prepare
 - Node-scope docstrings use a standardized Root/Worker/Shared prefix followed by a functionality-specific clarification.
 
 These resolved choices require no further Phase 4 data-schema, Phase 5 isolation, Phase 6 model-adapter, Phase 11
-capacity-control, or Phase 13 runtime-persistence design. Full Phase 3 approval still depends on the two current-phase
-questions in Section 13.2.
+capacity-control, or Phase 13 runtime-persistence design. Remaining unimplemented Phase 3 work still depends on the
+current-phase question in Section 13.2.
 
-### 13.2 Remaining blocking ambiguities
+### 13.2 Remaining blocking ambiguity
 
-The following two questions remain deliberately unresolved pending separate user decisions:
-
-1. the exact shared validation/staging/commit mechanism for singular and bulk additions; and
-2. the final shallow-copy, deep-copy, warning, and independent-work-directory policy.
-
-These unresolved contracts block approval and implementation of their affected Phase 3 units. This revision does not
-choose among their alternatives or modify their existing design sections.
+The final shallow-copy, deep-copy, warning, and independent-work-directory policy remains deliberately unresolved
+pending a separate user decision. The implemented singular and bulk model additions resolved their former shared
+validation/staging/commit question through the private pure staging helper and bounded commit described above.
 
 ### 13.3 Inconsistencies found
 

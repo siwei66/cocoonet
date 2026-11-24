@@ -139,12 +139,12 @@ without changing these ownership and publication contracts.
 
 With identities and storage available, introduce `EvaluationTask` as Cocoonet's core public API for reusable mutable
 root-side evaluation configuration without launching scientific work. Support incomplete configuration, one active
-dataset slot, model and worker registries, and model/worker add/list/inspect/summary/remove capabilities with singular
-and bulk operations. Model registry operations use unique user-defined `model_label` values; worker registry operations
-use unique user-defined `worker_label` values while runtime and persistence retain opaque `worker_id` values. Define
-bulk commit/failure behavior before implementing bulk conveniences; do not leave undocumented partial configuration.
-Assign registered models positive sequential decimal `model_id` values beginning at `1`, without zero padding or reuse
-within their owning persistent scope.
+dataset slot, singular and bulk model add/remove operations, filterable model listing, and worker
+add/list/inspect/summary/remove operations with singular and bulk add/remove forms. Model registry operations use unique
+user-defined `model_label` values; worker registry operations use unique user-defined `worker_label` values while
+runtime and persistence retain opaque `worker_id` values. Detailed phase contracts define bulk commit/failure behavior;
+validation failure must not leave undocumented partial configuration. Assign registered models positive sequential
+decimal `model_id` values beginning at `1`, without zero padding or reuse within their owning persistent scope.
 
 For a file-backed model input, Phase 3 accepts any existing regular file with a nonempty extension, resolves its
 canonical absolute path, and retains it without reading or deserializing it. It does not infer family from the suffix or
