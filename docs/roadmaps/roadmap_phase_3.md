@@ -520,7 +520,6 @@ class EvaluationTask:
     def add_model(
         self,
         model_input: object,
-        *,
         model_label: ScalarLabel,
         family: ModelFamily,
         task_kind: TaskKind,

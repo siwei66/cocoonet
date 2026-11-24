@@ -16,9 +16,8 @@ I find the roadmap of worker management is improperly designed. Please propose r
 def add_worker(
     self,
     worker_id: WorkerId,
-    worker_label: ScalarLabel,
-    /,
     *,
+    worker_label: ScalarLabel,
     n_attempt: int | None = None,
     n_cpu_per_attempt: int = 1,
     memory_reserve_pct: float = 20.0,
