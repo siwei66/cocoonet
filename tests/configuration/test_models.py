@@ -852,3 +852,256 @@ def test_add_models_rejects_running_without_partial_commit(
         )
 
     assert task.__dict__ == before
+
+
+def test_remove_models_filters_and_removes_all_matches(
+    tmp_path: Path,
+) -> None:
+    """Remove every direct-attribute match while preserving survivors."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_models(
+        {
+            "alpha-1": object(),
+            "alpha-2": object(),
+            "beta": object(),
+        },
+        ModelFamily.SKLEARN,
+        TaskKind.REGRESSION,
+        suppress_return=True,
+    )
+
+    result = task.remove_models(
+        label=r"alpha-\d",
+        family="sklearn",
+    )
+
+    assert isinstance(result, pd.DataFrame)
+    assert result["model_id"].tolist() == ["1", "2"]
+    assert result["model_label"].tolist() == ["alpha-1", "alpha-2"]
+    assert [model.model_label for model in task._models] == ["beta"]
+    assert task._next_model_number == 4
+
+
+def test_remove_models_combines_exact_criteria(
+    tmp_path: Path,
+) -> None:
+    """Combine exact bulk-removal criteria with logical AND semantics."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_models(
+        {
+            "sklearn-model": object(),
+            "torch-model": object(),
+        },
+        {
+            "sklearn-model": ModelFamily.SKLEARN,
+            "torch-model": ModelFamily.PYTORCH,
+        },
+        TaskKind.REGRESSION,
+        suppress_return=True,
+    )
+
+    result = task.remove_models(
+        label="torch-model",
+        family="pytorch",
+        model_input="object",
+        use_regex=False,
+    )
+
+    assert isinstance(result, pd.DataFrame)
+    assert result["model_label"].tolist() == ["torch-model"]
+    assert [model.model_label for model in task._models] == ["sklearn-model"]
+
+
+def test_remove_models_no_match_reports_without_mutation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Report an empty search result without changing configuration."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_model(
+        object(),
+        model_label="baseline",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+    before = task.__dict__.copy()
+
+    result = task.remove_models(label="missing", use_regex=False)
+
+    assert result is None
+    assert capsys.readouterr().out == ("Found 0 matched models, no model is removed.\n")
+    assert task.__dict__ == before
+
+
+def test_remove_models_requires_a_criterion(
+    tmp_path: Path,
+) -> None:
+    """Prevent accidental unfiltered removal of the entire registry."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_model(
+        object(),
+        model_label="baseline",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+    before = task.__dict__.copy()
+
+    with pytest.raises(ValueError, match=r"criterion must be provided"):
+        task.remove_models()
+
+    assert task.__dict__ == before
+
+
+def test_remove_models_returns_references_and_changes_lifecycle(
+    tmp_path: Path,
+) -> None:
+    """Return all removed references and apply one evaluation edit."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_models(
+        {
+            "first": object(),
+            "second": object(),
+        },
+        ModelFamily.SKLEARN,
+        TaskKind.REGRESSION,
+        suppress_return=True,
+    )
+    expected = tuple(model.reference for model in task._models)
+    task._consolidation_state = ConsolidationState.CONSOLIDATED
+    task._parent_id = ParentId("existing-parent")
+
+    result = task.remove_models(
+        family="sklearn",
+        use_regex=False,
+        tabular_return=False,
+    )
+
+    assert result == expected
+    assert task._models == []
+    assert task._next_model_number == 3
+    assert task.state is ConsolidationState.UNCONSOLIDATED
+    assert task.parent_id == ParentId("existing-parent")
+
+
+def test_remove_models_can_suppress_return(
+    tmp_path: Path,
+) -> None:
+    """Remove matching models without constructing a return value."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_model(
+        object(),
+        model_label="baseline",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+
+    result = task.remove_models(
+        label="baseline",
+        use_regex=False,
+        suppress_return=True,
+    )
+
+    assert result is None
+    assert task._models == []
+
+
+def test_remove_models_truncates_only_tabular_return(
+    tmp_path: Path,
+) -> None:
+    """Remove all matches while limiting only their presentation table."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_models(
+        {
+            "first": object(),
+            "second": object(),
+            "survivor": [],
+        },
+        ModelFamily.SKLEARN,
+        TaskKind.REGRESSION,
+        suppress_return=True,
+    )
+
+    with pytest.warns(UserWarning, match=r"truncated to 1 of 2"):
+        result = task.remove_models(
+            model_input="object",
+            use_regex=False,
+            limit=1,
+        )
+
+    assert isinstance(result, pd.DataFrame)
+    assert result["model_label"].tolist() == ["first"]
+    assert [model.model_label for model in task._models] == ["survivor"]
+    assert task._next_model_number == 4
+
+
+def test_remove_models_invalid_regex_is_atomic(
+    tmp_path: Path,
+) -> None:
+    """Reject an invalid expression before changing the registry."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_model(
+        object(),
+        model_label="baseline",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+    before = task.__dict__.copy()
+
+    with pytest.raises(ValueError, match=r"valid regular expression"):
+        task.remove_models(label="[")
+
+    assert task.__dict__ == before
+
+
+@pytest.mark.parametrize(
+    ("keyword", "value", "error_type", "message"),
+    [
+        ("use_regex", 1, TypeError, "use_regex"),
+        ("suppress_return", 1, TypeError, "suppress_return"),
+        ("tabular_return", 1, TypeError, "tabular_return"),
+        ("limit", 1.5, TypeError, "limit"),
+        ("limit", 0, ValueError, "positive"),
+    ],
+)
+def test_remove_models_rejects_invalid_controls(
+    tmp_path: Path,
+    keyword: str,
+    value: object,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    """Reject invalid controls without changing configuration."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_model(
+        object(),
+        model_label="baseline",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+    before = task.__dict__.copy()
+    remove_models: Any = task.remove_models
+
+    with pytest.raises(error_type, match=message):
+        remove_models(label="baseline", **{keyword: value})
+
+    assert task.__dict__ == before
+
+
+def test_remove_models_rejects_running_before_filtering(
+    tmp_path: Path,
+) -> None:
+    """Reject bulk removal while execution is active."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_model(
+        object(),
+        model_label="baseline",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+    task._execution_status = ExecutionStatus.RUNNING
+    before = task.__dict__.copy()
+
+    with pytest.raises(RuntimeError, match=r"execution is running"):
+        task.remove_models(label="baseline", use_regex=False)
+
+    assert task.__dict__ == before

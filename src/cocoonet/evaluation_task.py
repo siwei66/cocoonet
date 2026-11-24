@@ -835,3 +835,107 @@ class EvaluationTask:
                 stacklevel=2,
             )
         return _models_to_dataframe(tuple(added_models[:limit]))
+
+    def remove_models(
+        self,
+        label: str | None = None,
+        family: str | None = None,
+        model_input: str | None = None,
+        *,
+        use_regex: bool = True,
+        suppress_return: bool = False,
+        tabular_return: bool = True,
+        limit: int = 1000,
+    ) -> tuple[ModelReference, ...] | pd.DataFrame | None:
+        """Atomically remove all models matching the supplied criteria.
+
+        Parameters
+        ----------
+        label : str | None, default=None
+            Model-label pattern or exact value. ``None`` ignores this field.
+        family : str | None, default=None
+            Model-family pattern or exact value. ``None`` ignores this field.
+        model_input : str | None, default=None
+            Model-input display pattern or exact value. ``None`` ignores this
+            field.
+        use_regex : bool, default=True
+            Whether criteria use case-sensitive full regular-expression
+            matching instead of exact string equality.
+        suppress_return : bool, default=False
+            Whether to return no representation of removed models.
+        tabular_return : bool, default=True
+            Whether to return a detached string-typed table instead of
+            immutable model references.
+        limit : int, default=1000
+            Maximum rows in a tabular return.
+
+        Returns
+        -------
+        tuple[ModelReference, ...] | pandas.DataFrame | None
+            Removed models in registry order, or ``None`` when return is
+            suppressed or no model matches.
+
+        Raises
+        ------
+        RuntimeError
+            If execution is currently running.
+        TypeError
+            If a criterion or control has an incorrect runtime type.
+        ValueError
+            If no criterion is supplied, a regular expression is invalid, or
+            ``limit`` is not positive.
+
+        Warns
+        -----
+        UserWarning
+            If the tabular return is truncated by ``limit``.
+
+        Notes
+        -----
+        Filtering reads authoritative registered attributes directly and is
+        not limited by the presentation-row limit. Successful removal
+        preserves survivor order and the next model-ID counter.
+        """
+        if type(suppress_return) is not bool:
+            raise TypeError("suppress_return must be a bool.")
+        if type(tabular_return) is not bool:
+            raise TypeError("tabular_return must be a bool.")
+        if not isinstance(limit, int):
+            raise TypeError("limit must be an integer.")
+        if limit < 1:
+            raise ValueError("limit must be positive.")
+        if (label, family, model_input) == (None, None, None):
+            raise ValueError("At least one model-removal criterion must be provided.")
+
+        _require_configuration_editable(self._execution_status)
+
+        matches = _filter_registered_models(
+            self._models,
+            label=label,
+            family=family,
+            model_input=model_input,
+            use_regex=use_regex,
+        )
+        if not matches:
+            print("Found 0 matched models, no model is removed.")
+            return None
+
+        removed_ids = {model.model_id for model in matches}
+        survivors = [model for model in self._models if model.model_id not in removed_ids]
+        new_state = _consolidation_after_evaluation_edit(self._consolidation_state)
+
+        self._models = survivors
+        self._consolidation_state = new_state
+
+        if suppress_return:
+            return None
+        if not tabular_return:
+            return tuple(model.reference for model in matches)
+
+        if len(matches) > limit:
+            warnings.warn(
+                "Bulk model-removal return truncated to " f"{limit} of {len(matches)} removed models.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return _models_to_dataframe(matches[:limit])
