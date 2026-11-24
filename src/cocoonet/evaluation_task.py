@@ -657,3 +657,59 @@ class EvaluationTask:
                 stacklevel=2,
             )
         return _models_to_dataframe(matches[:limit])
+
+    def remove_model(
+        self,
+        model_label: str,
+        /,
+    ) -> ModelReference | None:
+        """Remove the model registered under one exact label.
+
+        Parameters
+        ----------
+        model_label : str
+            Exact user-facing label of the model to remove.
+
+        Returns
+        -------
+        ModelReference | None
+            Removed immutable model metadata, or ``None`` when no model
+            matches.
+
+        Raises
+        ------
+        RuntimeError
+            If execution is currently running.
+        TypeError
+            If ``model_label`` is not a string.
+        ValueError
+            If ``model_label`` is empty.
+
+        Notes
+        -----
+        Removal preserves survivor order and the next model-ID counter. It
+        does not inspect or modify the opaque model input. A successful
+        removal is a model-evaluation configuration edit.
+        """
+        _require_configuration_editable(self._execution_status)
+
+        if not isinstance(model_label, str):
+            raise TypeError("model_label must be a string.")
+        if not model_label:
+            raise ValueError("model_label must be a nonempty string.")
+
+        matches = _filter_registered_models(
+            self._models,
+            label=model_label,
+            family=None,
+            model_input=None,
+            use_regex=False,
+        )
+        if not matches:
+            print("Found 0 matched models, no model is removed.")
+            return None
+
+        registered = matches[0]
+        self._models = [model for model in self._models if model is not registered]
+        self._consolidation_state = _consolidation_after_evaluation_edit(self._consolidation_state)
+        return registered.reference

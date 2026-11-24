@@ -523,3 +523,112 @@ def test_list_models_rejects_invalid_search_arguments(
 
     with pytest.raises(error_type, match=message):
         list_models(**{keyword: value})
+
+
+def test_remove_model_returns_reference_and_preserves_survivor_order(
+    tmp_path: Path,
+) -> None:
+    """Remove one exact label without reusing or reducing model IDs."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    for label in ("first", "second", "third"):
+        task.add_model(
+            object(),
+            model_label=label,
+            family=ModelFamily.SKLEARN,
+            task_kind=TaskKind.REGRESSION,
+        )
+    removed_reference = task._models[1].reference
+
+    result = task.remove_model("second")
+
+    assert result is removed_reference
+    assert [model.model_label for model in task._models] == [
+        "first",
+        "third",
+    ]
+    assert task._next_model_number == 4
+    assert task.state is ConsolidationState.INITIALIZED
+
+
+def test_remove_model_changes_consolidated_state_and_preserves_parent(
+    tmp_path: Path,
+) -> None:
+    """Make committed scientific configuration unconsolidated on removal."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_model(
+        object(),
+        model_label="baseline",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+    task._consolidation_state = ConsolidationState.CONSOLIDATED
+    task._parent_id = ParentId("existing-parent")
+
+    task.remove_model("baseline")
+
+    assert task.state is ConsolidationState.UNCONSOLIDATED
+    assert task.parent_id == ParentId("existing-parent")
+
+
+def test_remove_model_no_match_reports_without_mutation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Return none and report an exact-label miss without changing state."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_model(
+        object(),
+        model_label="baseline",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+    before = task.__dict__.copy()
+
+    result = task.remove_model("missing")
+
+    assert result is None
+    assert capsys.readouterr().out == ("Found 0 matched models, no model is removed.\n")
+    assert task.__dict__ == before
+
+
+@pytest.mark.parametrize(
+    ("model_label", "error_type", "message"),
+    [
+        ("", ValueError, "nonempty"),
+        (1, TypeError, "string"),
+    ],
+)
+def test_remove_model_rejects_invalid_label_without_mutation(
+    tmp_path: Path,
+    model_label: Any,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    """Reject invalid singular removal labels before changing state."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    before = task.__dict__.copy()
+
+    with pytest.raises(error_type, match=message):
+        task.remove_model(model_label)
+
+    assert task.__dict__ == before
+
+
+def test_remove_model_rejects_running_before_lookup(
+    tmp_path: Path,
+) -> None:
+    """Reject active-execution removal before searching the registry."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_model(
+        object(),
+        model_label="baseline",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+    task._execution_status = ExecutionStatus.RUNNING
+    before = task.__dict__.copy()
+
+    with pytest.raises(RuntimeError, match=r"execution is running"):
+        task.remove_model("baseline")
+
+    assert task.__dict__ == before
