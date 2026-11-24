@@ -713,3 +713,125 @@ class EvaluationTask:
         self._models = [model for model in self._models if model is not registered]
         self._consolidation_state = _consolidation_after_evaluation_edit(self._consolidation_state)
         return registered.reference
+
+    def add_models(  # noqa: C901
+        self,
+        models: dict[str, object],
+        family: ModelFamily | dict[str, ModelFamily],
+        task_kind: TaskKind,
+        *,
+        suppress_return: bool = False,
+        tabular_return: bool = True,
+        limit: int = 1000,
+    ) -> tuple[ModelReference, ...] | pd.DataFrame | None:
+        """Atomically add multiple opaque models in supplied order.
+
+        Parameters
+        ----------
+        models : dict[str, object]
+            Ordered mapping from unique model labels to opaque model inputs.
+        family : ModelFamily | dict[str, ModelFamily]
+            One family for every model, or a mapping whose keys exactly match
+            the model labels.
+        task_kind : TaskKind
+            Shared regression or classification task.
+        suppress_return : bool, default=False
+            Whether to return no representation of the added models.
+        tabular_return : bool, default=True
+            Whether to return a detached string-typed table instead of
+            immutable model references.
+        limit : int, default=1000
+            Maximum rows in a tabular return.
+
+        Returns
+        -------
+        tuple[ModelReference, ...] | pandas.DataFrame | None
+            Newly added models only, in supplied order, using the selected
+            return representation.
+
+        Raises
+        ------
+        RuntimeError
+            If execution is currently running.
+        TypeError
+            If an argument has an incorrect runtime type.
+        ValueError
+            If input is empty, family keys do not match model labels, a limit
+            is not positive, or a registration conflicts with configuration.
+
+        Warns
+        -----
+        UserWarning
+            If the tabular return is truncated by ``limit``.
+
+        Notes
+        -----
+        All registrations are staged before a bounded commit. Failure leaves
+        the registry, model-ID counter, and lifecycle state unchanged. Model
+        inputs remain opaque and file inputs are not opened or deserialized.
+        """
+        if not isinstance(models, dict):
+            raise TypeError("models must be a dictionary.")
+        if not models:
+            raise ValueError("models must contain at least one model.")
+        if type(suppress_return) is not bool:
+            raise TypeError("suppress_return must be a bool.")
+        if type(tabular_return) is not bool:
+            raise TypeError("tabular_return must be a bool.")
+        if not isinstance(limit, int):
+            raise TypeError("limit must be an integer.")
+        if limit < 1:
+            raise ValueError("limit must be positive.")
+
+        if isinstance(family, dict):
+            if family.keys() != models.keys():
+                raise ValueError("family mapping keys must exactly match model labels.")
+            families = family
+        elif isinstance(family, ModelFamily):
+            families = dict.fromkeys(models, family)
+        else:
+            raise TypeError("family must be a ModelFamily or a dictionary of ModelFamily values.")
+
+        _require_configuration_editable(self._execution_status)
+
+        staged_models = list(self._models)
+        added_models: list[_RegisteredModel] = []
+        next_model_number = self._next_model_number
+
+        for model_label, model_input in models.items():
+            if not model_label:
+                raise ValueError("model_label must be a nonempty string.")
+
+            registered = _stage_model_registration(
+                ModelRegistration(
+                    model_input=model_input,
+                    model_label=model_label,
+                    family=families[model_label],
+                    task_kind=task_kind,
+                ),
+                model_id=ModelId(str(next_model_number)),
+                existing_models=staged_models,
+                evaluation_config=self._evaluation_config,
+            )
+            staged_models.append(registered)
+            added_models.append(registered)
+            next_model_number += 1
+
+        new_state = _consolidation_after_evaluation_edit(self._consolidation_state)
+
+        self._models = staged_models
+        self._next_model_number = next_model_number
+        self._consolidation_state = new_state
+
+        if suppress_return:
+            return None
+        if not tabular_return:
+            return tuple(model.reference for model in added_models)
+
+        if len(added_models) > limit:
+            warnings.warn(
+                "Bulk model-addition return truncated to " f"{limit} of {len(added_models)} added models.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return _models_to_dataframe(tuple(added_models[:limit]))

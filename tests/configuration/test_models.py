@@ -632,3 +632,223 @@ def test_remove_model_rejects_running_before_lookup(
         task.remove_model("baseline")
 
     assert task.__dict__ == before
+
+
+def test_add_models_commits_in_order_and_returns_only_new_models(
+    tmp_path: Path,
+) -> None:
+    """Commit a complete batch and return its detached string table."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_model(
+        object(),
+        model_label="existing",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+
+    result = task.add_models(
+        {
+            "first": object(),
+            "second": [],
+        },
+        ModelFamily.PYTORCH,
+        TaskKind.REGRESSION,
+    )
+
+    assert isinstance(result, pd.DataFrame)
+    assert result["model_id"].tolist() == ["2", "3"]
+    assert result["model_label"].tolist() == ["first", "second"]
+    assert result["family"].tolist() == ["pytorch", "pytorch"]
+    assert result["model_input"].tolist() == ["object", "list"]
+    assert all(dtype == pd.StringDtype() for dtype in result.dtypes)
+    assert [model.model_label for model in task._models] == [
+        "existing",
+        "first",
+        "second",
+    ]
+    assert task._next_model_number == 4
+
+
+def test_add_models_supports_per_model_families_and_reference_return(
+    tmp_path: Path,
+) -> None:
+    """Return every newly added immutable reference when requested."""
+    task = EvaluationTask(tmp_path / "work-dir")
+
+    result = task.add_models(
+        {
+            "sklearn-model": object(),
+            "torch-model": object(),
+        },
+        {
+            "sklearn-model": ModelFamily.SKLEARN,
+            "torch-model": ModelFamily.PYTORCH,
+        },
+        TaskKind.REGRESSION,
+        tabular_return=False,
+    )
+
+    assert isinstance(result, tuple)
+    assert [reference.model_id for reference in result] == [
+        ModelId("1"),
+        ModelId("2"),
+    ]
+    assert [reference.family for reference in result] == [
+        ModelFamily.SKLEARN,
+        ModelFamily.PYTORCH,
+    ]
+
+
+def test_add_models_can_suppress_return(
+    tmp_path: Path,
+) -> None:
+    """Commit the batch without constructing a public return value."""
+    task = EvaluationTask(tmp_path / "work-dir")
+
+    result = task.add_models(
+        {"baseline": object()},
+        ModelFamily.SKLEARN,
+        TaskKind.REGRESSION,
+        suppress_return=True,
+    )
+
+    assert result is None
+    assert [model.model_label for model in task._models] == ["baseline"]
+
+
+def test_add_models_failure_is_atomic(
+    tmp_path: Path,
+) -> None:
+    """Leave live state unchanged when a later staged member fails."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_model(
+        object(),
+        model_label="existing",
+        family=ModelFamily.SKLEARN,
+        task_kind=TaskKind.REGRESSION,
+    )
+    task._consolidation_state = ConsolidationState.CONSOLIDATED
+    before = task.__dict__.copy()
+
+    with pytest.raises(ValueError, match=r"model_input must not be None"):
+        task.add_models(
+            {
+                "valid": object(),
+                "invalid": None,
+            },
+            ModelFamily.SKLEARN,
+            TaskKind.REGRESSION,
+        )
+
+    assert task.__dict__ == before
+
+
+@pytest.mark.parametrize(
+    ("models", "family", "error_type", "message"),
+    [
+        ({}, ModelFamily.SKLEARN, ValueError, "at least one"),
+        (
+            {"model": object()},
+            {},
+            ValueError,
+            "keys must exactly match",
+        ),
+        (
+            {"": object()},
+            ModelFamily.SKLEARN,
+            ValueError,
+            "nonempty",
+        ),
+    ],
+)
+def test_add_models_rejects_invalid_batch_without_mutation(
+    tmp_path: Path,
+    models: dict[str, object],
+    family: ModelFamily | dict[str, ModelFamily],
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    """Reject invalid bulk inputs before committing configuration."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    before = task.__dict__.copy()
+
+    with pytest.raises(error_type, match=message):
+        task.add_models(models, family, TaskKind.REGRESSION)
+
+    assert task.__dict__ == before
+
+
+def test_add_models_truncates_only_tabular_return(
+    tmp_path: Path,
+) -> None:
+    """Commit the complete batch while limiting its presentation table."""
+    task = EvaluationTask(tmp_path / "work-dir")
+
+    with pytest.warns(UserWarning, match=r"truncated to 1 of 2"):
+        result = task.add_models(
+            {
+                "first": object(),
+                "second": object(),
+            },
+            ModelFamily.SKLEARN,
+            TaskKind.REGRESSION,
+            limit=1,
+        )
+
+    assert isinstance(result, pd.DataFrame)
+    assert result["model_label"].tolist() == ["first"]
+    assert [model.model_label for model in task._models] == [
+        "first",
+        "second",
+    ]
+    assert task._next_model_number == 3
+
+
+@pytest.mark.parametrize(
+    ("keyword", "value", "error_type", "message"),
+    [
+        ("suppress_return", 1, TypeError, "suppress_return"),
+        ("tabular_return", 1, TypeError, "tabular_return"),
+        ("limit", 1.5, TypeError, "limit"),
+        ("limit", 0, ValueError, "positive"),
+    ],
+)
+def test_add_models_rejects_invalid_return_options(
+    tmp_path: Path,
+    keyword: str,
+    value: object,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    """Reject invalid return controls without committing the batch."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    add_models: Any = task.add_models
+
+    with pytest.raises(error_type, match=message):
+        add_models(
+            {"baseline": object()},
+            ModelFamily.SKLEARN,
+            TaskKind.REGRESSION,
+            **{keyword: value},
+        )
+
+    assert task._models == []
+    assert task._next_model_number == 1
+
+
+def test_add_models_rejects_running_without_partial_commit(
+    tmp_path: Path,
+) -> None:
+    """Reject a valid batch while execution is active."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task._execution_status = ExecutionStatus.RUNNING
+    before = task.__dict__.copy()
+
+    with pytest.raises(RuntimeError, match=r"execution is running"):
+        task.add_models(
+            {"baseline": object()},
+            ModelFamily.SKLEARN,
+            TaskKind.REGRESSION,
+        )
+
+    assert task.__dict__ == before
