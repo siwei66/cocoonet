@@ -632,8 +632,10 @@ class EvaluationTask:
         model_input: str | None = None,
         *,
         use_regex: bool = True,
+        suppress_return: bool = False,
+        tabular_return: bool = True,
         limit: int = 1000,
-    ) -> pd.DataFrame:
+    ) -> tuple[ModelReference, ...] | pd.DataFrame | None:
         """Return registered models matching all supplied criteria.
 
         Parameters
@@ -648,32 +650,58 @@ class EvaluationTask:
         use_regex : bool, default=True
             Whether criteria use case-sensitive full regular-expression
             matching instead of exact string equality.
+        suppress_return : bool, default=False
+            Whether to return no representation of matching models.
+        tabular_return : bool, default=True
+            Whether to return a detached string-typed table instead of
+            immutable model references.
         limit : int, default=1000
-            Maximum positive number of matching rows to return.
+            Maximum positive number of rows in a tabular return.
 
         Returns
         -------
-        pandas.DataFrame
-            Matching models in registry order with string-typed columns.
+        tuple[ModelReference, ...] | pandas.DataFrame | None
+            Matching models in registry order. Tabular mode returns a
+            string-typed DataFrame, including an empty DataFrame when no model
+            matches. Reference mode returns an immutable tuple, or ``None``
+            when no model matches. Suppressed returns are always ``None``.
 
         Raises
         ------
         TypeError
-            If a criterion, matching mode, or limit has an invalid type.
+            If a criterion, matching mode, return control, or limit has an
+            invalid type.
         ValueError
             If a regular expression is invalid or the limit is not positive.
 
         Warns
         -----
         UserWarning
-            If matching rows are truncated by ``limit``.
+            If a tabular result is truncated by ``limit``.
+
+        Examples
+        --------
+        Return immutable references for exact family matches:
+
+        >>> task.list_models(
+        ...     family="sklearn",
+        ...     use_regex=False,
+        ...     tabular_return=False,
+        ... )
 
         Notes
         -----
         Search reads registered attributes directly. It does not inspect model
         files or objects, mutate configuration, or derive search data from the
-        returned presentation table.
+        returned presentation table. The tabular limit does not truncate a
+        reference tuple.
+        Node usage scope: Root - Presents prospective root-side model
+        registrations.
         """
+        if type(suppress_return) is not bool:
+            raise TypeError("suppress_return must be a bool.")
+        if type(tabular_return) is not bool:
+            raise TypeError("tabular_return must be a bool.")
         if not isinstance(limit, int):
             raise TypeError("limit must be an integer.")
         if limit < 1:
@@ -686,6 +714,15 @@ class EvaluationTask:
             model_input=model_input,
             use_regex=use_regex,
         )
+
+        # Keep authoritative matches independent from the selected presentation.
+        if suppress_return:
+            return None
+        if not tabular_return:
+            if not matches:
+                return None
+            return tuple(model.reference for model in matches)
+
         if len(matches) > limit:
             warnings.warn(
                 f"Model listing truncated to {limit} of {len(matches)} matching models.",

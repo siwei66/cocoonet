@@ -64,11 +64,14 @@ class ModelRegistration:
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class WorkerConfiguration:
-    worker_label: ScalarLabel
     worker_id: WorkerId
+    worker_label: ScalarLabel
     kind: WorkerKind
     device: str = "cpu"
+    cpu_capacity: int | None = None
     n_attempt: int = 1
+    n_cpu_per_attempt: int = 1
+    memory_reserve_pct: float = 20.0
 ```
 
 ### 1.2 Root node evaluation task
@@ -126,8 +129,10 @@ class EvaluationTask:
         model_input: str | None = None,
         *,
         use_regex: bool = True,
+        suppress_return: bool = False,
+        tabular_return: bool = True,
         limit: int = 1000,
-    ) -> pd.DataFrame: ...
+    ) -> tuple[ModelReference, ...] | pd.DataFrame | None: ...
 
     def remove_model(
         self,
@@ -146,15 +151,76 @@ class EvaluationTask:
         limit: int = 1000,
     ) -> tuple[ModelReference, ...] | pd.DataFrame | None: ...
 
-    def add_worker(): ...
+    def add_worker(
+        self,
+        worker_id: str | None = None,
+        kind: Literal['root-local', 'online'] = 'root-local',
+        *,
+        n_attempt: int | None = None,
+        n_cpu_per_attempt: int = 1,
+        memory_reserve_pct: float = 20.0,
+        ) -> WorkerConfiguration: ...
 
-    def add_workers(): ...
+    def add_workers(
+        self,
+        worker_id: tuple[str] | None = None,
+        worker_label: tuple[str] | None = None,
+        kind: Literal['root-local', 'online'] = 'root-local',
+        *,
+        n_attempt: int | None = None,
+        n_cpu_per_attempt: int = 1,
+        memory_reserve_pct: float = 20.0,
+        suppress_return: bool = False,
+        tabular_return: bool = True,
+        limit: int = 1000,
+        ) -> WorkerConfiguration: ...
 
-    def list_workers(): ...
+    def available_workers(
+        self,
+        worker_id: str | None = None,
+        worker_label: str | None = None,
+        cpu_capacity: int | str | None = None,
+        kind: str | None = None,
+        device: str | None = None,
+        *,
+        use_regex: bool = True,
+        suppress_return: bool = False,
+        tabular_return: bool = True,
+        limit: int = 1000,
+    ) -> tuple[WorkerConfiguration] | pd.DataFrame | None: ...
 
-    def remove_worker(): ...
+    def list_workers(
+        self,
+        worker_id: str | None = None,
+        worker_label: str | None = None,
+        cpu_capacity: int | str | None = None,
+        kind: str | None = None,
+        device: str | None = None,
+        *,
+        use_regex: bool = True,
+        suppress_return: bool = False,
+        tabular_return: bool = True,
+        limit: int = 1000,
+    ) -> tuple[WorkerConfiguration] | pd.DataFrame | None: ...
 
-    def remove_workers(): ...
+    def remove_worker(
+        self,
+        worker_id: str | None = None,
+    ) -> WorkerConfiguration | None: ...
+
+    def remove_workers(
+        self,
+        worker_id: str | None = None,
+        worker_label: str | None = None,
+        cpu_capacity: int | str | None = None,
+        kind: str | None = None,
+        device: str | None = None,
+        *,
+        use_regex: bool = True,
+        suppress_return: bool = False,
+        tabular_return: bool = True,
+        limit: int = 1000,
+    ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None: ...
 
     def __copy__(self) -> EvaluationTask: ...
 ```

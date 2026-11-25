@@ -413,6 +413,7 @@ def test_list_models_returns_string_table_in_registry_order(
 
     result = task.list_models()
 
+    assert isinstance(result, pd.DataFrame)
     assert list(result.columns) == [
         "model_id",
         "model_label",
@@ -466,8 +467,15 @@ def test_list_models_combines_exact_criteria(
         use_regex=False,
     )
 
+    assert isinstance(result, pd.DataFrame)
     assert result["model_label"].tolist() == ["second"]
-    assert task.list_models(label="second", family="sklearn", use_regex=False).empty
+    no_match = task.list_models(
+        label="second",
+        family="sklearn",
+        use_regex=False,
+    )
+    assert isinstance(no_match, pd.DataFrame)
+    assert no_match.empty
 
 
 def test_list_models_uses_case_sensitive_regex_fullmatch(
@@ -485,6 +493,7 @@ def test_list_models_uses_case_sensitive_regex_fullmatch(
 
     result = task.list_models(label=r"alpha-\d")
 
+    assert isinstance(result, pd.DataFrame)
     assert result["model_label"].tolist() == ["alpha-1"]
 
 
@@ -505,6 +514,7 @@ def test_list_models_displays_and_filters_canonical_file_path(
 
     result = task.list_models(model_input=re.escape(canonical_path))
 
+    assert isinstance(result, pd.DataFrame)
     assert result["model_input"].tolist() == [canonical_path]
 
 
@@ -516,6 +526,7 @@ def test_list_models_empty_result_retains_public_schema(
 
     result = task.list_models(label="missing", use_regex=False)
 
+    assert isinstance(result, pd.DataFrame)
     assert list(result.columns) == [
         "model_id",
         "model_label",
@@ -553,6 +564,7 @@ def test_list_models_warns_when_limit_truncates_matches(
     with pytest.warns(UserWarning, match=r"truncated to 1 of 2"):
         result = task.list_models(limit=1)
 
+    assert isinstance(result, pd.DataFrame)
     assert result["model_label"].tolist() == ["first"]
 
 
@@ -572,6 +584,7 @@ def test_list_models_preserves_native_bool_limit_behavior(
     with pytest.warns(UserWarning, match=r"truncated to True of 2"):
         result = task.list_models(limit=True)
 
+    assert isinstance(result, pd.DataFrame)
     assert result["model_label"].tolist() == ["first"]
     with pytest.raises(ValueError, match=r"limit must be positive"):
         task.list_models(limit=False)
@@ -584,6 +597,8 @@ def test_list_models_preserves_native_bool_limit_behavior(
         ("family", 1, TypeError, "family"),
         ("model_input", 1, TypeError, "model_input"),
         ("use_regex", 1, TypeError, "use_regex"),
+        ("suppress_return", 1, TypeError, "suppress_return"),
+        ("tabular_return", 1, TypeError, "tabular_return"),
         ("limit", 1.5, TypeError, "limit"),
         ("limit", 0, ValueError, "positive"),
     ],
@@ -601,6 +616,87 @@ def test_list_models_rejects_invalid_search_arguments(
 
     with pytest.raises(error_type, match=message):
         list_models(**{keyword: value})
+
+
+def test_list_models_returns_matching_references_when_tabular_disabled(
+    tmp_path: Path,
+) -> None:
+    """Return every matching immutable reference without tabular limiting."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_model(
+        _InMemoryModel(),
+        model_label="first",
+        family="sklearn",
+        task_kind="regression",
+    )
+    task.add_model(
+        _InMemoryModel(),
+        model_label="second",
+        family="sklearn",
+        task_kind="regression",
+    )
+    task.add_model(
+        _InMemoryModel(),
+        model_label="third",
+        family="pytorch",
+        task_kind="regression",
+    )
+    expected = tuple(model.reference for model in task._models if model.reference.family is ModelFamily.SKLEARN)
+
+    result = task.list_models(
+        family="sklearn",
+        use_regex=False,
+        tabular_return=False,
+        limit=1,
+    )
+
+    assert isinstance(result, tuple)
+    assert result == expected
+    assert all(isinstance(reference, ModelReference) for reference in result)
+
+
+def test_list_models_returns_none_for_empty_reference_result(
+    tmp_path: Path,
+) -> None:
+    """Return none when reference-mode filtering finds no model."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_model(
+        _InMemoryModel(),
+        model_label="baseline",
+        family="sklearn",
+        task_kind="regression",
+    )
+
+    result = task.list_models(
+        label="missing",
+        use_regex=False,
+        tabular_return=False,
+    )
+
+    assert result is None
+
+
+def test_list_models_returns_none_when_suppressed(
+    tmp_path: Path,
+) -> None:
+    """Suppress the public representation after filtering."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task.add_model(
+        _InMemoryModel(),
+        model_label="baseline",
+        family="sklearn",
+        task_kind="regression",
+    )
+    before = task.__dict__.copy()
+
+    result = task.list_models(
+        label="baseline",
+        use_regex=False,
+        suppress_return=True,
+    )
+
+    assert result is None
+    assert task.__dict__ == before
 
 
 def test_remove_model_returns_reference_and_preserves_survivor_order(
