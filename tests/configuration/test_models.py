@@ -25,10 +25,10 @@ from cocoonet.evaluation_task import EvaluationTask, _RegisteredModel
 class _InMemoryModel:
     """Represent an in-memory model candidate without executing model code."""
 
-    def fit(self, X: object, y: object) -> "_InMemoryModel":
+    def fit(self, X: object, y: object) -> "_InMemoryModel":  # noqa: N803
         return self
 
-    def predict(self, X: object) -> list[float]:
+    def predict(self, X: object) -> list[float]:  # noqa: N803
         return []
 
 
@@ -154,7 +154,7 @@ def test_add_model_rejects_internal_enum_inputs(tmp_path: Path) -> None:
     task = EvaluationTask(tmp_path / "work-dir")
 
     family: Any = ModelFamily.SKLEARN
-    with pytest.raises(TypeError, match="family"):
+    with pytest.raises(TypeError, match="ModelFamily.SKLEARN"):
         task.add_model(
             _InMemoryModel(),
             "baseline",
@@ -286,7 +286,7 @@ def test_add_model_rejects_invalid_registration_without_mutation(
         )
 
     invalid_family: Any = ModelFamily.SKLEARN
-    with pytest.raises(TypeError, match="family"):
+    with pytest.raises(TypeError, match="ModelFamily.SKLEARN"):
         task.add_model(
             _InMemoryModel(),
             model_label="invalid-family",
@@ -568,26 +568,16 @@ def test_list_models_warns_when_limit_truncates_matches(
     assert result["model_label"].tolist() == ["first"]
 
 
-def test_list_models_preserves_native_bool_limit_behavior(
+@pytest.mark.parametrize("limit", [True, False])
+def test_list_models_rejects_boolean_limit(
     tmp_path: Path,
+    limit: bool,
 ) -> None:
-    """Treat true as one and reject false through positive-limit validation."""
+    """Reject booleans rather than treating them as integer limits."""
     task = EvaluationTask(tmp_path / "work-dir")
-    for label in ("first", "second"):
-        task.add_model(
-            _InMemoryModel(),
-            model_label=label,
-            family="sklearn",
-            task_kind="regression",
-        )
 
-    with pytest.warns(UserWarning, match=r"truncated to True of 2"):
-        result = task.list_models(limit=True)
-
-    assert isinstance(result, pd.DataFrame)
-    assert result["model_label"].tolist() == ["first"]
-    with pytest.raises(ValueError, match=r"limit must be positive"):
-        task.list_models(limit=False)
+    with pytest.raises(TypeError, match=r"limit"):
+        task.list_models(limit=limit)
 
 
 @pytest.mark.parametrize(
@@ -769,7 +759,7 @@ def test_remove_model_no_match_reports_without_mutation(
     ("model_label", "error_type", "message"),
     [
         ("", ValueError, "nonempty"),
-        (1, TypeError, "string"),
+        (1, TypeError, "model_label"),
     ],
 )
 def test_remove_model_rejects_invalid_label_without_mutation(
@@ -987,6 +977,7 @@ def test_add_models_truncates_only_tabular_return(
         ("suppress_return", 1, TypeError, "suppress_return"),
         ("tabular_return", 1, TypeError, "tabular_return"),
         ("limit", 1.5, TypeError, "limit"),
+        ("limit", True, TypeError, "limit"),
         ("limit", 0, ValueError, "positive"),
     ],
 )
@@ -1236,6 +1227,7 @@ def test_remove_models_invalid_regex_is_atomic(
         ("suppress_return", 1, TypeError, "suppress_return"),
         ("tabular_return", 1, TypeError, "tabular_return"),
         ("limit", 1.5, TypeError, "limit"),
+        ("limit", True, TypeError, "limit"),
         ("limit", 0, ValueError, "positive"),
     ],
 )

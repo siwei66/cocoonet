@@ -219,7 +219,7 @@ def test_publish_staged_file_rejects_non_boolean_replace(
 
     with pytest.raises(
         TypeError,
-        match=r"^replace must be bool; got builtins\.int\.$",
+        match=r"path: replace",
     ):
         publish_staged_file(
             final,
@@ -443,9 +443,15 @@ def test_publish_staged_bundle_rejects_wrong_record_type() -> None:
     """Reject values outside the bundle path record boundary."""
     with pytest.raises(
         TypeError,
-        match=r"^paths must be BundlePublicationPaths; got builtins\.object\.$",
+        match=r"path: paths",
     ):
         publish_staged_bundle(object())  # type: ignore[arg-type]
+
+
+def test_discard_staged_bundle_rejects_wrong_record_type() -> None:
+    """Reject values outside the bundle path record boundary."""
+    with pytest.raises(TypeError, match=r"path: paths"):
+        discard_staged_bundle(object())  # type: ignore[arg-type]
 
 
 def test_discard_staged_bundle_returns_false_when_absent(

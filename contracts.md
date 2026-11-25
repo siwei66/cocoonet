@@ -201,7 +201,7 @@ class EvaluationTask:
         suppress_return: bool = False,
         tabular_return: bool = True,
         limit: int = 1000,
-    ) -> tuple[WorkerConfiguration] | pd.DataFrame | None: ...
+    ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None: ...
 
     def remove_worker(
         self,
@@ -234,6 +234,19 @@ Public model-table return layout:
 | 3 | `family` | pandas string |
 | 4 | `task_kind` | pandas string |
 | 5 | `model_input` | pandas string |
+
+Public worker-table return layout:
+
+| Column order | Column | dtype |
+| --- | --- | --- |
+| 1 | `worker_id` | pandas string |
+| 2 | `worker_label` | pandas string |
+| 3 | `kind` | pandas string |
+| 4 | `device` | pandas string |
+| 5 | `cpu_capacity` | pandas string |
+| 6 | `n_attempt` | pandas string |
+| 7 | `n_cpu_per_attempt` | pandas string |
+| 8 | `memory_reserve_pct` | pandas string |
 
 ### 1.3 Public API declarations still deferred
 

@@ -29,7 +29,8 @@ The project values scientific auditability, human interpretability, transparency
 - Give every other private function, class, and method including helpers a one-line docstring describing its purpose.
 - End each non-helper class or function's Notes section with a concise node-usage statement using `Node usage scope: Root -`, `Node usage scope: Worker -`, or `Node usage scope: Shared -`, followed by its responsibility-specific explanation.
 
-### Code comments, over-engineering, tests and committing
+### Type validation, code comments, over-engineering, tests and committing
+- Prefer decorator-form type validation over direct-form shared validator over inline manual checks, using a later option only when it clearly improves performance or interpretability over the preceding option.
 - Place an intention comment immediately above every complex code block. Explain its purpose, reasoning, assumptions, or invariant rather than restating syntax.
 - Keep scientific procedures recognizable and source files cohesive. Decompose where it improves understanding or independent verification.
 - Use the repository's configured typing, formatting, linting, and test checks. Test real behavior with representative inputs. Test doubles are limited to necessary network-boundary simulations. Report unavailable checks accurately.

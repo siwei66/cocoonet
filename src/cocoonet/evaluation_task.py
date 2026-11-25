@@ -25,6 +25,7 @@ from cocoonet._contracts.identity import ModelId, ParentId, ScalarLabel
 from cocoonet._contracts.state import ExecutionStatus
 from cocoonet._storage.paths import PathInput, resolve_physical_path
 from cocoonet._storage.work_directory import prepare_work_directory
+from cocoonet._type_validation import validate_args, validate_declared_types
 from cocoonet.configuration import (
     ModelRegistration,
     WorkerConfiguration,
@@ -65,11 +66,9 @@ class _RegisteredModel:
         return self.reference.model_label
 
 
+@validate_args
 def _normalize_model_family(value: str, /) -> ModelFamily:
     """Convert one public model-family string to its internal enum."""
-    if type(value) is not str:
-        raise TypeError("family must be a string.")
-
     try:
         family = ModelFamily(value)
     except ValueError as error:
@@ -84,11 +83,9 @@ def _normalize_model_family(value: str, /) -> ModelFamily:
     return family
 
 
+@validate_args
 def _normalize_task_kind(value: str, /) -> TaskKind:
     """Convert one public task-kind string to its internal enum."""
-    if type(value) is not str:
-        raise TypeError("task_kind must be a string.")
-
     try:
         return TaskKind(value)
     except ValueError as error:
@@ -217,17 +214,11 @@ def _filter_registered_models(
     use_regex: bool,
 ) -> tuple[_RegisteredModel, ...]:
     """Return registered models matching all supplied search criteria."""
-    if type(use_regex) is not bool:
-        raise TypeError("use_regex must be a bool.")
-
     criteria = {
         "label": label,
         "family": family,
         "model_input": model_input,
     }
-    for name, criterion in criteria.items():
-        if criterion is not None and not isinstance(criterion, str):
-            raise TypeError(f"{name} must be a string or None.")
 
     if use_regex:
         patterns: dict[str, re.Pattern[str]] = {}
@@ -276,6 +267,95 @@ def _models_to_dataframe(
         for registered in models
     )
     return pd.DataFrame(rows, columns=_MODEL_TABLE_COLUMNS, dtype="string")
+
+
+_WORKER_TABLE_COLUMNS = (
+    "worker_id",
+    "worker_label",
+    "kind",
+    "device",
+    "cpu_capacity",
+    "n_attempt",
+    "n_cpu_per_attempt",
+    "memory_reserve_pct",
+)
+
+
+def _filter_workers(
+    workers: list[WorkerConfiguration],
+    /,
+    *,
+    worker_id: str | None,
+    worker_label: str | None,
+    cpu_capacity: int | str | None,
+    kind: str | None,
+    device: str | None,
+    use_regex: bool,
+) -> tuple[WorkerConfiguration, ...]:
+    """Return registered workers matching all supplied criteria."""
+    criteria = {
+        "worker_id": worker_id,
+        "worker_label": worker_label,
+        "kind": kind,
+        "device": device,
+        "cpu_capacity": None if cpu_capacity is None else str(cpu_capacity),
+    }
+
+    if use_regex:
+        patterns: dict[str, re.Pattern[str]] = {}
+        for name, criterion in criteria.items():
+            if criterion is None:
+                continue
+            try:
+                patterns[name] = re.compile(criterion)
+            except re.error as error:
+                raise ValueError(f"{name} must be a valid regular expression.") from error
+
+        def matches(name: str, value: str) -> bool:
+            """Return whether one value fully matches its active pattern."""
+            pattern = patterns.get(name)
+            return pattern is None or pattern.fullmatch(value) is not None
+
+    else:
+
+        def matches(name: str, value: str) -> bool:
+            """Return whether one value equals its active criterion."""
+            criterion = criteria[name]
+            return criterion is None or value == criterion
+
+    return tuple(
+        worker
+        for worker in workers
+        if matches("worker_id", str(worker.worker_id))
+        and matches("worker_label", str(worker.worker_label))
+        and matches("kind", worker.kind.value)
+        and matches("device", worker.device)
+        and matches(
+            "cpu_capacity",
+            "" if worker.cpu_capacity is None else str(worker.cpu_capacity),
+        )
+    )
+
+
+def _workers_to_dataframe(
+    workers: tuple[WorkerConfiguration, ...],
+    /,
+) -> pd.DataFrame:
+    """Build the public string-typed worker registry table."""
+    rows = (
+        (
+            str(worker.worker_id),
+            str(worker.worker_label),
+            worker.kind.value,
+            worker.device,
+            "" if worker.cpu_capacity is None else str(worker.cpu_capacity),
+            str(worker.n_attempt),
+            str(worker.n_cpu_per_attempt),
+            str(worker.memory_reserve_pct),
+        )
+        for worker in workers
+    )
+    return pd.DataFrame(rows, columns=_WORKER_TABLE_COLUMNS, dtype="string")
 
 
 def _consolidation_after_evaluation_edit(
@@ -641,6 +721,7 @@ class EvaluationTask:
         self._consolidation_state = _consolidation_after_evaluation_edit(self._consolidation_state)
         return registered.reference
 
+    @validate_args
     def list_models(
         self,
         label: str | None = None,
@@ -714,12 +795,6 @@ class EvaluationTask:
         Node usage scope: Root - Presents prospective root-side model
         registrations.
         """
-        if type(suppress_return) is not bool:
-            raise TypeError("suppress_return must be a bool.")
-        if type(tabular_return) is not bool:
-            raise TypeError("tabular_return must be a bool.")
-        if not isinstance(limit, int):
-            raise TypeError("limit must be an integer.")
         if limit < 1:
             raise ValueError("limit must be positive.")
 
@@ -746,6 +821,104 @@ class EvaluationTask:
                 stacklevel=2,
             )
         return _models_to_dataframe(matches[:limit])
+
+    @validate_args
+    def list_workers(
+        self,
+        worker_id: str | None = None,
+        worker_label: str | None = None,
+        cpu_capacity: int | str | None = None,
+        kind: str | None = None,
+        device: str | None = None,
+        *,
+        use_regex: bool = True,
+        suppress_return: bool = False,
+        tabular_return: bool = True,
+        limit: int = 1000,
+    ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None:
+        """Return task-registered workers matching supplied criteria.
+
+        Parameters
+        ----------
+        worker_id : str | None, default=None
+            Worker-ID pattern or exact value. ``None`` ignores this field.
+        worker_label : str | None, default=None
+            Worker-label pattern or exact value. Labels need not be unique.
+        cpu_capacity : int | str | None, default=None
+            Logical-CPU-capacity pattern or exact display value.
+        kind : str | None, default=None
+            Worker-kind pattern or exact value.
+        device : str | None, default=None
+            Worker-device pattern or exact value.
+        use_regex : bool, default=True
+            Whether criteria use case-sensitive full regular-expression
+            matching instead of exact string equality.
+        suppress_return : bool, default=False
+            Whether to return no representation of matching workers.
+        tabular_return : bool, default=True
+            Whether to return a detached string-typed table instead of an
+            immutable tuple of worker configurations.
+        limit : int, default=1000
+            Maximum positive number of rows in a tabular return.
+
+        Returns
+        -------
+        tuple[WorkerConfiguration, ...] | pandas.DataFrame | None
+            Matching task-registered workers in registry order. Tabular mode
+            returns an empty DataFrame when no worker matches. Configuration
+            mode returns ``None`` when no worker matches. Suppressed returns
+            are always ``None``.
+
+        Raises
+        ------
+        TypeError
+            If a criterion, matching mode, return control, or limit has an
+            invalid type.
+        ValueError
+            If a regular expression is invalid or the limit is not positive.
+
+        Warns
+        -----
+        UserWarning
+            If a tabular result is truncated by ``limit``.
+
+        Notes
+        -----
+        This method inspects only workers admitted to this task registry. It
+        does not discover connected workers, test heartbeats, establish a
+        handshake, or alter attempt-allocation membership. The tabular limit
+        does not truncate a configuration tuple.
+        Node usage scope: Root - Presents workers registered for task
+        allocation.
+        """
+        if limit < 1:
+            raise ValueError("limit must be positive.")
+
+        matches = _filter_workers(
+            self._workers,
+            worker_id=worker_id,
+            worker_label=worker_label,
+            cpu_capacity=cpu_capacity,
+            kind=kind,
+            device=device,
+            use_regex=use_regex,
+        )
+
+        # Keep authoritative matches independent from the selected presentation.
+        if suppress_return:
+            return None
+        if not tabular_return:
+            if not matches:
+                return None
+            return matches
+
+        if len(matches) > limit:
+            warnings.warn(
+                "Worker listing truncated to " f"{limit} of {len(matches)} matching workers.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return _workers_to_dataframe(matches[:limit])
 
     def remove_model(
         self,
@@ -781,8 +954,11 @@ class EvaluationTask:
         """
         _require_configuration_editable(self._execution_status)
 
-        if not isinstance(model_label, str):
-            raise TypeError("model_label must be a string.")
+        validate_declared_types(
+            model_label,
+            expected_type=str,
+            field="model_label",
+        )
         if not model_label:
             raise ValueError("model_label must be a nonempty string.")
 
@@ -876,16 +1052,20 @@ class EvaluationTask:
         the registry, model-ID counter, and lifecycle state unchanged. Model
         inputs remain opaque and file inputs are not opened or deserialized.
         """
-        if not isinstance(models, dict):
-            raise TypeError("models must be a dictionary.")
+        validate_declared_types(models, expected_type=dict, field="models")
         if not models:
             raise ValueError("models must contain at least one model.")
-        if type(suppress_return) is not bool:
-            raise TypeError("suppress_return must be a bool.")
-        if type(tabular_return) is not bool:
-            raise TypeError("tabular_return must be a bool.")
-        if not isinstance(limit, int):
-            raise TypeError("limit must be an integer.")
+        validate_declared_types(
+            suppress_return,
+            expected_type=bool,
+            field="suppress_return",
+        )
+        validate_declared_types(
+            tabular_return,
+            expected_type=bool,
+            field="tabular_return",
+        )
+        validate_declared_types(limit, expected_type=int, field="limit")
         if limit < 1:
             raise ValueError("limit must be positive.")
 
@@ -943,6 +1123,7 @@ class EvaluationTask:
             )
         return _models_to_dataframe(tuple(added_models[:limit]))
 
+    @validate_args
     def remove_models(
         self,
         label: str | None = None,
@@ -1003,12 +1184,6 @@ class EvaluationTask:
         not limited by the presentation-row limit. Successful removal
         preserves survivor order and the next model-ID counter.
         """
-        if type(suppress_return) is not bool:
-            raise TypeError("suppress_return must be a bool.")
-        if type(tabular_return) is not bool:
-            raise TypeError("tabular_return must be a bool.")
-        if not isinstance(limit, int):
-            raise TypeError("limit must be an integer.")
         if limit < 1:
             raise ValueError("limit must be positive.")
         if (label, family, model_input) == (None, None, None):

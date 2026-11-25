@@ -5,6 +5,8 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
+from cocoonet._type_validation import validate_declared_types
+
 if TYPE_CHECKING:
     from cocoonet._storage.paths import BundlePublicationPaths
 
@@ -117,9 +119,7 @@ def publish_staged_file(
 
     Node usage scope: Shared - Used by root and worker file publication.
     """
-    if type(replace) is not bool:
-        observed_type = f"{type(replace).__module__}." f"{type(replace).__qualname__}"
-        raise TypeError(f"replace must be bool; got {observed_type}.")
+    validate_declared_types(replace, expected_type=bool, field="replace")
 
     staging = staged_file_path(final_path)
     final = staging.with_name(staging.name.removesuffix(".partial"))
@@ -261,15 +261,11 @@ def publish_staged_bundle(  # noqa: C901
         resolve_physical_path,
     )
 
-    if not isinstance(paths, BundlePublicationPaths):
-        observed_type = f"{type(paths).__module__}.{type(paths).__qualname__}"
-        raise TypeError("paths must be BundlePublicationPaths; " f"got {observed_type}.")
-    if not isinstance(paths.staging, Path):
-        observed_type = f"{type(paths.staging).__module__}." f"{type(paths.staging).__qualname__}"
-        raise TypeError(f"paths.staging must be pathlib.Path; got {observed_type}.")
-    if not isinstance(paths.final, Path):
-        observed_type = f"{type(paths.final).__module__}." f"{type(paths.final).__qualname__}"
-        raise TypeError(f"paths.final must be pathlib.Path; got {observed_type}.")
+    validate_declared_types(
+        paths,
+        expected_type=BundlePublicationPaths,
+        field="paths",
+    )
 
     staging = resolve_physical_path(paths.staging)
     final = resolve_physical_path(paths.final)
@@ -381,15 +377,11 @@ def discard_staged_bundle(  # noqa: C901
         resolve_physical_path,
     )
 
-    if not isinstance(paths, BundlePublicationPaths):
-        observed_type = f"{type(paths).__module__}.{type(paths).__qualname__}"
-        raise TypeError("paths must be BundlePublicationPaths; " f"got {observed_type}.")
-    if not isinstance(paths.staging, Path):
-        observed_type = f"{type(paths.staging).__module__}." f"{type(paths.staging).__qualname__}"
-        raise TypeError(f"paths.staging must be pathlib.Path; got {observed_type}.")
-    if not isinstance(paths.final, Path):
-        observed_type = f"{type(paths.final).__module__}." f"{type(paths.final).__qualname__}"
-        raise TypeError(f"paths.final must be pathlib.Path; got {observed_type}.")
+    validate_declared_types(
+        paths,
+        expected_type=BundlePublicationPaths,
+        field="paths",
+    )
 
     staging = resolve_physical_path(paths.staging)
     final = resolve_physical_path(paths.final)
