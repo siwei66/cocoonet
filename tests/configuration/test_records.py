@@ -128,39 +128,48 @@ def test_validate_model_registration_rejects_wrong_outer_record(invalid: Any) ->
         validate_model_registration(invalid)
 
 
-def test_worker_configuration_preserves_local_and_online_requests() -> None:
-    """Retain worker identity, topology, device, and requested capacity."""
+def test_worker_configuration_preserves_machine_and_execution_properties() -> None:
+    """Retain worker identity, machine properties, and execution settings."""
     local = WorkerConfiguration(
-        worker_label="local",
-        worker_id=WorkerId("worker-local"),
+        worker_id=WorkerId("abc123"),
+        worker_label="shared-label",
         kind=WorkerKind.ROOT_LOCAL,
     )
     online = WorkerConfiguration(
-        worker_label="remote",
-        worker_id=WorkerId("worker-remote"),
+        worker_id=WorkerId("xyz789"),
+        worker_label="shared-label",
         kind=WorkerKind.ONLINE,
         device="cuda:0",
+        cpu_capacity=16,
         n_attempt=3,
+        n_cpu_per_attempt=4,
+        memory_reserve_pct=25.0,
     )
 
-    assert local.worker_label == "local"
-    assert local.worker_id == WorkerId("worker-local")
+    assert local.worker_id == WorkerId("abc123")
+    assert local.worker_label == "shared-label"
     assert local.kind is WorkerKind.ROOT_LOCAL
     assert local.device == "cpu"
+    assert local.cpu_capacity is None
     assert local.n_attempt == 1
+    assert local.n_cpu_per_attempt == 1
+    assert local.memory_reserve_pct == 20.0
 
-    assert online.worker_label == "remote"
-    assert online.worker_id == WorkerId("worker-remote")
+    assert online.worker_id == WorkerId("xyz789")
+    assert online.worker_label == "shared-label"
     assert online.kind is WorkerKind.ONLINE
     assert online.device == "cuda:0"
+    assert online.cpu_capacity == 16
     assert online.n_attempt == 3
+    assert online.n_cpu_per_attempt == 4
+    assert online.memory_reserve_pct == 25.0
 
 
 def test_worker_configuration_is_frozen_slotted_and_keyword_only() -> None:
     """Keep worker configuration immutable, compact, and explicit."""
     configuration = WorkerConfiguration(
+        worker_id=WorkerId("abc123"),
         worker_label="local",
-        worker_id=WorkerId("worker-local"),
         kind=WorkerKind.ROOT_LOCAL,
     )
 
@@ -173,58 +182,82 @@ def test_worker_configuration_is_frozen_slotted_and_keyword_only() -> None:
         configuration.__setattr__("device", "cuda:0")
 
 
-def test_worker_configuration_has_only_requested_capacity() -> None:
-    """Avoid claiming calculated capacity or observed device availability."""
+def test_worker_configuration_matches_public_field_order() -> None:
+    """Match the public worker configuration declaration exactly."""
     configuration = WorkerConfiguration(
+        worker_id=WorkerId("abc123"),
         worker_label="local",
-        worker_id=WorkerId("worker-local"),
         kind=WorkerKind.ROOT_LOCAL,
     )
 
     assert tuple(field.name for field in fields(configuration)) == (
-        "worker_label",
         "worker_id",
+        "worker_label",
         "kind",
         "device",
+        "cpu_capacity",
         "n_attempt",
+        "n_cpu_per_attempt",
+        "memory_reserve_pct",
     )
     assert not hasattr(configuration, "effective_n_attempt")
     assert not hasattr(configuration, "device_available")
 
 
-def test_validate_worker_configuration_accepts_requested_values() -> None:
-    """Accept valid local and online requested worker configurations."""
+def test_validate_worker_configuration_accepts_valid_properties() -> None:
+    """Accept valid worker properties and execution configurations."""
     local = WorkerConfiguration(
-        worker_label="local",
-        worker_id=WorkerId("worker-local"),
+        worker_id=WorkerId("abc123"),
+        worker_label="shared-label",
         kind=WorkerKind.ROOT_LOCAL,
     )
     online = WorkerConfiguration(
-        worker_label="remote",
-        worker_id=WorkerId("worker-remote"),
+        worker_id=WorkerId("xyz789"),
+        worker_label="shared-label",
         kind=WorkerKind.ONLINE,
         device="cuda:0",
+        cpu_capacity=16,
         n_attempt=3,
+        n_cpu_per_attempt=4,
+        memory_reserve_pct=0.0,
     )
+    fully_reserved = replace(online, memory_reserve_pct=100.0)
 
     validate_worker_configuration(local)
     validate_worker_configuration(online)
+    validate_worker_configuration(fully_reserved)
 
 
 @pytest.mark.parametrize(
     ("field", "invalid", "error_type"),
     [
-        ("worker_label", 1, TypeError),
         ("worker_id", 1, TypeError),
         ("worker_id", WorkerId(""), ValueError),
+        ("worker_id", WorkerId("abc12"), ValueError),
+        ("worker_id", WorkerId("abc1234"), ValueError),
+        ("worker_id", WorkerId("ABC123"), ValueError),
+        ("worker_id", WorkerId("abc-12"), ValueError),
+        ("worker_label", 1, TypeError),
         ("kind", "root-local", TypeError),
         ("device", 1, TypeError),
         ("device", "", ValueError),
+        ("cpu_capacity", 0, ValueError),
+        ("cpu_capacity", -1, ValueError),
+        ("cpu_capacity", True, TypeError),
+        ("cpu_capacity", 1.0, TypeError),
         ("n_attempt", 0, ValueError),
         ("n_attempt", -1, ValueError),
         ("n_attempt", True, TypeError),
         ("n_attempt", 1.0, TypeError),
         ("n_attempt", "1", TypeError),
+        ("n_cpu_per_attempt", 0, ValueError),
+        ("n_cpu_per_attempt", -1, ValueError),
+        ("n_cpu_per_attempt", True, TypeError),
+        ("n_cpu_per_attempt", 1.0, TypeError),
+        ("memory_reserve_pct", -0.1, ValueError),
+        ("memory_reserve_pct", 100.1, ValueError),
+        ("memory_reserve_pct", 20, TypeError),
+        ("memory_reserve_pct", "20.0", TypeError),
     ],
 )
 def test_validate_worker_configuration_rejects_invalid_fields(
@@ -234,8 +267,8 @@ def test_validate_worker_configuration_rejects_invalid_fields(
 ) -> None:
     """Reject invalid worker fields without interpreting valid requests."""
     configuration = WorkerConfiguration(
+        worker_id=WorkerId("abc123"),
         worker_label="local",
-        worker_id=WorkerId("worker-local"),
         kind=WorkerKind.ROOT_LOCAL,
     )
     invalid_configuration = replace(configuration, **{field: invalid})
