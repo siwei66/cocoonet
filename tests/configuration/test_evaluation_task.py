@@ -248,8 +248,8 @@ def test_evaluation_task_snapshot_preserves_registry_order_and_associations(
         model_input=object(),
     )
     worker = WorkerConfiguration(
+        worker_id=WorkerId("abc123"),
         worker_label="local",
-        worker_id=WorkerId("worker-local"),
         kind=WorkerKind.ROOT_LOCAL,
     )
     task._models.extend((first, second))
@@ -260,15 +260,15 @@ def test_evaluation_task_snapshot_preserves_registry_order_and_associations(
     assert tuple(snapshot.models) == ("first", "second")
     assert snapshot.models["first"] is first.reference
     assert snapshot.models["second"] is second.reference
-    assert tuple(snapshot.worker_ids) == ("local",)
-    assert snapshot.worker_ids["local"] == WorkerId("worker-local")
+    assert tuple(snapshot.worker_ids) == (WorkerId("abc123"),)
+    assert snapshot.worker_ids[WorkerId("abc123")] == "local"
 
     models: Any = snapshot.models
     worker_ids: Any = snapshot.worker_ids
     with pytest.raises(TypeError):
         models["replacement"] = first.reference
     with pytest.raises(TypeError):
-        worker_ids["replacement"] = WorkerId("replacement")
+        worker_ids[WorkerId("xyz789")] = "replacement"
 
 
 def test_evaluation_task_snapshot_validates_owned_state(

@@ -502,7 +502,7 @@ class EvaluationTask:
             data_partition=self._data_partition,
             evaluation_config=self._evaluation_config,
             models=MappingProxyType({registered.model_label: registered.reference for registered in self._models}),
-            worker_ids=MappingProxyType({worker.worker_label: worker.worker_id for worker in self._workers}),
+            worker_ids=MappingProxyType({worker.worker_id: worker.worker_label for worker in self._workers}),
             parent_id=self._parent_id,
         )
         validate_modeling_snapshot(snapshot)

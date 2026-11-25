@@ -268,9 +268,9 @@ class ModelingSnapshot:
     models : Mapping[ScalarLabel, ModelReference]
         Immutable ordered mapping from user-facing model labels to model
         references in the prospective configuration.
-    worker_ids : Mapping[ScalarLabel, WorkerId]
-        Immutable ordered mapping from user-facing worker labels to configured
-        execution-target identities.
+    worker_ids : Mapping[WorkerId, ScalarLabel]
+        Immutable ordered mapping from authoritative worker identities to
+        descriptive worker labels. Labels may be duplicated.
     parent_id : ParentId | None
         Existing committed parent-task identity. Initialized state uses
         ``None``; consolidated and unconsolidated states retain the existing
@@ -291,7 +291,7 @@ class ModelingSnapshot:
     data_partition: PartitionReference | None
     evaluation_config: EvaluationReference | None
     models: Mapping[ScalarLabel, ModelReference]
-    worker_ids: Mapping[ScalarLabel, WorkerId]
+    worker_ids: Mapping[WorkerId, ScalarLabel]
     parent_id: ParentId | None
 
 
@@ -309,17 +309,18 @@ def validate_modeling_snapshot(value: ModelingSnapshot) -> None:  # noqa: C901
         If a record, container, or field has an incorrect runtime type.
     ValueError
         If a path, label, or identity is empty, a nested reference is invalid,
-        a model key disagrees with its reference, model or worker IDs are
-        duplicated, or parent presence conflicts with consolidation state.
+        a model key disagrees with its reference, model IDs are duplicated, or
+        parent presence conflicts with consolidation state.
 
     Notes
     -----
     Incomplete configuration remains representable. Initialized state has
     no parent; consolidated and unconsolidated states retain a parent ID.
-    Mapping keys preserve registration order and define user-facing model and
-    worker lookup. Local sets check ID uniqueness without mutating input. This
-    validator does not compare snapshots, enforce model/evaluation readiness,
-    inspect files, calculate capacity, or perform transitions.
+    Mapping keys preserve registration order. Model labels index model
+    references, while worker identities index descriptive worker labels.
+    Worker labels may be duplicated. This validator does not compare
+    snapshots, enforce model/evaluation readiness, inspect files, calculate
+    capacity, or perform transitions.
     Node usage scope: Root only - Used exclusively by the root node.
     """
     # Validate the outer record and its own fields without a recursive traversal.
@@ -377,16 +378,16 @@ def validate_modeling_snapshot(value: ModelingSnapshot) -> None:  # noqa: C901
             raise ValueError(f"models[{index}].model_id must be unique; duplicate ID prefix: {model.model_id!r}.")
         model_ids.add(model.model_id)
 
-    # Worker labels are public keys; routing IDs remain independently unique.
-    worker_ids: set[WorkerId] = set()
-    for index, (worker_label, worker_id) in enumerate(value.worker_ids.items()):
-        validate_label(worker_label, field=f"worker_ids.keys[{index}]")
-        if not worker_label:
-            raise ValueError(f"worker_ids.keys[{index}] must be a nonempty string; got an empty string.")
-        validate_identifier(worker_id, field=f"worker_ids[{index}]")
-        if worker_id in worker_ids:
-            raise ValueError(f"worker_ids[{index}] must be unique; duplicate ID prefix: {worker_id!r}.")
-        worker_ids.add(worker_id)
+    # Worker IDs are authoritative keys; labels remain non-unique properties.
+    for index, (worker_id, worker_label) in enumerate(value.worker_ids.items()):
+        validate_identifier(
+            worker_id,
+            field=f"worker_ids.keys[{index}]",
+        )
+        validate_label(
+            worker_label,
+            field=f"worker_ids[{index}]",
+        )
 
     # Validate a supplied identity before checking its lifecycle relationship.
     if value.parent_id is not None:

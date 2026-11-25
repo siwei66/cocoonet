@@ -180,7 +180,7 @@ def test_modeling_snapshot_preserves_configuration_references() -> None:
         data_partition=partition,
         evaluation_config=evaluation,
         models=MappingProxyType({model.model_label: model}),
-        worker_ids=MappingProxyType({"local-worker": WorkerId("worker-a")}),
+        worker_ids=MappingProxyType({WorkerId("abc123"): "local-worker"}),
         parent_id=ParentId("parent-a"),
     )
     same = ModelingSnapshot(
@@ -189,7 +189,7 @@ def test_modeling_snapshot_preserves_configuration_references() -> None:
         data_partition=partition,
         evaluation_config=evaluation,
         models=MappingProxyType({model.model_label: model}),
-        worker_ids=MappingProxyType({"local-worker": WorkerId("worker-a")}),
+        worker_ids=MappingProxyType({WorkerId("abc123"): "local-worker"}),
         parent_id=ParentId("parent-a"),
     )
 
@@ -198,9 +198,9 @@ def test_modeling_snapshot_preserves_configuration_references() -> None:
     assert snapshot.data_partition is partition
     assert snapshot.evaluation_config is evaluation
     assert snapshot.models["baseline"] is model
-    assert snapshot.worker_ids["local-worker"] == WorkerId("worker-a")
+    assert snapshot.worker_ids[WorkerId("abc123")] == "local-worker"
     assert tuple(snapshot.models) == ("baseline",)
-    assert tuple(snapshot.worker_ids) == ("local-worker",)
+    assert tuple(snapshot.worker_ids) == (WorkerId("abc123"),)
     assert snapshot.parent_id == ParentId("parent-a")
     assert snapshot == same
     assert isinstance(snapshot.models, MappingProxyType)
@@ -592,8 +592,8 @@ def test_validate_modeling_snapshot_preserves_mapping_order() -> None:
         models=MappingProxyType({"first": first, "second": second}),
         worker_ids=MappingProxyType(
             {
-                "first-worker": WorkerId("worker-a"),
-                "second-worker": WorkerId("worker-b"),
+                WorkerId("abc123"): "shared-label",
+                WorkerId("xyz789"): "shared-label",
             }
         ),
         parent_id=None,
@@ -602,7 +602,14 @@ def test_validate_modeling_snapshot_preserves_mapping_order() -> None:
     validate_modeling_snapshot(snapshot)
 
     assert tuple(snapshot.models) == ("first", "second")
-    assert tuple(snapshot.worker_ids) == ("first-worker", "second-worker")
+    assert tuple(snapshot.worker_ids) == (
+        WorkerId("abc123"),
+        WorkerId("xyz789"),
+    )
+    assert tuple(snapshot.worker_ids.values()) == (
+        "shared-label",
+        "shared-label",
+    )
 
 
 def test_validate_modeling_snapshot_preserves_parent_after_worker_edit() -> None:
@@ -627,12 +634,12 @@ def test_validate_modeling_snapshot_preserves_parent_after_worker_edit() -> None
             influence_requested=False,
         ),
         models=MappingProxyType({model.model_label: model}),
-        worker_ids=MappingProxyType({"local-worker": WorkerId("worker-a")}),
+        worker_ids=MappingProxyType({WorkerId("abc123"): "local-worker"}),
         parent_id=ParentId("parent-a"),
     )
     edited = replace(
         snapshot,
-        worker_ids=MappingProxyType({"replacement-worker": WorkerId("worker-b")}),
+        worker_ids=MappingProxyType({WorkerId("xyz789"): "replacement-worker"}),
     )
 
     validate_modeling_snapshot(snapshot)
@@ -827,9 +834,8 @@ def test_validate_modeling_snapshot_rejects_model_key_mismatch() -> None:
         validate_modeling_snapshot(snapshot)
 
 
-@pytest.mark.parametrize("field", ["models", "worker_ids"])
-def test_validate_modeling_snapshot_rejects_empty_mapping_label(field: str) -> None:
-    """Reject an empty user-facing model or worker mapping label."""
+def test_validate_modeling_snapshot_rejects_empty_model_mapping_label() -> None:
+    """Reject an empty model label used as a model mapping key."""
     model = ModelReference(
         model_id=ModelId("model-a"),
         model_label="baseline",
@@ -841,17 +847,20 @@ def test_validate_modeling_snapshot_rejects_empty_mapping_label(field: str) -> N
         consolidation_state=ConsolidationState.INITIALIZED,
         data_partition=None,
         evaluation_config=None,
-        models=MappingProxyType({"": model}) if field == "models" else MappingProxyType({}),
-        worker_ids=(MappingProxyType({"": WorkerId("worker-a")}) if field == "worker_ids" else MappingProxyType({})),
+        models=MappingProxyType({"": model}),
+        worker_ids=MappingProxyType({}),
         parent_id=None,
     )
 
-    with pytest.raises(ValueError, match=rf"^{field}\.keys\[0\].*nonempty.*empty string"):
+    with pytest.raises(
+        ValueError,
+        match=r"^models\.keys\[0\].*nonempty.*empty string",
+    ):
         validate_modeling_snapshot(snapshot)
 
 
-def test_validate_modeling_snapshot_rejects_duplicate_worker_id() -> None:
-    """Reject repeated configured worker identities."""
+def test_validate_modeling_snapshot_allows_duplicate_worker_labels() -> None:
+    """Allow descriptive labels to be shared by distinct worker identities."""
     snapshot = ModelingSnapshot(
         work_dir="computation-root",
         consolidation_state=ConsolidationState.INITIALIZED,
@@ -860,18 +869,19 @@ def test_validate_modeling_snapshot_rejects_duplicate_worker_id() -> None:
         models=MappingProxyType({}),
         worker_ids=MappingProxyType(
             {
-                "first-worker": WorkerId("worker-a"),
-                "second-worker": WorkerId("worker-a"),
+                WorkerId("abc123"): "shared-label",
+                WorkerId("xyz789"): "shared-label",
             }
         ),
         parent_id=None,
     )
 
-    with pytest.raises(
-        ValueError,
-        match=r"worker_ids\[1\].*unique.*worker-a",
-    ):
-        validate_modeling_snapshot(snapshot)
+    validate_modeling_snapshot(snapshot)
+
+    assert tuple(snapshot.worker_ids) == (
+        WorkerId("abc123"),
+        WorkerId("xyz789"),
+    )
 
 
 def _valid_parent_evaluation(
@@ -1223,7 +1233,7 @@ def test_parent_rejects_invalid_components(field: str, invalid: object) -> None:
         ("worker_ids", []),
         ("worker_ids", (1,)),
         ("worker_ids", {}),
-        ("worker_ids", MappingProxyType({"local-worker": None})),
+        ("worker_ids", MappingProxyType({WorkerId("abc123"): None})),
         ("work_dir", 1),
         ("consolidation_state", "initialized"),
     ],
