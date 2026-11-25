@@ -1,0 +1,1413 @@
+# AGENTS.md
+
+## Project Overview
+
+Cocoonet evaluates machine learning models using an explicitly configured root-local worker, independent heterogeneous
+online workers, or both. The root (user) node always owns coordination; it does not automatically act as a worker.
+It prepares dataset access, supplies models and evaluation directives, and receives standardized result bundles. Online
+workers use synchronized datasets. Scientific auditability, transparency, and reproducibility are core requirements.
+
+**Reusable EvaluationTask and User Workflow:**
+
+- An `EvaluationTask` instance is Cocoonet's core public API and reusable root-side evaluation configuration, not a
+  committed parent evaluation task, model unit, attempt, worker, scheduler, or runtime controller. Construction requires
+  a user-provided working directory; `overwrite` defaults to `False`. Prepare a missing directory or accept an empty one;
+  reject a nonempty directory
+  with `overwrite=False`. With explicit `overwrite=True`, clear its contents and prepare it for fresh execution.
+  Successful construction/initialization sets `state = initialized`. Initialization is distinct from recovery.
+  Accept absolute and relative working-directory specifications. Resolve an absolute path directly and resolve a
+  relative path from the current console working directory. Use the user-provided directory directly.
+  The root node working directory is Cocoonet-managed persistent storage; configured user-owned dataset source paths must
+  remain outside it. Validate this ownership boundary before preparing or clearing the directory.
+- Reject an unsafe root node working directory before creating, changing, or deleting any persistent file. Protected locations include
+  filesystem anchors, Python installation and package-installation directories, the installed Cocoonet package
+  directory, and the complete Cocoonet source repository tree. Reject a filesystem anchor itself. For the other listed
+  risky locations, reject a proposed working directory that equals, contains, or is contained within the location. Do not reject an
+  otherwise safe path merely because it is absolute. Apply the checks to canonical physical locations so path aliases
+  cannot bypass them.
+- Reject a dataset source path equal to or contained within the root node working directory. Enforce this configuration
+  invariant in both directions: validate dataset addition/path changes against the current working directory, and validate work-directory
+  initialization/change/reassignment against every existing configured dataset source path, including paths retained
+  by a copied instance. A conflicting root configuration fails explicitly without modifying persistent files;
+  a conflicting dataset configuration also fails explicitly. An outside path satisfies this ownership check.
+  Managed work-directory contents may be cleared under the existing persistence/overwrite rules without dataset-path exclusions.
+- Incomplete configuration is valid before run: dataset setup may be pending and model/worker counts may be zero.
+  Ordinary configuration edits change in-memory attributes only; they do not create, modify, or delete files.
+  `add_dataset()` is the explicit artifact-preparation exception: it realizes or validates and persists the current
+  partition schedule, managed `root_data_reference.xlsx`, and applicable reusable transfer representations. These writes
+  do not consolidate execution configuration or modify original user data or a fixed parent's dataset.
+- `run()` from `initialized` validates prerequisites, persists the fixed execution configuration in
+  `execution_configuration.csv`, establishes a fresh parent, and begins the workflow. Once committed, the instance is
+  `consolidated`. The root creates exactly one initial attempt record per configured model, in fixed model order, with
+  a generated `attempt_id`, empty `worker_id`, and `attempt_status = not_allocated`. `execution_state.csv` is an
+  informational current-state table for attempts, especially for inspection after a crash; it is not authoritative
+  evidence of parent or model progress. Actual atomically published root result bundles determine which model units
+  are complete. No attempt is assigned before durable partition persistence and successful preparation of the
+  selected worker's parent dataset and partition context.
+- Each parent represents one fixed execution configuration and coherent result set. Units and attempts retain their
+  parent's configuration for their lifetime. Later edits are prospective only, never propagated into allocated work.
+  Ordinary active execution locks configuration changes. Root interruption permits prospective edits without waiting
+  for old workers to reach their stop boundaries; their allocated work retains its fixed configuration.
+- Model evaluation configuration comprises the dataset and realized split, supplied models/model inputs, and
+  evaluation settings. A permitted change to it makes a consolidated instance `unconsolidated` and requires a new
+  parent. Run rejects that state, even with an empty directory; explicit `initialize(...)` must prepare a fresh
+  execution directory and restore `initialized` before run commits the new parent. Edits before first run retain
+  initialized state.
+- Worker configuration, including additions, removals, and execution topology, is separate from model evaluation
+  configuration. Worker-only changes neither make the instance unconsolidated nor create a parent. With unchanged
+  model evaluation configuration, run resumes the existing parent, with or without worker changes, preserving
+  its fixed scientific inputs, progress, results, and retry limits. Worker changes still obey configuration locks,
+  readiness, ownership, and cleanup rules.
+- An ordinary copy reproduces attributes, including configuration, working directory, and lifecycle state. Copying
+  does not create a parent, choose/clear a directory, reset state, or clone live processes, connections, attempts,
+  or result bundles. An unchanged consolidated copy refers to the same persisted execution and has resume semantics.
+  A later model evaluation configuration edit makes either original or copy unconsolidated under the same rule;
+  worker-only changes preserve the existing parent and consolidation state.
+- Unchanged consolidated state represents an existing execution: resume/recovery preserves its parent identity and
+  persisted state and never clears or freshly initializes its directory. A new parent is created for the first
+  evaluation or changed model evaluation configuration after the required initialization; unchanged evaluation does
+  not become a new parent merely because run is called again. Exact recovery APIs and copy mechanisms remain deferred.
+- A configured instance has one active dataset and authoritative partition. `add_dataset()` prepares both, loading
+  and validating an existing `split_path` without splitting; for a new partition, a splitter and its required
+  configuration must be supplied.
+  Accept only exact dataset associations with matching `sample_id`, corresponding `sample_label`, and valid
+  memberships. Re-adding while configuration is mutable replaces the current association, not an old parent's
+  fixed dataset/split. Other instances or later parents may reuse the artifact after the same validation.
+- No general persistent-file clear API is required. Dataset removal changes configuration references; persistence
+  artifacts remain files under the applicable ownership rules. A convenience clear API is optional. Explicit fresh
+  initialization may replace the selected working directory with the user's overwrite opt-in; it is not recovery.
+
+```text
+constructor / initialize(work_dir, ...) -> initialized
+initialized + configuration edits      -> initialized
+initialized + run()                    -> persist configuration -> new parent -> consolidated
+consolidated + unchanged evaluation    -> same parent / resume, with or without worker changes
+consolidated + permitted evaluation edit -> unconsolidated
+unconsolidated + run()                 -> reject
+unconsolidated + initialize(...)       -> initialized -> fresh run permitted
+copy(evaluation_task)                -> same attributes, root node working directory, and lifecycle state
+```
+
+Attempt termination has three distinct meanings. `interrupted` records parent interruption and is terminal for that
+attempt. `connection_loss` records loss of the parent-worker connection; the root creates replacement attempts for
+unfinished models, while a later reconnected attempt may still compete unless another attempt has already synchronized
+the model's accepted result. `aborted` is terminal and applies only when another attempt of the same model first reaches
+`result_synchronized`. Cancellation and supersession are not additional attempt states or lifecycle operations. Late
+results remain associated with their original parent and cannot enter another parent's result set.
+
+**Model Scope & Task Flow:**
+
+- Public model-registration APIs accept ordinary strings rather than internal structured contract types. `model_label`
+  is a nonempty string; `family` is `"sklearn"`, `"sklearn-like"`, `"pytorch"`, or the reserved `"cocoonet"`; and
+  `task_kind` is `"regression"` or `"classification"`. Reject `"cocoonet"` while Cocoonet-native models remain under
+  development. Internal enums may represent normalized state after this public boundary.
+- `model_input` is either an in-memory model instance or a path to an existing model-object file. Reject `None` and
+  class definitions. Phase 3 retains an in-memory candidate without executing or inspecting model APIs; Phase 6
+  validates it against the declared family and task after the isolation boundary exists. Supported candidates are
+  scikit-learn-like regressors with `fit` and `predict`, scikit-learn-like classifiers with `fit`, `predict`, and
+  `predict_proba`, and PyTorch reconstruction and training information with a user-selected weight initialization
+  pattern.
+- Phase 3 accepts any existing regular user-provided model file with a nonempty extension as an opaque path reference.
+  It resolves and stores the canonical absolute path but does not infer the model family from the suffix or read or
+  deserialize the file. After the Phase 5 isolation boundary is established, Phase 6 selects the applicable user-input
+  loader from the complete lowercase extension and validates the loaded object against its declared family and task.
+  Later replacement or mutation of the referenced file is the user's responsibility; Cocoonet adds no source lock,
+  digest, or metadata-change check for this risk alone.
+- A parent model evaluation task is one fresh evaluation run created by `run()` from initialized state, containing
+  exactly one dataset, one fixed task-wide evaluation configuration, and one or more models. Each model produces one
+  unit task distinguished within its parent by its unique user-provided `model_label`. The parent dataset and
+  configuration and each unit task's model input remain fixed.
+- An attempt record represents one prospective or assigned worker execution of a model unit. The root creates exactly
+  one initial attempt per model with `not_allocated` status. Parent dataset/configuration/partition readiness and
+  reusable root-side model preparation precede worker assignment and remain outside the attempt-state table. Once a
+  ready worker is assigned, the attempt enters `model_synchronizing` directly; there is no separate `allocated`
+  status. The attempt then covers model synchronization or local handoff, reconstruction/loading, evaluation, report
+  and bundle production, and result synchronization to durable root storage.
+- A late duplicate or a user-configured retry creates a new attempt ID for the same parent/model unit. New attempts are
+  appended in creation order and begin as `not_allocated`. Folds and individual samples are not separate distributed
+  tasks.
+- Each attempt first synchronizes the model data required for reconstruction, or establishes applicable local access,
+  then reconstructs the initial model and its reproducible construction state on the worker. For every
+  primary-validation fold, create a fresh untrained fold model from that state, fit it on the fold's training
+  population, predict its testing population, retain the aligned predictions and provenance, and release the fitted
+  fold model. Learned state must not pass between folds. The exact framework-specific mechanism may reconstruct,
+  clone, or deeply copy from the pristine state, provided it preserves these invariants.
+
+**Attempt State Persistence:**
+
+- `execution_state.csv` has exactly these physical CSV columns, in this order: `parent_id`, `worker_id`, `model_label`,
+  `model_id`, `attempt_id`, and `attempt_status`. Undefined values are encoded as empty CSV fields. In particular,
+  `worker_id` is empty before a worker assignment is established.
+- The permitted statuses are `not_allocated`, `allocation_failed`, `model_synchronizing`, `model_synchronized`,
+  `model_synchronizing_failed`, `running`, `attempt_finished_without_error`, `attempt_finished_with_error`,
+  `attempt_failed`, `result_synchronizing`, `result_synchronized`, `result_synchronization_failed`, `interrupted`,
+  `connection_loss`, and `aborted`.
+- `allocation_failed`, `model_synchronizing_failed`, `attempt_failed`, and `result_synchronization_failed` terminate
+  that attempt. A user-configured policy may create a new `not_allocated` attempt for the model; it never resumes the
+  failed attempt.
+- `attempt_finished_with_error` means that scientific failures were recorded but a complete valid result bundle was
+  produced. It may proceed to result synchronization. `attempt_failed` means no complete valid result bundle exists.
+- While an attempt remains `result_synchronizing`, retry the same worker-published result according to the configured
+  synchronization-retry policy. `result_synchronization_failed` is recorded only after that retry policy is exhausted.
+- `result_synchronized` means that the complete bundle has been successfully synchronized to and atomically published
+  in root storage. The first attempt for a parent/model pair whose bundle is successfully published wins. Mark every
+  other attempt of that model `aborted`; do not receive or persist their result bundles.
+- `interrupted` is terminal and applies only to parent interruption. An interrupted attempt is never resumed.
+- `connection_loss` records a disconnected attempt. The root creates replacement attempts for unfinished models. A
+  reconnected attempt may later report its current state or synchronize a completed result; if another attempt has
+  already won, mark it `aborted`.
+- `aborted` is a logical result-arbitration state, not evidence of worker-side deletion. Worker timeout and retention
+  settings independently govern cleanup. A crash may leave files behind.
+- Root `execution_state.csv` contains every attempt created for every model in the parent. Worker
+  `execution_state.csv` contains only attempts assigned to that worker and appends a row when another attempt is
+  assigned.
+- Initial root rows follow fixed model order. Later rows are appended in attempt-creation order. Readers must not infer
+  semantics from row order. Existing rows are never removed or reordered.
+- Each node serializes modifications through one writer for its state file. Status updates replace the complete file
+  atomically through same-directory staging; creating an attempt appends its row to the preserved identity sequence
+  before the same atomic replacement.
+- `execution_state.csv` is informational. Recovery and progress determination validate actual final root bundles. A
+  state row alone never proves completion, acceptance, persistence, cleanup, or the existence of an artifact.
+- Failure to reconstruct the initial model produces the scientific result outcome `reconstruction_failed`. After
+  successful reconstruction, failure to initialize, fit, or predict any primary-validation fold produces the
+  scientific result outcome `validation_failed`. These are not attempt-status values. Continue later independent folds
+  when the model-construction mechanism remains usable, preserving successful fold results; do not retry the failed
+  fold or fabricate its predictions.
+- Optional sample influence begins only after primary validation succeeds. It reuses the stored primary-validation
+  predictions as the fixed comparison baseline and the same realized schedule. For each sample and each fold where
+  that sample belongs to the training population, create a fresh removal model, fit without that sample, predict the
+  unchanged testing population, compare with the stored baseline, retain the resulting influence contribution, and
+  release the fitted model. No removal evaluation is performed for a fold where the sample is held out.
+- Evaluation strategies include k-fold, grouped k-fold, Leave-One-Out (LOO), Leave-One-Group-Out (LOGO), and train-test
+  splits. With no masks, validation results cover all samples for those cross-validation strategies and all test
+  samples for a train-test split. With masks, results cover the realized permitted testing memberships; samples
+  excluded from testing do not receive fabricated validation predictions.
+- The root establishes the dataset's complete realized partition through `add_dataset()`; each fresh parent binds
+  that current validated schedule before unit-task allocation. Every unit task and execution attempt uses exactly the
+  same training and testing sample
+  memberships. Models and workers must not independently regenerate, reshuffle, or alter them. Splitting randomness
+  is resolved only during root-side split preparation; separate parent tasks may realize different partitions.
+  Preparing or reusing a split must preserve its dataset association and the persistence contract below.
+- Persist each realized schedule once in one authoritative `partition_schedules.xlsx` file. Preserve its dataset and
+  partition identities, sample-ID/label associations, ordered folds, distinct training and testing memberships, and
+  population order. Persistence must succeed before unit allocation. Do not divide or duplicate its authoritative
+  storage; worker copies are execution inputs.
+- Supply the applicable realized indices with online dataset synchronization, or local artifact preparation, as part
+  of parent-context preparation. Workers select training/testing data using those indices; they never invoke the
+  splitter. A retained ready dataset may be
+  reused without retransmission, but the worker must receive the applicable parent partition context before allocation.
+  Every unit task and attempt, including duplicates, uses the same saved memberships. After a root restart following
+  successful persistence, load and validate the existing XLSX file; do not rerun the splitter or create replacement
+  partitions.
+  Retaining only the splitting method or seed is insufficient.
+- Worker outputs include fold data, validation results, performance and residual reports, visualization data, and an
+  optional sample influence report.
+- Within the active dataset, module-generated `sample_id` values identify samples internally, while root-assigned,
+  user-provided unique `label` values identify them in user-facing reports. Preserve their one-to-one mapping.
+  Neither identifier requires global or cross-dataset identity, and neither is a target/class label. Users supply
+  sample labels, not Cocoonet's generated `sample_id` values; `sample_label` denotes the same user-facing label.
+- The canonical dataset is sample-oriented and tabular. Support ordinary inline features (`sample_label`, `y`,
+  feature values), inline tensor data (also a reconstructible shape), and file-backed data (`sample_label`, `y`,
+  logical/dataset-relative `X_file` reference(s)). Tensor reconstruction must be deterministic and satisfy
+  `product(shape) == number of flattened X values`; do not pad, truncate, repair, or infer inconsistent tensor data.
+  Source references resolve against worker-local storage rather than root-machine absolute paths. Mixed inline/file
+  rows and per-sample versus dataset-global shape encoding may be specified during dataset-schema design; support
+  for either choice is not implied before that design.
+- User tables may be grouped/ungrouped and masked/unmasked for each supported input form. Normalize the in-memory
+  and stored dataset dataframe to the same grouped, masked structure, retaining generated `sample_id` and adding
+  `group`, `train_mask`, and `test_mask` beside `sample_label`, target, and feature/source fields. Missing groups
+  default to a distinct group ID for each sample; missing masks default to `1`.
+- `group` supports grouped train-test splitting, grouped k-fold, and LOGO. `train_mask == 1` permits training use;
+  `train_mask == 0` excludes the sample from every training population. `test_mask` independently applies the
+  analogous testing permission/exclusion. Permission does not itself establish fold membership. The configured root
+  split and masks determine saved memberships while preserving disjoint train/test rows and applicable group
+  separation. Training-only augmented samples and test-only reserved samples are supported; split randomness is
+  accepted. Group/mask metadata is part of the exact dataset representation and its split validation.
+
+**Dataset input and standardization clarification:**
+
+- Users provide source input table files; users do not provide Cocoonet's managed `root_data_reference.xlsx` or
+  `worker_data_reference.xlsx`.
+  Inline-feature and inline-tensor datasets accept one or more input tables. File-backed datasets accept
+  exactly one input reference table. Supported formats are `.csv`, `.csv.gz`, `.csv.zst`, `.xls`, `.xlsx`,
+  `.ods`, `.parquet`, `.orc`, and `.feather`. Pickle/dill dataset inputs, including `.pkl`, `.pickle`, and
+  `.dill`, are unsupported and must not be loaded locally or over the network.
+- Read only the first worksheet of XLS, XLSX, and ODS files. Automatically detect CSV character encoding
+  after decompressing compressed CSV input when applicable.
+- Multiple inline tables divide the dataset by samples only. Each file contains different complete sample
+  records. Do not split one sample's features across files or join input files column-wise.
+- Initial row identification uses `sample_label`. Supplied labels must be strictly unique across the complete
+  dataset. If the `sample_label` column exists but any value is missing, reject the input.
+- If the `sample_label` column is entirely absent, generate each label as
+  `#%_<logical-source-reference>_<one-based-initial-row-number>`. Reserve the `#%_` prefix for generated
+  labels and reject supplied labels beginning with that prefix. Validate generated labels for uniqueness.
+- After initial identification, generate `sample_id` and preserve its one-to-one association with
+  `sample_label`. Row number and row order have no identity semantics after standardization.
+- Standardize sample IDs, sample labels, groups, and other identifier-like values as text. Preserve text,
+  convert integers directly to decimal text, and reject floating-point and boolean values. Validate
+  uniqueness and associations after conversion; reject collisions rather than introducing type encodings.
+- Standardize classification targets as text. Preserve text, convert integers directly to decimal text,
+  and reject floating-point and boolean targets.
+- Standardize regression targets and inline X as finite floating-point data. Reject nonnumeric values,
+  booleans, `NaN`, positive infinity, and negative infinity. Do not impute, drop, replace, clip, or otherwise
+  cleanse nonfinite values.
+- The later dataset input API selects the floating-point representation used for regression targets and
+  inline X.
+- Tensor shape is an ordered sequence of positive integer dimensions. Accept tuples, lists, arrays, and
+  textual forms such as `"3,224,224"` or `"(3, 224, 224)"`. Normalize accepted forms to the same ordered
+  integer semantics. Reject booleans, malformed text, noninteger or nonpositive dimensions, and unsupported
+  structures.
+- Standardized `train_mask` and `test_mask` values are integers exactly `0` or `1`, excluding `bool`.
+  Each absent mask independently defaults to `1`; `1` means allowed and `0` means not allowed for the corresponding
+  training or testing population.
+- Missing groups receive unique text values without colliding with supplied groups. Group separation remains
+  unconditional.
+- Input standardization and storage/transfer translation are separate. Standardization applies the field
+  contracts above. Translation changes only the storage representation of already-standardized data and
+  must preserve its values, sample associations, and semantics exactly.
+- Dataset preparation creates exactly one managed `<work_dir>/root_data_reference.xlsx` for the computation's
+  current dataset. It contains generated sample IDs and standardized labels, groups, masks, targets, source
+  associations, and tensor metadata.
+- For file-backed input, the user input table identifies the actual file or files containing each sample's
+  X data. `SampleRecord.sources` references those X-bearing files, not the user input reference table.
+- For inline input, X is present in the input table, so that table is the sample source.
+- Managed `root_data_reference.xlsx`, `worker_data_reference.xlsx`, and any future managed `data_meta.csv` are never
+  included in
+  `SampleRecord.sources`.
+- `SourceReference` identifies a logical file path only. It contains no row number, row position, or record
+  locator. Initial source-table matching uses the standardized sample label; internal dataset, partition,
+  prediction, and reporting associations use the generated `sample_id`.
+- On workers, Cocoonet generates the corresponding `worker_data_reference.xlsx` with worker-local synchronized paths
+  selected by Cocoonet. Root physical paths do not become worker physical paths.
+
+**Large-table transfer preparation:**
+
+- Apply transfer preparation only to tabular source files. Measure each original table independently by its
+  stored file size, regardless of table format. Use decimal units: `1 MB = 1,000,000 bytes` and
+  `1 GB = 1,000,000,000 bytes`.
+- Do not use decompressed size, DataFrame memory use, or the combined size of multiple files.
+- Convert a table larger than 16 MB to ZSTD-compressed Parquet before online transfer unless it is already
+  ZSTD-compressed Parquet.
+- For an unsharded conversion, remove the recognized input suffix or compound suffix and append
+  `_compressed.parquet`; for example, `samples.csv.gz` becomes `samples_compressed.parquet`.
+- An original table larger than 1 GB is divided into multiple ZSTD-compressed Parquet shards. The dataset
+  input API exposes a target shard-size parameter whose default is 512 MB.
+- Calculate `shard_count = max(2, ceil(original_stored_size / target_shard_size))`. Divide complete rows
+  among those shards as evenly as possible; row counts may differ by at most one. The target size determines
+  shard count and is not a strict output-file size limit.
+- Treat every source file as an independent preparation unit. Read, standardize, compress, and shard one
+  source at a time. Dataset-global shard numbering must not require combining or simultaneously materializing
+  multiple source files.
+- Store prepared representations in the Cocoonet-managed `dataset_for_transfer/` directory under the configured source
+  dataset root. This is an explicit `add_dataset()` artifact-preparation exception and does not make the original source
+  files Cocoonet-managed. Number shards globally within that prepared dataset as
+  `cocoonet_dataset_shard_<zero-padded-one-based-number>.parquet`.
+- Never modify, replace, rename, or delete original source files. Prepared representations remain visible until the
+  user removes them through the operating system or invokes a documented regeneration operation. Worker cleanup does
+  not remove them.
+- Within an existing parent, reuse its fixed prepared representation for every worker transfer without
+  repeating source-state checks, compression, or sharding.
+- Persist automatic-reuse state containing the source path, stored file size, modification time, and all
+  preparation-relevant settings. In a later execution, automatic reuse is allowed when those values match;
+  otherwise regenerate.
+- Metadata-based change detection is intentional. Cocoonet does not reread large source files solely to
+  compute a content digest. Content changes made while path, size, and modification time are deliberately
+  preserved are outside automatic detection; users may explicitly request regeneration.
+- A new `EvaluationTask` instance with no persisted source state regenerates by default. The later dataset API
+  also permits explicit reuse or explicit regeneration. Explicit reuse fails if required prepared files
+  are absent.
+- Dataset registration includes root-side split preparation and inspection through `add_dataset()`. `run()` consumes
+  the current validated dataset and partition; it does not invent a missing split or require a separate split call.
+- Required public capabilities are initialization; dataset add/set with split preparation, inspect/remove; model
+  add/list/remove; and worker add/list/inspect/summary/remove, with singular and bulk forms of each add/remove operation.
+  Required lifecycle capabilities include `run`, interruption, recovery, and configuration modification/copy/reuse. A
+  general root-file clearing API is optional.
+  Every configured worker has a user-defined `worker_label` unique within its `EvaluationTask` and a distinct opaque
+  `worker_id`. Public worker registry operations identify workers by `worker_label`; runtime routing, connection
+  matching, attempt records, protocol messages, and `execution_state.csv` continue to use `worker_id`.
+  Singular mutations are the primitive semantic actions; bulk operations are explicit conveniences. Define their
+  commit/partial-failure behavior before implementation; do not silently leave undocumented partial configuration
+  after validation failure. Approved phase-specific contracts govern exact names, signatures, return types, aliases,
+  and containers already established by implementation; those not yet established remain deferred.
+- Local-only, online-only, and mixed execution are supported. The root-local worker and online workers are
+  independently optional and must be explicitly configured for normal evaluation; root coordination alone is not an
+  execution target.
+- `run()` requires one active dataset, at least one model, and at least one usable explicitly configured execution
+  target for normal evaluation. Do not silently enable a local worker for the main evaluation, create a fake network
+  worker, or wait for a never-configured worker. If none is currently runnable, fail startup explicitly; independent
+  online connection retries continue so a later run may succeed.
+- When preflight is requested, `run()` may initialize a temporary root-local worker process solely to perform a real
+  trial on the configured data and selected model subset. It does not run model code in the coordinator, does not
+  become an implicit target for the full evaluation, and does not guarantee that later evaluation will be failure-free.
+
+**Fold Results:**
+
+- Training and testing populations use the same logical sample structure: internal `sample_id`, user-provided sample
+  label, group and training/testing masks, dataset-relative source-file reference(s), and target value or class label.
+  Saved fold/split membership
+  determines the population; do not define different sample-data schemas for training and testing.
+- Internal fold records retain sample identities and their user-label mappings. User-facing fold reports identify
+  samples by their user-provided labels. Predictions, predicted class labels, and class probabilities are computed
+  results associated with those samples, not replacements for or changes to their underlying sample structure.
+- Classification fold `y` results identify held-out samples and contain true class labels, predicted class labels,
+  and probabilities with explicit class identities. Regression fold `y` results identify held-out samples and contain
+  true and predicted target values.
+- Fold `X` results reference source data rather than returning feature arrays. Every fold separately provides
+  source-file references for its training and testing populations. References are relative to the dataset root and
+  resolve through the parent's `dataset_id`. A sample may reference multiple files, and files may be shared by samples
+  in different partitions. Overlapping file-reference sets do not imply overlapping sample membership.
+
+**Classification Statistics:**
+
+- Classwise overall accuracy is `(TP + TN) / (TP + TN + FP + FN)`, using each class's one-versus-rest confusion counts.
+  `TN` means true negatives; the earlier `TF` notation was an error.
+- Micro-average overall accuracy is `number of true predictions / sample size`, where true predictions are correctly
+  predicted class labels in the evaluated sample population.
+- Macro-average overall accuracy is the arithmetic mean of the classwise overall accuracies of all classes.
+- These accuracy definitions apply to distinct scopes. Different classwise, micro-average, and macro-average values
+  in multiclass classification are expected; their differences are not an ambiguity or a reason to replace a formula.
+- Standard classification and regression metrics use their established conventional definitions unless Cocoonet
+  explicitly specifies a project-specific variation. Detailed formulas and report conventions may be documented in
+  `docs/architecture.md` during the corresponding planning and implementation steps; their absence from an early
+  design document does not by itself make standard metrics unresolved.
+
+**PyTorch Reconstruction and Training Inputs:**
+
+Provide all information needed to reconstruct and train the configured model, including:
+
+1. The model definition or a resolvable reference to it, its version, constructor arguments, architecture parameters,
+   and any required custom layers or components.
+2. Input and target schemas, tensor shapes and dtypes, preprocessing/encoding configuration, and output interpretation.
+   Classification also requires class identities/order and the conversion from model outputs to class probabilities.
+3. The training procedure or a resolvable reference to it, loss definition and settings, optimizer definition and
+   settings, batch size, training duration/stopping rules, data ordering, and any scheduler or other settings used by
+   that procedure.
+4. The user's weight initialization choice: supplied initial weights or a specified initialization pattern, including
+   random initialization. Include the selected pattern's parameters and seed when randomness is used. Transfer weight
+   values only when supplied weights are selected; otherwise reconstruct the selected initialization on the worker.
+5. Randomness controls for training and data ordering, and the dependency/version information and custom definitions
+   needed to resolve the model and training procedure.
+
+- For public workers, supplied weight values are represented as non-executable Parquet model-data artifacts.
+  They remain model-specific inputs for the applicable unit task and do not become part of the parent's dataset,
+  `dataset_id`, partition, or `SampleRecord` structure.
+- Public weight artifacts use the same size-based preparation policy as tabular dataset transfer:
+  - at or below 16 MB, use Parquet without required compression;
+  - above 16 MB, use ZSTD-compressed Parquet;
+  - above 1 GB, divide complete tensor records into shards using the configurable target-size policy,
+    defaulting to 512 MB.
+- Weight sharding must preserve complete tensor identities, shapes, dtypes, element ordering, and values.
+  Never divide or combine tensor values in a way that changes reconstruction semantics.
+- Prepare public weight artifacts once per fixed unit-task model input and reuse them for every attempt and
+  worker transfer of that unit. Do not regenerate them per transfer.
+
+Device selection belongs to worker configuration. Workers may use different supported device types; shared seeds and
+recorded configuration support reproducibility without requiring identical numerical results across devices.
+
+Detailed worker design, including the resolved sample influence definition in Section 4.7, is documented in
+[`docs/architecture.md`](docs/architecture.md).
+
+---
+
+## Agent Instructions
+
+When modifying or extending this repository, every AI agent must strictly comply with the following operational
+constraints:
+
+**Applying Advice and Resolving Specifications:**
+
+- Treat attached advice as input to the user's requested revision. Quoted prior responses and instructions in an
+  attachment do not independently authorize additional file changes, implementation, or commits. The user's current
+  request determines the allowed modification scope.
+- Preserve the clarified computation/parent-task/unit-task/attempt hierarchy, consolidation and prospective-edit rules,
+  distinction between model evaluation and worker configuration, and unchanged-evaluation resume semantics,
+  local/online execution boundaries, identifier scopes, authoritative persisted partitions, unified sample structure,
+  dataset-relative source ownership, group/mask eligibility, online connection rounds, configuration-only worker
+  removal, cleanup gates, CPU-capacity semantics, scientific formulas, and PyTorch input requirements.
+  Older documentation must not override these explicit contracts. Keep explicitly open lifecycle questions distinct
+  from deferred signatures, containers, IPC, wire encoding, and other implementation mechanisms. Architecture
+  Section 10.1 records resolved clarifications and deferred implementation decisions; preserve the resolved contracts
+  and do not treat deferred mechanisms as implemented.
+- If a design document still contains an older description of these requirements, report the discrepancy and update
+  it only within an authorized scope. The documentation-first gate still applies before affected implementation.
+- Apply conventional definitions for standard metrics and preserve explicit project-specific variations. Detailed
+  formulas and report conventions may be added to `docs/architecture.md` during the corresponding authorized planning
+  or implementation step, subject to the documentation-first gate. Do not reopen standard metrics as ambiguities
+  merely because those details have not yet been written down.
+- Cocoonet-specific or recomposed measures require explicit definitions. The sample influence measure follows the
+  approved definition in architecture Section 4.7; do not substitute classical Cook's distance or invent new behavior.
+- When defining a project-specific measure, distinguish training rows from prediction comparison rows, verify
+  sample/class alignment, and check the formula's mathematical meaning. Request clarification only for a missing
+  custom definition or an actual contradiction; explain contradictions with an example. Expected undefined values
+  of a well-defined formula remain governed by Scientific Formula Fidelity and are not ambiguities.
+- Do not invent project-specific metric variants. Apply the phase-contract gate below to unresolved custom definitions.
+- Keep detailed worker device failure policies in later architecture or implementation documentation; this overview
+  establishes worker ownership of device configuration and the required model reconstruction information.
+
+**Scientific Formula Fidelity and Direct Implementation:**
+
+- Implement defined evaluation metrics directly according to their formulas, input populations, and normalization
+  rules. Preserve their mathematical meaning and specified output behavior.
+- Use the following internal representation for generated scientific results:
+  - finite, mathematically defined measure values use `float`;
+  - mathematically permitted positive and negative infinity use `float("inf")` and `float("-inf")`;
+  - mathematically undefined values use `float("nan")`;
+  - computationally unavailable values use `None` with applicable nonempty value-level failure references;
+  - explicitly non-applicable values use `None` without value-level failure references only where the owning schema
+    permits non-applicability.
+- Derive a generated value's meaning from its representation, owning schema, and value-level failure references.
+  Do not introduce a parallel per-value status enum or status structure that can contradict those facts.
+- Exact identifiers, categorical labels, booleans, and integer count fields retain their declared types. Generated
+  categorical predictions follow the same availability rule: a present label has no value-level failure reference,
+  while an unavailable label is `None` with applicable failure references.
+- Reserve `NaN` for mathematical undefinedness. An exception, failed prerequisite, invalid model output, or other
+  computational failure produces `None` in the affected value position with failure provenance; it must not be
+  represented as formula-defined `NaN`.
+- Accept infinity only where the corresponding measure's documented mathematical definition permits an extended-real
+  result. Floating-point overflow or a nonfinite model output where infinity is not mathematically permitted is
+  computational unavailability, not a valid infinite result.
+- Preserve small denominators and the resulting defined values. Do not introduce epsilon, clipping, imputation,
+  invented probabilities, fallback values, or NaN-skipping aggregation to manufacture a defined or preferred result.
+- Human-readable reports render finite values numerically and use the exact tokens `Inf`, `-Inf`, `NaN`, and `NA`.
+  Serialization and report exporters must preserve the distinction between `NaN` and `None`. Required XLSX result
+  tables write finite values as numeric cells and these tokens deliberately as text cells rather than relying on
+  spreadsheet-library missing-value defaults. Other supported report formats must define a typed or explicit
+  format-specific representation that preserves the same distinctions.
+- These generated-result rules do not change dataset-input validation. User-provided regression targets and feature
+  values continue to reject `NaN`, positive infinity, and negative infinity.
+- Report formula-defined edge cases and risks clearly. Expected `NaN`, permitted infinite values, extreme finite
+  values, and other consequences of a well-defined formula are not ambiguities and do not require requests for
+  alternative handling. Request clarification only when the definition itself is missing or contradictory.
+- Accept randomness effects from the configured computation. Do not manipulate results, select favorable runs,
+  or introduce corrective procedures to suppress those effects.
+- Raise clear, descriptive errors for failed operations or invalid inputs. Preserve applicable failure provenance and
+  affected `None` values; do not conceal failures through fallback calculations or replacement values.
+- Cocoonet-generated runtime type-validation `TypeError` diagnostics must identify the affected field path, expected
+  type, observed type, and observed value. Show a complete value for a short string or single scalar value; use a
+  bounded, type-aware preview for long strings, containers, arrays, matrices, tables, tensors, and other potentially
+  large values. Preview generation must not conceal or replace the established type mismatch.
+- When a contract `validate_*` function raises `ValueError` because a declared value, association, shape, or invariant
+  is violated, its diagnostic must identify the affected context, the expected value or condition, and the observed
+  value or condition. A concise sentence is appropriate for a simple violation:
+
+  ```text
+  Invalid fold_id: expected a nonempty string; got an empty string.
+  ```
+
+  Use a structured multiline message when several context fields are needed:
+
+  ```text
+  Invalid report outcome:
+    report: performance
+    status: complete
+    expected: failure_ids to be empty
+    got: 2 failure references
+  ```
+
+  Include only context needed to locate and understand the violation. Report bounded scalar values, identities, indices,
+  counts, shapes, ranges, or short summaries rather than complete large payloads, arrays, tables, tensors, or
+  collections. These requirements do not alter exceptions propagated from Python, user code, or third-party libraries.
+
+**Development Philosophy and Programming Preferences**
+
+Cocoonet is a lightweight scientific Python module. Favor direct, simple, auditable, and interpretable computation, with
+minimal indirection and independently maintained state.
+
+- Prefer ordinary functions with explicit inputs, outputs, and side effects. Keep scientific procedures recognizable;
+  straightforward loops and local mutation are acceptable.
+- Use classes when they provide a clear benefit, such as a meaningful data record, configuration interface, or owned
+  runtime resource. Architectural responsibilities do not each require a class.
+- Prefer shallow records and direct scientific payloads. Introduce nesting or wrappers only when they express a useful
+  relationship, invariant, or independently consumed boundary.
+- Maintain each authoritative fact once within its ownership scope and derive summaries where practical. Repeated
+  metadata is justified when independently consumed records need it for identification or validation.
+- Give necessary mutable state an explicit owner. Keep scheduling, connections, persistence, and lifecycle transitions
+  outside scientific calculations; preserve their required independent distinctions.
+- Select containers for their scientific use and ownership requirements. Fixed inputs must remain protected from later
+  mutation, including through shared references.
+- Judge simplicity through concrete production, inspection, and consumption examples, including partial failures. Avoid
+  speculative frameworks and abstractions without a demonstrated need.
+
+**Failure Isolation and Reporting:**
+
+- Configuration/startup failures occur before scientific evaluation and remain distinct from initial model
+  reconstruction failure, primary-validation failure, ordinary-report failure, influence-removal failure, and
+  worker/infrastructure failure. For example, missing execution targets at run must be reported as a startup
+  prerequisite failure, never as a model fit failure. Adding local execution and reusable computations does not
+  change the scientific failure boundaries below.
+- The worker process is a long-running execution service expected to operate continuously, potentially for months.
+  Contain normal application-level failures at the smallest applicable scope: measure, report, influence sample,
+  unit-task evaluation, or bounded operation. None of these failures implies worker-process failure or termination.
+- A measure failure leaves its affected values `None` with applicable failure references and allows the remaining
+  evaluation to continue subject to actual dependencies. Formula-defined undefined values remain `NaN` without a
+  failure solely because they are undefined. A unit-task evaluation failure produces its defined failure outcome;
+  the worker remains running and continues with subsequent work.
+- A worker failure specifically means that the worker process itself has become unavailable, for example through
+  an unrecoverable process crash, machine shutdown, external termination, or comparable infrastructure/runtime failure.
+  Restarting the worker is not normal task or operation error recovery. If the process actually stops, external
+  intervention may be needed to start the worker module again.
+- Always identify the applicable scope of terms such as failure, retry exhaustion, and termination in instructions,
+  architecture/lifecycle documentation, logs, and implementation. Keep operation status, model-evaluation outcome,
+  logical-result acceptance, and worker-process availability distinct; apply each scope's existing lifecycle rules.
+- Initial model reconstruction failure stops the current unit-task evaluation before primary validation begins.
+  Produce a `reconstruction_failed` failure-only result containing its failure information and no predictions or
+  reports. Do not automatically retry reconstruction. This failure does not fail other unit tasks or terminate the
+  worker process.
+- After successful reconstruction, failure to initialize, fit, or predict any primary-validation fold produces the
+  scientific result outcome `validation_failed`. Preserve completed fold results, record unavailable predictions with
+  applicable failure references, and continue later independent folds when possible. Do not retry the failed fold. The validation report
+  is `failed`; dependent reports are `failed` when they retain affected content or `blocked` when their prerequisites
+  are unavailable.
+- Primary validation must complete without fold failures before optional influence analysis begins. A requested
+  influence report is `blocked` when primary validation fails and references the originating validation failure.
+- After successful primary validation, ordinary reports and requested influence analysis are independent branches.
+  Failure of one branch must not stop another branch whose prerequisites remain valid. A report failure marks that
+  report `failed`, preserves successful content, and contributes to `completed_with_errors`.
+- Isolate influence analysis by removed training sample, applicable fold, and class. If a removal-model
+  initialization, fit, prediction, or influence calculation fails, represent only the affected influence values as
+  `None` with failure references and continue independent removal evaluations. Formula-defined undefined values
+  remain `NaN`. A failed influence report contributes to `completed_with_errors`; it does not create another
+  attempt-level outcome.
+- Record detailed, traceable failure logs containing the evaluation/model identifier, computational stage, report name, fold and sample/class identifiers where applicable, exception type, descriptive message, and traceback. Identify the originating error when dependent computations are skipped. Capture errors at the appropriate isolation boundary so they remain visible without terminating the worker process.
+- Keep failure handling simple, explicit, and proportional to the affected computation. Use clear boundaries and direct dependency checks; avoid speculative recovery mechanisms, cascading retries, and unnecessary recomputation.
+- When any configured retry limit is reached, stop retrying and fail only the operation governed by that limit, such
+  as transfer, persistence, or connection establishment. Log the operation, limit, attempts made, and final error with
+  the failure-tracking context. Apply that scope's normal failure rules; do not terminate or restart the worker.
+  Exhaustion alone requires no additional recovery, fallback, recomputation, or special user action. A retry limit does
+  not authorize retries for operations whose failure policy prohibits them. An exhausted online connection round
+  remains failed; the separately scheduled next round follows Online Connection Rounds and Allocation and does not
+  reset any delivery retry budget.
+
+**Roadmap-Driven Development:**
+
+Before planning or implementing a phase, process project guidance in this order:
+
+1. Read the complete root `AGENTS.md` and apply all relevant sections.
+2. Read the relevant parts of `docs/architecture.md`.
+3. Read `docs/roadmap.md`, the project-wide roadmap, and identify the current phase.
+4. Read the corresponding `docs/roadmaps/roadmap_phase_<n>.md`, or create it under the phase-planning gate below.
+5. Before each implementation unit, inspect the relevant code and tests.
+
+- Before drafting a new implementation unit, review its corresponding phase-roadmap step against the module’s
+  development philosophy and requirements. Assess whether the step introduces unnecessary scope, abstractions, nesting,
+  dependencies, or independently maintained state. If a concrete over-engineering concern remains unjustified, explain
+  it and propose an amendment to the responsible roadmap step instead of proceeding with the unit proposal.
+- Before implementing a phase, its exact `docs/roadmaps/roadmap_phase_<n>.md` must exist, with `<n>` matching the
+  project-wide phase number. Convert that phase into an implementation-level plan defining, where applicable:
+  scope and completion criteria; data models, structures, types, and invariants; public APIs and signatures;
+  computation formulas and numerical behavior; planned classes, functions, and methods with concise responsibilities
+  and corresponding tests; dependency-safe implementation order; validation requirements; and decisions explicitly
+  deferred to later phases. Keep detailed architecture and protocol design in the design documents, not `AGENTS.md`.
+- Resolve every contract required to implement the current phase before implementation. Only decisions needed solely
+  by later phases may remain explicitly deferred. If guidance sources conflict or a required current-phase contract
+  remains unresolved, stop and report the issue instead of implementing; resolve it through authorized planning.
+- After creating or materially revising a phase roadmap, stop and wait for explicit user approval before implementing
+  the phase. Phase-roadmap approval and approval to implement a particular unit are separate gates: approval of the
+  plan alone does not authorize production changes.
+- Follow the approved phase roadmap. If implementation reveals that an approved API, data model, formula, function
+  boundary, dependency, or other phase contract must change, stop implementation, report the discrepancy, propose the
+  required phase-roadmap amendment, and wait for explicit user approval before continuing. Do not silently redesign
+  the phase during implementation.
+
+**Documentation-First Gatekeeping:**
+
+- Functional improvements include new features and performance improvements. Fixes, scaffolding, and internal tooling
+  are excluded from the requirement to update the design documents.
+- For new features and major performance improvements that change or introduce architecture, update both
+  `docs/architecture.md` and `docs/roadmap.md` before implementation. This update requirement does not apply when the
+  feature or improvement neither changes existing architecture nor introduces new architecture.
+- Assess and explain the design impact of the requested change. If its architectural impact or the significance of a
+  performance improvement is unclear, identify the uncertainty before implementing the affected functionality.
+- If a required design document is absent or lacks the relevant design, pause the affected implementation and request
+  authorization to create or update the documents, unless the user has already authorized that documentation work.
+  Complete the required documentation step before the corresponding implementation step.
+- Exemptions from updating these two design documents do not waive the phase-roadmap or single-unit approval gates.
+  Scaffolding and internal tooling functions or methods must still have docstrings describing their purpose and
+  behavior, with detailed logic explained in comments above the relevant code line or block.
+
+**Manual Commits:**
+
+- Do not commit automatically. The user performs Git commits manually; an automatic commit is not a prerequisite for
+  moving from completed design documentation to an authorized implementation step.
+- At the end of each implementation, provide one or several suggested Git commit messages for the user's manual use.
+
+**Single-Unit Production Changes:**
+
+- After drafting a unit and before presenting it for approval, review its necessity and over-engineering risk. If a
+  concern originates in the phase-roadmap step, explain it, propose the required roadmap amendment, and stop the
+  affected unit proposal. If it originates in the implementation approach, revise the draft and review it again,
+  allowing at most two revision-and-review cycles after the initial review. Present the revised unit only when the
+  concern is resolved or the complexity is justified by concrete requirements. Otherwise, stop and report the remaining
+  concern, its likely root cause, and any needed reconsideration of the phase roadmap, project-wide roadmap, or
+  architecture. Do not expand the unit or claim resolution merely to exhaust the review cycle.
+- Never implement a change unit, revision, helper, or validation-driven fix before presenting the exact proposed
+  change and receiving the user's explicit approval. If implementation or validation reveals that the approved
+  proposal must change, stop before making that additional change, report the issue and proposed revision, and wait
+  for explicit approval.
+- For new development, by default add or change only one production function or one class method per implementation
+  response, with only its directly corresponding tests, required typing/docstring updates, and minimal supporting
+  edits. This default covers the entire turn, including all tool calls, subject to the helper-bundle exception below.
+- A new class, schema, or other declaration may instead be its own approved change unit; a class declaration alone
+  does not authorize bundling methods. Normally develop new classes method by method and explain, develop, and obtain
+  approval for new helpers one unit at a time before composing their caller.
+- When necessary or materially more coherent, propose an exact bounded set of tightly coupled helpers, or a caller
+  together with those helpers, for one response. Identify every function/method and explain the grouping; do not
+  implement the bundle until the user explicitly approves those exact units. A broad feature, phase, or roadmap
+  request is not bundle approval. Do not use helper bundling to introduce unrelated behavior, reusable abstractions,
+  or additional scope.
+- Revisions to existing behavior may change related existing functions/methods together, including across files, when
+  the requested revision is inherently cross-cutting or consistency requires coordinated edits. Use the smallest
+  coherent bounded change and identify the affected units and why they belong together. Examples include parameter
+  renames across callers/callees, shared type or signature changes, protocol-field updates across dependent handlers,
+  and coordinated compatibility fixes. Do not force intermediate states that leave the repository inconsistent.
+- Keep multi-unit revisions narrowly scoped to the requested revision. This allowance does not authorize unrelated
+  new behavior, new abstractions, or new production functions/methods. New feature development does not qualify for
+  this allowance merely because it edits existing code.
+- If a revision also requires a new helper/function/method, identify that addition separately and apply the
+  new-development default and helper-bundle approval rules above. Revision approval alone does not authorize a
+  new-code bundle.
+- An explicitly approved helper bundle or permitted bounded revision is one change unit for approval and targeted
+  testing. Split large changes into bounded reviewable steps whenever they can be separated safely. The existing
+  roadmap, documentation, validation, and approval gates apply to both new development and revisions.
+- Even if the user requests an entire phase, feature, or roadmap item, complete only the next approved change unit,
+  validate it, report the result, and stop. Obtain explicit user approval before the next change unit; do not advance
+  automatically in the same response. Documentation-only edits remain limited to the user's requested document scope.
+
+**Tests for the Targeted Unit:**
+
+- The production change limits exclude testing code. A complete testing unit dedicated to the approved change unit
+  may be added or updated in the same step, including the test functions needed to verify it.
+- Keep tests focused on the approved production work; do not generate unrelated or project-wide test suites.
+- Prefer tests that exercise real code paths with small representative datasets, supported models, and actual local or
+  loopback online worker processes as applicable. Mocks, monkeypatches, stubs, fakes, and other test doubles are allowed
+  only at network boundaries, and only when necessary to represent an unavailable external service or a network
+  condition that cannot be exercised reliably through the real protocol. Prefer real root/worker protocol simulation
+  whenever practical. Do not replace dataset handling, scientific computation, model execution, persistence, worker
+  control, or lifecycle behavior with test doubles.
+- If a production unit does not yet provide independently verifiable functionality, tests may be deferred. Explain
+  what cannot yet be verified and why, then wait for user approval of that working unit before continuing.
+- Preserve tests of scientific and lifecycle invariants when representations change. Update tests tied to superseded
+  internal nesting or containers; retain representation checks where the representation is itself contractual.
+- Test required diagnostic information. Require exact wording only when explicitly part of the interface.
+
+**No Unsolicited Scope Expansion:**
+
+- Do not introduce dependencies, utilities, abstractions, or unrelated edits outside the immediate approved scope.
+- A required helper or coordinated revision does not expand the approved scope or waive the new-unit limit and
+  approval gates above.
+
+---
+
+## Architecture Principles
+
+**Local and Online Execution Boundaries:**
+
+- Initialize the online-worker network subsystem only when online workers are used. Local-only evaluation must work
+  without it. Network connection, authentication, heartbeat, reconnection, and transfer requirements below apply to
+  online workers; applicable task, scientific, isolation, persistence, and acceptance requirements apply to all targets.
+- The root-local worker is a separate locally managed process. Dispatch through a direct local execution/control
+  boundary; do not create WSS loopback or fake network behavior. User model code must not execute in the root
+  coordinator process. The local worker shares the evaluation implementation and technically enforced model
+  restrictions with online workers; process separation alone does not replace those restrictions.
+- Root coordinator storage and each worker's managed storage are distinct ownership scopes, including for the
+  root-local worker. A worker uses a locally configured work directory or defaults to a managed `cocoonet/` child under
+  the worker service's console working directory. The root cannot remotely select or clear an online worker's physical
+  work directory.
+- A worker validates and durably publishes its result bundle before reporting the attempt ready.
+- Online delivery packages and compresses a completed candidate bundle as `.tar.zst`. The root receives, validates,
+  unpacks, and atomically publishes that package; the first successful publication for the model is accepted.
+- A root-local worker on the same machine uses direct bundle copying or handoff. Packaging, compression, transfer,
+  unpacking, and root-side attempt-result validation are skipped. Root acceptance relies on the worker's completed
+  validation and the root's successful durable copy of that bundle.
+- Local execution requires no remote-only network authentication, heartbeat/reconnect, network dataset synchronization,
+  or network result delivery. Framework-managed local data/model/result access must preserve dataset identity,
+  authoritative saved partitions, parent/unit/attempt associations, failure scopes, and standardized result files.
+  Local completion still requires root persistence and the same first-successful-publication acknowledgement
+  semantics through the local control boundary. The root starts its root-local worker with the standard-library
+  multiprocessing `spawn` context and one duplex `Pipe`. Control messages use `Connection.send_bytes()` and
+  `recv_bytes()` with explicit dill serialization using protocol 5. Datasets and result bundles do not travel through
+  the pipe. The worker publishes and validates its bundle in worker storage and reports its identity and managed path;
+  the root copies the candidate bundle into root staging and atomically publishes it. Copy failure retries the same
+  bundle without reevaluation.
+- Large trusted model payloads may be persisted once to designated dill files and referenced by managed paths in local
+  IPC messages. The root-local worker is not reconnectable: orderly root shutdown stops and joins it, while unexpected
+  pipe closure causes it to exit at the next cooperative boundary. Local execution uses no networking, authentication,
+  compression, transfer archive, or HMAC and requires only a small private adapter around the shared worker runtime.
+- Workers are reusable root/computation resources that may serve successive parent tasks; a parent owns its unit
+  tasks and attempts, not exclusive lifetime ownership of a worker. Reuse may retain online connections, the local
+  worker process, and valid datasets under their applicable policies. Online process/connection lifetimes remain
+  deferred. A root-local worker belongs to its current root process and is recreated rather than reconnected after
+  root-process termination. Configuration copying does not clone runtime resources.
+  External public allocation and mandatory release cleanup still apply.
+
+**Worker Concurrency and Execution Ownership:**
+
+- For CPU execution, each local or online worker has a positive integer model-attempt
+  concurrency setting `n_attempt`, defaulting to `1`. It is the requested maximum
+  number of complete model-evaluation attempts that Cocoonet may run concurrently.
+  The former name `n_cpu` is not used.
+- Reserve one available CPU for worker communication and control. Account for nested
+  model/framework CPU parallelism when deriving the effective attempt limit. If the
+  requested limit exceeds the resulting capacity, reduce it by exactly one when that
+  is sufficient; otherwise reject the configuration without changing supplied
+  model/framework settings. Architecture Section 8 defines the calculation,
+  validation, and reporting requirements.
+- Cocoonet multiprocessing operates across complete model attempts, including CPU
+  PyTorch attempts. Do not add another Cocoonet multiprocessing layer across folds
+  or removal evaluations within an attempt. GPU execution has one Cocoonet attempt
+  slot and no Cocoonet-level multiprocessing.
+- Worker control owns capacity validation, attempt-slot admission, and Cocoonet
+  subprocess supervision. Model/framework components own their internal parallelism.
+  Preserve control responsiveness, execution isolation, scoped failures, and
+  cooperative stopping at both levels.
+
+**Independent and Decoupled Execution:**
+
+- Workers execute unit-task attempts independently using the parent's fixed dataset, evaluation configuration, and
+  realized partitions, without inter-worker communication or dependence on shared mutable state with other workers.
+  Internal evaluation state remains local to the worker executing the attempt.
+- The coordinator may maintain state for scheduling, assignment, task lifecycle, failure tracking, and result
+  acceptance. Coordinator-owned state does not make workers dependent on each other's execution state.
+
+**Dataset Identity, Synchronization, and User Isolation:**
+
+- The local module assigns a unique `dataset_id` to each exact dataset representation, including sample associations,
+  features, targets, labels, and related metadata. A changed representation requires a new `dataset_id` regardless of
+  its descriptive label. Task and split references must resolve against that same representation.
+- Establish the parent's dataset readiness, fixed evaluation configuration, and realized partition schedule on each
+  participating worker before unit-task execution. Unit-task transfers carry the model and required model-specific
+  information, plus necessary lifecycle identifiers; they neither retransmit nor separately identify the dataset.
+- Dataset retention follows its configured policy. A later parent task may reuse a retained, ready representation
+  with the same `dataset_id`; cleared data must be made ready again through online synchronization or local artifact
+  preparation as applicable. Mandatory release cleanup remains applicable.
+- Each representation contains at least one source dataset file. Source references are dataset-root-relative paths
+  interpreted with its `dataset_id`, independently of machine-specific storage paths.
+- Root user-provided dataset source paths remain outside the Cocoonet-managed root node working directory, under the user's
+  filesystem control. Apply the bidirectional configuration validation in Project Overview. Cocoonet manages references
+  and its own identity/configuration/partition/task metadata; it must not delete, move, rename, garbage-collect, or
+  otherwise modify the underlying user source data. Dataset removal drops configuration references only. Root partition
+  files are Cocoonet artifacts, governed by their persistence/recovery contract, not worker dataset cleanup.
+- Cocoonet manages synchronized worker dataset copies. Successful cleanup invalidates that dataset's readiness on
+  the worker; later use requires synchronization again. Private workers may retain copies under user control;
+  public workers must remove user state before ownership release and before serving another user.
+- Dataset cleanup targets one worker, a selected group, or all applicable workers. Normally request it after parent
+  completion. Admission is all-or-nothing across the targeted set: every targeted worker must actually be inactive.
+  If any is active, reject the entire request before deleting any copy. Do not partly clean or queue a rejected
+  request for later; the user may request it again after inactivity. Interrupting the parent is not proof of worker
+  inactivity. Cleanup is separate from configuration removal, scientific failure, delivery, and resource release.
+- Root-local data access does not transfer ownership of root source files to the worker. Cleanup may remove
+  Cocoonet-managed worker copies, never user-provided source files merely because a local worker references them.
+- Public workers serve one root/user exclusively per allocation. Cocoonet must not treat connection loss itself as
+  permission to serve another user. Public-pool allocation and release decisions belong to the external service.
+  Apply the worker-side cleanup rules below before serving another user; do not allow prior work to recreate data.
+- Dataset synchronization verification, disconnect detection, and cleanup verification belong in the corresponding
+  architecture/lifecycle specification; they must preserve these invariants. The managed-path `dataset_id`
+  representation is fixed by Locally Visible Managed Persistence below.
+
+**Locally Visible Managed Persistence:**
+
+- Root-managed persistent files and directories must remain clearly named, filesystem-visible, and accessible to the
+  root user within the selected working directory; do not hide them in module-private storage. Worker-managed
+  persistence follows the same rule for the local worker owner or operator. This local visibility creates no remote
+  filesystem-access interface and does not weaken private- or public-worker isolation.
+- Use purpose-specific semantic paths. Do not hash an opaque identifier solely to produce a filename or directory name.
+  Generate each `dataset_id` as exactly 12 lowercase hexadecimal characters using a cryptographically secure random
+  source equivalent to `secrets.token_hex(6)`. Check for collision before accepting an initial registration and
+  regenerate if necessary. If the same identifier is later associated with different dataset metadata, sample
+  associations, or source associations, reject it as a collision; never merge, overwrite, or treat the representations
+  as equal. Do not derive `dataset_id` from dataset length, byte size, or sample count.
+- Generate `parent_id` as the first 16 lowercase hexadecimal characters of SHA-256 over the canonical bytes
+  `b"cocoonet-parent-v1\0" + dataset_id.encode("ascii") + b"\0" + str(created_at_utc_ns).encode("ascii")`.
+  `created_at_utc_ns` is a nonnegative UTC Unix timestamp in integer nanoseconds captured once when the parent is
+  created and persisted with it. If an existing worker path has the same `parent_id` but different dataset, timestamp,
+  or parent metadata, reject the collision.
+- Other generated identifiers used in managed paths, including model and tile identifiers, are positive sequential
+  decimal integers beginning at `1`, have no zero padding, and are not reused within their owning persistent scope.
+  Examples are `dataset_4f08a7d8612f`, `parent_87d16f204b6a818c`, and `model_1`. Paths are not authoritative identity
+  evidence: persist and validate exact identities and associations inside the artifacts. Hashes used for integrity,
+  change detection, or another documented purpose remain permitted.
+- Preserve the logical parent/model-unit/attempt hierarchy in execution metadata and lifecycle state. Filesystem
+  persistence deliberately compresses that hierarchy: one root node working directory represents one parent, so it has no
+  parent subdirectory, and accepted results are keyed by model rather than by attempt. Attempt identity remains in
+  execution state, bundle metadata, failure records, manifests, and protocol messages.
+- Use this root persistence layout:
+
+```text
+<parent_evaluation_instance_work_dir>/
+  cocoonet_metadata.csv
+  root_data_reference.xlsx
+  partition_schedules.xlsx
+  execution_configuration.csv
+  execution_state.csv
+  models_for_transfer/
+    model_<model_id>.<selected_model_extension>
+    models_parent_<parent_id>.<archive_extension>
+    # Or tiled:
+    models_parent_<parent_id>_<tile_id>.<archive_extension>
+  attempt_results/
+    model_<model_id>/
+      root_model_<model_id>_reference.csv
+      worker_model_<model_id>_reference.csv
+      bundle_manifest.xlsx
+      attempt_metadata.xlsx
+      fold_sources.xlsx
+      validation_result.xlsx
+      classification_performance.xlsx | regression_performance.xlsx
+      residual_analysis.xlsx
+      sample_influence.xlsx
+      failures.xlsx
+      visualizations/
+        roc_curve.dill
+        scatter_plot.dill
+        residual_plot.dill
+        rendered_plots/
+      worker_error.log
+  logs/
+    root_running.log
+    root_error.log
+```
+
+- `root_model_<model_id>_reference.csv` records at least the model identity, user-facing model label, and logical
+  root-managed model path. `worker_model_<model_id>_reference.csv` records the same model identity and label with the
+  worker-managed path. Managed paths are logical paths relative to the owning managed scope, not unqualified physical
+  absolute paths. The worker-created reference travels with its result and is copied unchanged; the root independently
+  creates its own reference. The final root manifest lists both files, and neither is renamed into the other.
+- `models_for_transfer/` contains reusable model-transfer preparation. Managed PyTorch models use `.pt`; managed
+  standard scikit-learn models use `.joblib`; managed scikit-learn-like models attempt `.joblib`, then `.pkl`, then
+  `.dill`, warning before each fallback and retaining only the successfully selected representation. Public workers
+  still receive only supported declarative specifications and non-executable model-data artifacts. The untiled and
+  tiled archive forms are alternatives. Exact archive format, size threshold, tiling, and compression settings remain
+  deferred to the responsible transfer design.
+- The root stores only the first successfully published bundle for each model. A later duplicate never creates or
+  overwrites `attempt_results/model_<model_id>/`. Rendered plots are created only when requested. The final manifest
+  records which conditional result workbooks, visualization files, rendered plots, and error logs exist.
+- Store dataset-transfer preparation under the configured source dataset root as follows:
+
+```text
+<source_dataset_root_dir>/
+  dataset_for_transfer/
+    dataset_<dataset_id>.<archive_extension>
+    # Or tiled:
+    dataset_<dataset_id>_<tile_id>.<archive_extension>
+```
+
+  Creation of these visible managed representations is part of the explicit `add_dataset()` artifact-preparation
+  exception. It never authorizes modifying, replacing, renaming, or deleting original sources. The single and tiled
+  archive forms are alternatives; exact archive selection, size threshold, tiling, and compression remain deferred.
+- Use this worker persistence layout:
+
+```text
+<worker_work_dir>/
+  datasets/
+    dataset_<dataset_id>/
+  models/
+    parent_<parent_id>/
+      model_<model_id>.<selected_model_extension>
+  results/
+    parent_<parent_id>/
+      cocoonet_metadata.csv
+      worker_data_reference.xlsx
+      partition_schedules.xlsx
+      execution_configuration.csv
+      execution_state.csv
+      attempt_results/
+        model_<model_id>/
+          worker_model_<model_id>_reference.csv
+          bundle_manifest.xlsx
+          attempt_metadata.xlsx
+          fold_sources.xlsx
+          validation_result.xlsx
+          classification_performance.xlsx | regression_performance.xlsx
+          residual_analysis.xlsx
+          sample_influence.xlsx
+          failures.xlsx
+          visualizations/
+            roc_curve.dill
+            scatter_plot.dill
+            residual_plot.dill
+          logs/
+            worker_running.log
+            worker_error.log
+```
+
+- A worker knows only attempts assigned to it and does not persist information about competing attempts on other
+  workers. It must not allocate another attempt for the same parent/model while a published or retained bundle occupies
+  that model-keyed path.
+  Workers never render plots. The shown selected model representation is permitted only for root-local and private
+  trusted execution; public-worker model persistence remains non-executable. A root-local worker may directly access
+  the configured root dataset and must not create a redundant dataset copy merely to fit the worker layout.
+- Root `root_data_reference.xlsx`, `partition_schedules.xlsx`, and `execution_configuration.csv` are authoritative in
+  their owning scopes. Root `execution_state.csv` is the authoritative persisted record of observed attempt statuses
+  but is informational for progress; complete final root bundles determine model completion. Worker copies are
+  execution inputs and worker-local observations, not competing authority. In particular, worker
+  `execution_state.csv` records only attempts assigned to that worker; it contains no other-worker state or root result
+  decision.
+- Use schema-controlled UTF-8 CSV for `cocoonet_metadata.csv`, model-reference files,
+  `execution_configuration.csv`, and `execution_state.csv`. Metadata-oriented CSV uses the applicable exact
+  `field,value` contract. `execution_state.csv` is the explicit tabular exception: it contains the exact six-column
+  attempt table `parent_id,worker_id,model_label,model_id,attempt_id,attempt_status`. Use schema-controlled XLSX for
+  `root_data_reference.xlsx`, `worker_data_reference.xlsx`, and `partition_schedules.xlsx`.
+- Use schema-controlled XLSX for result-bundle tables, including attempt metadata and manifests, fold/source
+  associations, validation results, numeric reports, influence results, and failure records. Each required result table
+  is a separate `.xlsx` workbook containing exactly two worksheets. The first worksheet contains the result data. The
+  second contains schema-controlled result metadata needed for identity, association, schema, and integrity validation,
+  including the applicable parent task, model/unit, attempt, dataset/partition, fold, worker, artifact kind, and schema
+  identity where applicable.
+- Cocoonet-managed trusted model persistence uses `.pt` for PyTorch, `.joblib` for standard scikit-learn, and an ordered
+  `.joblib` then `.pkl` then `.dill` fallback for scikit-learn-like models. Each failed scikit-learn-like serialization
+  attempt removes only its incomplete staged file and emits a warning before the next format is attempted. Loading uses
+  only the successfully persisted suffix and does not retry other loaders against the same bytes. Trusted root-local
+  IPC messages and standardized visualization data continue to use dill. Visualization dill files contain rendering
+  data, not arbitrary plotting objects, callables, or duplicate numeric reports.
+- Persistence representation and transfer preparation are separate concerns. These CSV, XLSX, model-serialization,
+  and dill requirements do not replace the applicable compressed Parquet preparation or result-package transfer
+  contracts.
+- Store each shared fact once per owning scope. Do not duplicate authoritative dataset references, partition schedules,
+  execution configuration, execution state, or independently derivable result summaries. Required worker execution
+  inputs, result-package staging, and acknowledged worker/root bundle copies are not competing authoritative artifacts.
+- One attempt outcome is one immutable result bundle. Duplicate attempts remain distinct execution outcomes, and the
+  root accepts at most one for each model/unit. The attempt identifier is required in metadata and protocol state even
+  though the final filesystem has no attempt directory. Its files have no independent delivery, retry, acceptance, or
+  recovery lifecycle.
+- Online delivery uses one `.tar.zst` package per completed candidate bundle. Compression parameters are user-configurable;
+  their defaults favor the best performance for result bundles of approximately 1 MB or less. Same-machine root-local
+  handoff uses the worker-validated bundle directly without packaging or root-side result validation.
+
+**Worker Ownership and External Discovery:**
+
+- Every online worker accepts only Cocoonet's versioned internal protocol and serves at most one authenticated root/user
+  at a time. No worker communicates directly with another worker. Connection direction does not change root
+  coordination authority.
+- For a private/non-public computation network, users configure both root and worker endpoints. Direction defaults to
+  `auto`: Cocoonet attempts root-to-worker and worker-to-root establishment, and the root accepts the first
+  authenticated, version-compatible connection for each configured `worker_id` while closing duplicates. Users may
+  instead force `root_connects` or `worker_connects`. If neither permitted direction succeeds, startup fails before
+  work allocation or scientific-data transfer. Private workers remain outside public discovery.
+- For a public worker, the root requests an idle worker from the external service, receives its connection information,
+  and initiates the connection. Public authentication and connection details follow the supplied service interface.
+- The public-worker service is outside Cocoonet's scope and is planned separately, for example as `CocoonService`.
+  It owns worker availability, idle-worker selection, reservation/allocation state, and decisions about when a worker
+  becomes available again. Pool state remains internal to that service; Cocoonet receives connection information,
+  not responsibility for managing or reproducing the service's allocation state.
+- Registration or provisioning of public-pool workers is restricted to authenticated, authorized
+  CocoonService developers or operators. CocoonService is authoritative for public-pool membership.
+- Ordinary users and ordinary worker credentials cannot register a public worker. A locally configured worker
+  cannot enter the public pool through a flag or ordinary credentials. Users may request and use workers
+  allocated by CocoonService.
+- Exact operator authentication and provisioning mechanisms remain part of the supplied CocoonService
+  interface.
+- Cocoonet may send lifecycle notifications required by the external interface, such as release notices. Reservation
+  durations, timeout-based release, and other pool policies belong to the service. Do not implement a competing
+  first-connection allocation policy, fixed pool-release timers, or an independent public credential-renewal workflow.
+- Use the service endpoint, request/response format, authentication, connection-information format, and release
+  notification protocol only when its interface is supplied for implementation. Do not invent these contracts in
+  advance. This defers integration details without weakening authenticated, exclusive worker access.
+- Private and public workers share the direct root-worker evaluation protocol. The discovery service does not proxy
+  datasets, models, tasks, reports, or evaluation traffic. A worker available for another model task remains assigned
+  to its owning root; task availability does not itself release the external service's allocation.
+
+**Worker Configuration Removal and Explicit Management:**
+
+- `remove_worker` resolves the configured worker by its user-facing `worker_label` and changes only the root
+  `EvaluationTask`'s worker configuration. The resolved worker retains its `worker_id`. Removal sends no stop,
+  disconnect, cleanup, reset, or release instruction. If configuration cannot be modified, fail explicitly without
+  compensating worker actions. Removal is permitted before execution, after it finishes, or after root interruption
+  even while old work stops; it is locked during ordinary active execution. Worker changes do not change model
+  evaluation configuration or create a new parent.
+- The same rule applies to a worker reconnected after interruption or recovery, whether working, idle, or retaining
+  data, whenever configuration modification is permitted. Any accompanying connection loss follows the existing
+  disconnection policy; removal defines no additional timeout, stop, cleanup, or release behavior.
+- `cleanup_dataset` removes selected retained worker dataset copies; `cleanup` removes retained worker user data.
+  These are explicit worker-management operations, separate from root configuration edits. Dataset cleanup follows
+  the all-target inactivity gate. Required public cleanup verification and execution-stop boundaries still apply.
+- Public `release` cleans retained user data and performs the resource/state release required by the supplied external
+  service interface. Private `release` has no resource-release function and warns that lifecycle is user controlled.
+  Removing a public worker does not release it; removing a private worker does not stop its independent runtime.
+  A disconnected public worker that was not explicitly released follows the existing service lifecycle rules.
+
+**Public-Worker Cleanup and Service Lifecycle Boundary:**
+
+- Maintain the root-worker heartbeat/status exchange for connection health. Connection loss is not a Cocoonet decision
+  to release a public allocation; follow the external service's supplied lifecycle interface and policies.
+- During release, stop prior user execution and remove Cocoonet-managed datasets, task state, models, reports, and other
+  user state before the worker serves another user. No prior execution may continue or recreate state after cleanup.
+- Require confirmed successful cleanup before accepting another user's work or reporting cleanup success. If cleanup
+  fails or cannot be confirmed, keep the worker locally unavailable to another user and report the failure through
+  the defined interface. The external service remains responsible for its pool's availability and allocation state.
+- Specify cleanup verification and root-worker reconnection authentication before their implementation. Service-facing
+  notifications and lifecycle coordination must follow the supplied external interface, without inventing pool policy.
+
+**Network, Filesystem, and Model Execution Boundaries:**
+
+- Evaluation networking is limited to authenticated dataset/model/configuration transfer, task control, heartbeat,
+  status, and validated standardized result delivery between the root and worker. External discovery/lifecycle
+  communication is limited to operations required by the supplied service interface. Do not expose general-purpose
+  remote execution.
+- Private online workers accept Cocoonet model payloads only from their authenticated owning root through the
+  designated model-transfer path. The root-local worker receives model inputs through its owning root's local
+  boundary. Both may receive and deserialize the trusted managed format selected for the model family, including
+  supported custom models.
+- Trust in custom or serialized model content used by private or root-local workers is the user's
+  responsibility. Cocoonet does not claim that such user-supplied content is safe merely because it arrived
+  through an authenticated or local boundary.
+- Public workers must reject executable `.pt`, `.joblib`, `.pkl`, `.pickle`, `.dill`, and equivalent serialized model
+  payloads and must never deserialize arbitrary Python model objects.
+- Public workers accept only non-executable declarative model specifications and non-executable model-data
+  artifacts resolved through Cocoonet-controlled supported worker-local components.
+- User-provided model code has no direct filesystem read/write or network permission. Cocoonet manages dataset
+  references, reads and worker copies without taking ownership of root source files, supplies in-memory data through
+  the supported model API, validates model outputs, and constructs and
+  persists standardized reports. Models return only outputs required by that interface.
+- Specify technical enforcement of execution, filesystem, and network isolation before implementing the boundary.
+  Cover executable deserialization, reconstruction, and model operations; authentication or supported-API validation
+  alone does not make model code safe. Enforcement must not rely on Python conventions or cooperative model behavior.
+
+**Task Identity, Duplicate Execution, and Result Acceptance:**
+
+- Duplicate attempts share the same parent, model, scientific configuration, dataset, and realized partition. They
+  remain separate attempts with separate attempt IDs.
+- Late duplicates may be created only under the configured duplicate policy to reduce completion latency. A
+  user-configured retry policy may create a new attempt after a terminal failed attempt; retries never reactivate the
+  failed attempt.
+- Result synchronization for attempts of one model is serialized at the root publication boundary. No attempt is
+  durably preselected in `execution_state.csv`. The first complete bundle successfully and atomically published in the
+  model's final root location becomes the accepted result and its attempt becomes `result_synchronized`.
+- Scientific failures inside a complete valid bundle do not prevent that bundle from winning. An
+  `attempt_finished_with_error` outcome competes normally.
+- After one attempt becomes `result_synchronized`, mark every other attempt for that model `aborted`. Do not receive,
+  persist, or overwrite the accepted model bundle with a later attempt.
+- A failed synchronization does not itself select or complete a result. Retry the same bundle while the attempt remains
+  `result_synchronizing`. After `result_synchronization_failed`, any further model retry requires a new attempt and is
+  governed by the user's configured retry policy.
+
+**Report Receipt, Persistence, and Acceptance:**
+
+- A worker with a complete bundle may enter `result_synchronizing`. The root serializes synchronization for each model
+  and atomically publishes the first complete valid bundle that succeeds. Successful root publication is acceptance
+  and produces `result_synchronized`; there is no separate execution-state receipt, persistence, selection, or
+  acceptance record. Package validation, staging, and transient bytes do not establish success. An existing final root
+  bundle is authoritative and cannot be overwritten by another attempt.
+- Produce one immutable result bundle per execution attempt. It contains applicable schema-controlled two-sheet XLSX
+  result workbooks, metadata, inventory, fold/source associations, influence results, and failures, plus applicable
+  standardized visualization-data dill files. Preserve successful independent results alongside unavailable values
+  and failures.
+- The bundle manifest defines its complete inventory. Individual files have no independent delivery, retry,
+  persistence, acceptance, or recovery state.
+- Reconstruction failure produces a failure-only bundle. Validation, report, and influence failures preserve every
+  independently successful result under the established attempt/report outcomes. A computational failure recorded in
+  a complete bundle does not require retransmission or prevent normal acceptance.
+- Online workers package a complete bundle as `.tar.zst` for compressed delivery. The root validates and unpacks the
+  package before attempting durable bundle publication. Package receipt and content processing must not block the active
+  network event loop; do not deserialize visualization dill data there.
+- Every online `.tar.zst` package records its exact byte length and SHA-256 digest. For private online delivery, the root
+  and worker receive the same randomly generated key of at least 32 bytes through keyword-only runtime API parameters;
+  Cocoonet never transmits, persists, internally copies, displays, or logs the key.
+- The private worker computes HMAC-SHA-256 over canonical metadata containing the protocol version, parent, model, and
+  attempt identities, package length, and package SHA-256. The root receives the package into staging and verifies its
+  length, digest, and HMAC before safe extraction, manifest/schema validation, and atomic publication. Verification
+  failure leaves the result unaccepted and retries the same package without reevaluation or duplicate substitution.
+  Public-worker authentication remains governed by the supplied public-service interface. This mechanism provides
+  integrity and private-worker authentication, not confidentiality.
+- A root-local worker hands off or copies its already validated bundle directly. The root performs no duplicate
+  attempt-result validation, scientific recomputation, or scientific reinterpretation. It copies the worker files,
+  adds only the root model reference and final root inventory, and acceptance is the first successful durable root
+  publication for the model.
+- Mark an attempt `result_synchronized` and its model complete only after the complete bundle has been durably published
+  in root storage. Confirm success to the worker through the applicable online or local control boundary.
+  Partial packages, staging directories, incomplete bundles, and transient memory do not establish completion. Never
+  overwrite an accepted bundle with a later duplicate.
+- Authoritative XLSX files use same-directory `<filename>.partial` staging. Validate before writing, flush and
+  synchronize the completed file, then atomically rename immutable files. Publish mutable `execution_state.csv`
+  through same-directory staging and atomic replacement.
+- A worker constructs a complete bundle in `model_<model_id>.staging` beside the final worker
+  `attempt_results/model_<model_id>/` directory and publishes it with one atomic directory rename after validation.
+  The attempt identifier remains inside the bundle metadata and manifest; a temporary online delivery package may also
+  use it to distinguish the producing attempt.
+- The root constructs a candidate result in `attempt_results/model_<model_id>.staging`, copies the worker-produced
+  files, adds its root-owned model reference and final inventory, and publishes the final
+  `attempt_results/model_<model_id>/` directory with one atomic rename. It does not recompute or reinterpret scientific
+  results. Staging content is never authoritative or automatically promoted; recovery or retry removes only the exact
+  stale staging entry and restarts the complete write. Logs append directly and may retain an incomplete final line
+  after a crash.
+- Implement one focused file-publication helper and one focused bundle-publication helper. Do not introduce a generic
+  transaction, repository, or artifact framework.
+- Result synchronization failure leaves the logical task unfinished. Retry the same bundle within its remaining
+  budget without reevaluation or per-file retry. Online retry resends the same `.tar.zst` package; root-local retry
+  reuses the same worker-published bundle.
+- While an attempt remains `result_synchronizing`, retain its worker bundle and keep its producing attempt slot
+  occupied. Other eligible attempt slots remain usable. Retry exhaustion records `result_synchronization_failed` and
+  terminates that attempt. A user-configured policy may create a new attempt for the unfinished model.
+- Configure worker bundle retention as deletion after confirmed acceptance, retention until all applicable root tasks
+  finish, or no automatic deletion. Cleanup applies to the complete bundle and any pending online `.tar.zst` package.
+- Mandatory public-worker release cleanup overrides ordinary retention. Before a public worker serves another user or
+  begins an attempt for a different parent, remove earlier-parent result artifacts after any selected delivery has
+  completed or reached its established terminal operation state. Cleanup never accepts an undelivered result, completes
+  its logical task, or deletes an already persisted root bundle.
+- Worker bundle cleanup is controlled by worker retention and timeout settings. `aborted`, `interrupted`,
+  `connection_loss`, and root-side result acceptance do not independently prove worker-side deletion. A completely
+  crashed worker may retain files until external or later worker-side cleanup.
+- If a worker-side failure occurs during an attempt, the worker creates
+  `attempt_results/model_<model_id>/logs/worker_error.log` and lists it in the worker manifest. For the accepted result,
+  the root copies that file byte-for-byte to `attempt_results/model_<model_id>/worker_error.log` and lists it in the
+  final root manifest. The root never creates, appends to, reconstructs, or reinterprets a worker error log. Root-side
+  failures are recorded only in `logs/root_error.log`.
+- When requested, root-side rendering persists applicable output below
+  `attempt_results/model_<model_id>/visualizations/rendered_plots/` from accepted visualization data. Workers never
+  render plots. Rendering is post-reception processing and does not undo scientific-result acceptance.
+- Preserve parent, model/unit, attempt, worker, and artifact associations for every bundle. Dataset identity resolves
+  through the parent context. Recovery must distinguish a complete accepted bundle from a partial `.tar.zst` package,
+  staging directory, or incomplete bundle.
+
+**Root Restart and Progress Recovery:**
+
+- Reconstruct the fixed parent and model set from `execution_configuration.csv` and the authoritative partition
+  workbook. Determine model completion from complete atomically published root result bundles, not from
+  `execution_state.csv`.
+- Load `execution_state.csv` for informational attempt history and reconciliation. A status claim never promotes a
+  staging directory, partial package, incomplete bundle, or missing result into completion.
+- For each model without a complete root bundle, apply the configured retry and duplicate policies to create new
+  `not_allocated` attempts as necessary. Do not resume attempts recorded as `interrupted`, `aborted`, or one of the
+  terminal failure statuses.
+- Reconcile reconnected workers by attempt ID. A `connection_loss` attempt may report a later state or offer a complete
+  bundle. It competes normally if no bundle for its model has yet been accepted; otherwise mark it `aborted`.
+- If a complete final root bundle exists but its producing attempt was not durably updated before a crash, treat the
+  bundle as authoritative, set that attempt to `result_synchronized` during reconciliation, and abort the model's
+  other attempts.
+- Retry an already published worker bundle only while its attempt remains `result_synchronizing` and has retry budget.
+  Once it becomes `result_synchronization_failed`, it is terminal; a configured retry creates a new attempt.
+- Explicit parent interruption records affected attempts as `interrupted`. They are never resumed; continuing the
+  unchanged parent creates new attempts only for models without complete root bundles.
+- Exact control-message schemas, canonical HMAC metadata byte encoding, public-service authentication and certificate
+  provisioning, retry timing, compression parameter names, acknowledgement encoding, recovery API signatures, and
+  worker-service API signatures remain deferred to their responsible architecture or protocol phases. They must
+  preserve the fixed connection, integrity, publication, identifier, and recovery semantics above.
+
+**Reproducibility and Auditability:**
+
+- The framework does not guarantee deterministic model results. Accept randomness and nondeterminism from models,
+  dependencies, execution environments, and hardware without corrective manipulation.
+- Pass user-provided reproducibility settings, such as seeds, through where applicable. Do not treat them as a promise
+  of deterministic execution or invent extra determinism controls. Determinism of user-defined models and their
+  dependencies is the user's responsibility.
+- Preserve actual results, including defined failure and `NaN` outcomes. Reliability depends on simple, direct
+  execution and sufficient traceability to establish how an evaluation was performed.
+- Trace parent tasks, unit tasks, execution attempts, internal model identities, dataset associations, and actual
+  realized fold memberships, together with supplied reproducibility settings and relevant execution information.
+  Shared partitions within a parent are mandatory; deterministic model outputs are not guaranteed. Operational
+  provenance does not require Cocoonet to derive or catalogue user-level model metadata. Use structured logs for
+  assignment, lifecycle transitions, acceptance, and failures. Concrete provenance fields and log schemas belong
+  in the architecture/protocol documentation.
+
+---
+
+## Technical Stack
+
+- Language support: Python 3.12 through the latest stable Python release, excluding prereleases.
+- Implement file reading, path handling, and persisted storage so their behavior and logical content are invariant
+  across supported operating systems; do not depend on platform-native path separators, newline conventions, default
+  text encodings, or filesystem iteration order, and confine physical-path normalization to defined I/O boundaries.
+
+**Asynchronous I/O and Worker Connections:**
+
+- Use `asyncio` and `aiofiles`. Online communication uses one versioned Cocoonet protocol over TLS-protected HTTPS/WSS
+  for bounded control messages and streamed dataset, model, and result-package payloads.
+- Scheduling and assignment remain root-controlled. Private connection establishment follows `auto`, `root_connects`,
+  or `worker_connects`; public establishment follows the external service interface. Connection direction never
+  transfers coordination authority to a worker.
+- Track worker usability, parent readiness, attempt capacity, and occupied attempt slots separately.
+  A worker may accept another attempt while others are active when it has a free eligible slot.
+  Each allocation requires compatibility and readiness of the fixed parent dataset, evaluation
+  configuration, and realized partition. Reuse the established parent context.
+- Assignments, status, and candidate results share the established connection and identify their
+  individual attempts. Sending one result does not release that attempt's slot: apply its persistence
+  acknowledgement, pending-delivery, retry-limit, stop, and recovery rules. Other free slots remain usable.
+- Availability to the owning root neither releases the external public allocation nor makes the
+  worker publicly discoverable. Public-pool ownership and allocation remain the service's responsibility.
+- Reuse the bidirectional connection for assignments, status, results, and subsequent tasks. Do not replace this model
+  with worker polling or separate task-submission endpoints. Private reconnection follows `auto`, `root_connects`, or
+  `worker_connects`; after establishment, the root initiates reconciliation.
+- Message schemas, authentication, acknowledgements, heartbeat/disconnect detection, reconnection, and message
+  serialization details are defined incrementally before implementing the corresponding protocol units.
+
+**Online Connection Rounds and Allocation:**
+
+- Use one asynchronous per-worker connection/reconnection policy before run, during execution, and after disconnect.
+  Configure a retry period and a sequence of delays within each round. For example, a 60-second period with delays
+  `[1, 2, 4]` starts rounds periodically; after an initial failure, additional attempts follow those delays.
+  Exhausting a round leaves the worker unavailable until the next scheduled round, without removing its configuration.
+- A later scheduled connection round is a distinct policy operation, not a reset of an exhausted result-delivery
+  budget. Connection failures do not fail unrelated tasks, block coordinator control, or authorize model reevaluation.
+  Runtime availability changes do not edit configured worker membership or make the instance unconsolidated.
+  Disconnect makes the worker ineligible for new allocations; all assigned attempts retain their
+  individual execution, delivery, duplicate, and recovery rules. Reconnection restores eligibility
+  only after readiness and occupied slots are reconciled.
+- At allocation opportunities, asynchronously check configured online workers with free eligible
+  attempt slots. Allocate first to the responsive eligible worker with the fastest response for that
+  opportunity, then continue while tasks and eligible slots remain. Reserve each slot when assigning
+  its attempt. Response speed is not permanent priority and does not alter duplicate or acceptance rules.
+  Local execution requires no artificial network probe.
+- Exact APIs, probe/response measurement, timer mechanics, and state representation remain implementation details.
+  Existing authentication, exclusive ownership, and compatibility rejection requirements continue to apply.
+
+**Serialization Ownership and Compatibility:**
+
+- Use schema-controlled UTF-8 CSV for Cocoonet metadata, model-reference files, execution configuration, and execution
+  state. Metadata-oriented CSV uses the applicable two-column `field,value` contract. `execution_state.csv` is the
+  explicit tabular exception and uses the exact header
+  `parent_id,worker_id,model_label,model_id,attempt_id,attempt_status`. Use schema-controlled XLSX for root and worker
+  data references, authoritative and worker-copy partition
+  schedules, and two-sheet result-bundle tables under the result-data and metadata worksheet contract above. Do not rely
+  on automatic type or missing-value inference. Preserve finite values, `Inf`, `-Inf`, `NaN`, and unavailable `NA`
+  according to the owning schema.
+- Cocoonet-managed trusted model persistence uses `.pt` for PyTorch and `.joblib` for standard scikit-learn. For
+  scikit-learn-like models, attempt `.joblib`, warn before falling back to `.pkl`, warn again before falling back to
+  `.dill`, and fail if dill serialization also fails. Retain and later load only the successfully selected format.
+  Trusted root-local IPC messages and standardized visualization-data payloads continue to use dill.
+- Dataset inputs and generated CSV/Parquet transfer artifacts follow their separate input and size-based transfer
+  contracts.
+- For root-local and private workers, the root may create the applicable managed model representation, and those
+  workers may deserialize it at the designated execution boundary. Custom models are permitted under the user's trust
+  responsibility.
+- For public workers, the root sends only a declarative model specification and applicable non-executable
+  model-data artifacts. Public workers reconstruct supported models locally and never deserialize root-supplied
+  Python model objects.
+- Workers construct standardized result bundles. Online workers transfer a completed candidate bundle through one `.tar.zst`
+  package that the root validates and unpacks. A same-machine root-local worker uses direct local handoff without
+  package creation, root-side result validation, or unpacking. Partition memberships are loaded from the designated
+  `partition_schedules.xlsx`.
+- Require exactly equal complete Cocoonet version identifiers for root and worker. For online workers, check during
+  the connection handshake before normal protocol operation, dataset synchronization, task assignment, or model
+  deserialization. Local compatibility checking does not require a network handshake. Matching major/minor versions
+  is insufficient: root `1.2.3` accepts worker `1.2.3` and rejects `1.2.4`.
+- Read compatibility metadata, including online handshake version metadata, without loading model or report payloads.
+  Reject an incompatible worker immediately,
+  identify both versions in the error, and suggest installing the same Cocoonet version. Do not attempt compatibility
+  fallbacks or deserialize model payloads after rejection.
+- Each Cocoonet release must operate across all Python versions it declares as supported. Root and worker Python
+  versions may differ within that range; identical Python versions are not required. Dependency constraints and
+  release validation must uphold this runtime and serialization contract. Do not add dependency or environment
+  negotiation to the worker protocol.
+
+**Model Preparation and Reconstruction:**
+
+- The root assigns each supplied model an arbitrary module-generated unique `model_id`, associated with a user-provided
+  `model_label` unique within the parent task. Use `model_id` internally for references, execution tracking, duplicate
+  handling, and provenance; identify models by `model_label` in user-facing reports.
+- The supplied model or construction information is the authoritative executable input and remains fixed across
+  attempts of its unit task. Cocoonet does not derive or maintain a separate catalogue of user-level model descriptions,
+  hyperparameter metadata, preprocessing provenance, or experiment lineage. Those remain the user's responsibility.
+  Required reconstruction and training inputs, including parameters used by `get_params`/`set_params` and supplied
+  PyTorch configuration, remain execution inputs.
+
+- For standard scikit-learn models, identify the supported model type and obtain its parameters through `get_params`.
+  Reconstruct/configure the corresponding worker-side model efficiently using `set_params` as appropriate.
+- For custom scikit-learn-like models, validate only the required API: `fit` and `predict` for regression; `fit`,
+  `predict`, `predict_proba`, and the required class information for classification. Do not perform deeper dependency,
+  implementation, or execution-compatibility validation.
+- For PyTorch, reconstruct from the complete construction and training information in Project Overview: definition
+  and architecture, input/output configuration, criterion/loss, optimizer, applicable scheduler, training settings,
+  initialization configuration, and optional supplied weights. Do not add third-party dependency negotiation.
+- Public-worker restrictions apply only to public workers. Root-local and private workers retain support for
+  custom scikit-learn-like models, custom PyTorch definitions/components, trusted dill payloads, and the existing
+  reconstruction contract.
+- Public model specifications may describe supported scikit-learn estimators, Pipeline composition,
+  ensemble/boosting/meta-estimator structures, supported PyTorch components, and Cocoonet-native structures
+  when fully declarative.
+- Public workers reject custom Python classes, arbitrary import paths, user callables or lambdas, custom
+  executable definitions, pickle/dill model objects, and unrestricted dynamic imports.
+- These paths establish the information needed to attempt evaluation; they do not guarantee that every supplied
+  model will execute successfully. After the applicable validation and reconstruction, execute directly.
+- Do not add compatibility prediction, dependency inspection/negotiation, environment repair, fallback reconstruction,
+  model substitution, or corrective result manipulation. Report actual reconstruction, fitting, prediction, and other
+  operation failures through the existing isolation and logging boundaries.
+- Initial model reconstruction failure terminates the current unit-task evaluation with a `reconstruction_failed`
+  failure-only result. After reconstruction succeeds, initialization, fitting, and prediction are one
+  primary-validation fold operation for failure-scope purposes: failure of any part produces `validation_failed`,
+  while later independent folds continue when possible. Failures in ordinary reports or sample-removal influence
+  evaluations affect only their dependent results and produce `completed_with_errors` after successful primary
+  validation.
+
+**Quality and Test Baseline:**
+
+- Required tools are Ruff, mypy, Black, and pytest. Refer to `pyproject.toml` for their detailed configuration,
+  including Ruff exclusions, pytest discovery, mypy settings, and documentation-build/version-switching checks.
+- Ruff selects the `E`, `F`, `W`, `B`, `I`, `N`, and `C` rule families, subject to explicitly specified exclusions and
+  the narrow suppression policy below. Use the exclusions in `pyproject.toml`; do not invent additional ones or rule
+  families.
+- mypy requires typed definitions and return checking, but not full `strict = true`. Ignore missing third-party
+  import typing; project-owned code remains subject to the configured checks.
+- Black uses a 120-character line length, with configured targets consistent with the supported Python versions.
+- pytest runs tests under `tests/` using the discovery conventions in `pyproject.toml`.
+- Applicable pytest, mypy, Black, and Ruff checks must all pass before accepting an implementation. When documentation
+  is rebuilt, also validate local accessibility and version switching using the configured checks. Report unavailable
+  checks accurately. Do not expand tool requirements or add dependencies outside the approved scope.
+
+---
+
+## Code Quality Standards
+
+**NumPy-Style Source Docstrings and Public API Documentation:**
+
+- Every class, function, and method, including private/internal components, must have a source docstring explaining
+  its purpose and responsibility. Use NumPy-style sections only where applicable to the documented object.
+- Every non-helper class and function must end its NumPy-style docstring's `Notes` section with one concise node-usage
+  statement selected from: `Node usage scope: Root only - Used exclusively by the root node.`, `Node usage scope: Worker only - Used exclusively by worker
+  nodes.`, or `Node usage scope: Shared - Used by both root and worker nodes.` Add a `Notes` section when one is otherwise unnecessary.
+  Determine the category from the object's actual or planned responsibilities and consumers; associated classes,
+  functions, and validators may have different scopes. Internal helper functions and helper classes are exempt.
+- Use NumPy-style `Parameters`, rather than `Args`, for parameters requiring documentation, with types and
+  descriptions; omit the section when none apply.
+- Include `Returns` only for meaningful return values and `Yields` for yielded values. Classes and constructors do
+  not require a return-value section merely because they construct an instance. Do not add empty placeholder sections.
+- `Raises` documents exceptions intentionally exposed to callers as part of the interface contract. Do not list
+  internally handled exceptions or exhaustively enumerate incidental third-party/user-component exceptions unless
+  they are part of that contract.
+- Include realistic usage examples where usage is non-trivial.
+- User-facing API documentation includes public APIs only. Private/internal classes, functions, methods, helpers,
+  and implementation details still require source docstrings, but documenting them does not make them public APIs.
+
+
+**Clarity, Comments, and Decomposition:**
+
+- Keep functions and methods focused, cohesive, simple, and directly understandable. Approximately 20-100 lines is a
+  guideline, not a mechanical acceptance criterion. Do not pad short functions or split coherent logic just to meet it.
+- Decompose around coherent operations when it improves readability, testability, reuse, or separation of
+  responsibilities. Avoid trivial wrappers and unnecessary abstractions introduced only to shorten a function.
+- Comment non-obvious reasoning, scientific assumptions, invariants, algorithmic decisions, performance-sensitive
+  behavior, and constraints that cannot reliably be understood from the code alone. Explain why, not clear syntax.
+- Prefer clear names and straightforward control flow to comments that restate the code. Preserve any specifically
+  required documentation of scaffolding/internal tooling from Agent Instructions.
+- Keep scientific computations as direct representations of their defined procedures. Do not fragment a coherent
+  formula into helpers when doing so obscures its mathematical meaning or auditability.
+- Keep source and test lines within 120 characters. Keep source files focused with clear domain boundaries, typically
+  under 300-500 lines; file size is guidance, not permission for unrelated restructuring.
+
+
+**Runtime Validation**
+
+- Validate external inputs and independently produced or loaded records at their consuming boundaries. Internal helpers
+  may rely on documented preconditions when ownership prevents intervening invalidation.
+- Prefer checks specific to the accepted schema, sharing small validation and diagnostic helpers where useful. A general
+  annotation interpreter requires a demonstrated need.
+- Validate scientific containers directly for applicable dtype, shape, values, and alignment. Keep framework-specific
+  dependencies at the boundaries that require them.
+- The universal type validator must not eagerly import NumPy, pandas, or PyTorch. Ordinary Python type validation must
+  leave all three unloaded. When validation reaches a supported scientific type or an explicit framework-specific
+  dtype validator, Cocoonet must directly load only the corresponding dependency. A requested dependency may load its
+  own transitive requirements; Cocoonet does not suppress, duplicate, or treat those transitive imports as direct loads.
+
+Existing runtime diagnostic and static typing requirements remain applicable.
+
+**Static Typing, Linting, and Narrow Suppressions:**
+
+- Require typed definitions and return checking under the configured mypy baseline, not full strict mode. Missing
+  third-party import typing is ignored as specified in Technical Stack. Project-owned code must pass its configured
+  type-checking and linting rules.
+- Do not add a mypy or Ruff suppression without the user's explicit approval. With explicit approval, add only the
+  exact suppression approved, keep it local to the affected expression or line, use the most specific applicable
+  error code, and briefly explain why the suppression is required.
+- Do not use blanket suppressions. Without explicit approval, do not conceal errors in project-owned interfaces,
+  implementation logic, or complexity. A suppression is not a substitute for correcting project code or seeking
+  approval for necessary decomposition.
+- Applicable pytest, mypy, Black, and Ruff checks must pass with only the explicitly permitted exclusions and
+  suppressions. When documentation is rebuilt, also verify local accessibility and version switching.

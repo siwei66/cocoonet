@@ -146,6 +146,13 @@ runtime and persistence retain opaque `worker_id` values. Detailed phase contrac
 validation failure must not leave undocumented partial configuration. Assign registered models positive sequential
 decimal `model_id` values beginning at `1`, without zero padding or reuse within their owning persistent scope.
 
+The public Phase 3 model-registration boundary uses plain strings: `model_label` is nonempty, `family` is
+`"sklearn"`, `"sklearn-like"`, `"pytorch"`, or the reserved `"cocoonet"`, and `task_kind` is `"regression"` or
+`"classification"`. Reject the reserved family while Cocoonet-native models remain under development. A model input
+is either an in-memory model instance or a path to an existing model-object file; reject `None`, class definitions, and
+internal structured contract values at the public boundary. Phase 3 retains in-memory candidates without executing or
+inspecting model APIs, and Phase 6 performs family/task compatibility validation after isolation is available.
+
 For a file-backed model input, Phase 3 accepts any existing regular file with a nonempty extension, resolves its
 canonical absolute path, and retains it without reading or deserializing it. It does not infer family from the suffix or
 reject an otherwise valid reference because its format is unfamiliar. Phase 6 later dispatches an available loader from

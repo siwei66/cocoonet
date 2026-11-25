@@ -5,6 +5,7 @@ import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
+from typing import Literal
 
 import pandas as pd
 
@@ -61,6 +62,36 @@ class _RegisteredModel:
     def model_label(self) -> ScalarLabel:
         """Return the authoritative user-facing model label."""
         return self.reference.model_label
+
+
+def _normalize_model_family(value: str, /) -> ModelFamily:
+    """Convert one public model-family string to its internal enum."""
+    if type(value) is not str:
+        raise TypeError("family must be a string.")
+
+    try:
+        family = ModelFamily(value)
+    except ValueError as error:
+        raise ValueError("family must be one of 'sklearn', 'sklearn-like', " "'pytorch', or 'cocoonet'.") from error
+
+    if family is ModelFamily.COCOONET:
+        raise ValueError(
+            "family='cocoonet' is reserved for Cocoonet-native models, "
+            "which are currently under development and unsupported."
+        )
+
+    return family
+
+
+def _normalize_task_kind(value: str, /) -> TaskKind:
+    """Convert one public task-kind string to its internal enum."""
+    if type(value) is not str:
+        raise TypeError("task_kind must be a string.")
+
+    try:
+        return TaskKind(value)
+    except ValueError as error:
+        raise ValueError("task_kind must be either 'regression' or 'classification'.") from error
 
 
 def _stage_model_registration(
@@ -529,23 +560,32 @@ class EvaluationTask:
     def add_model(
         self,
         model_input: object,
-        model_label: ScalarLabel,
-        family: ModelFamily,
-        task_kind: TaskKind,
+        model_label: str,
+        family: Literal[
+            "sklearn",
+            "sklearn-like",
+            "pytorch",
+            "cocoonet",
+        ],
+        task_kind: Literal["regression", "classification"],
     ) -> ModelReference:
         """Add one opaque model input to prospective configuration.
 
         Parameters
         ----------
         model_input : object
-            In-memory opaque input, or an existing model-file path supplied as
-            text or ``Path``.
-        model_label : ScalarLabel
-            User-facing label unique within the active model registry.
-        family : ModelFamily
-            Explicit model-construction family.
-        task_kind : TaskKind
-            Explicit regression or classification task.
+            In-memory model instance, or a text/Path reference to an existing
+            regular model file. Class definitions are not accepted. Phase 3
+            retains an in-memory candidate without invoking or inspecting it
+            and resolves a file reference without opening or deserializing it.
+        model_label : str
+            Nonempty user-facing label unique within the active model registry.
+        family : {"sklearn", "sklearn-like", "pytorch", "cocoonet"}
+            Declared model-construction family. ``"cocoonet"`` is reserved and
+            currently rejected because Cocoonet-native models are not yet
+            supported.
+        task_kind : {"regression", "classification"}
+            Declared prediction task.
 
         Returns
         -------
@@ -572,8 +612,8 @@ class EvaluationTask:
             ModelRegistration(
                 model_input=model_input,
                 model_label=model_label,
-                family=family,
-                task_kind=task_kind,
+                family=_normalize_model_family(family),
+                task_kind=_normalize_task_kind(task_kind),
             ),
             model_id=ModelId(str(self._next_model_number)),
             existing_models=self._models,
@@ -712,8 +752,24 @@ class EvaluationTask:
     def add_models(  # noqa: C901
         self,
         models: dict[str, object],
-        family: ModelFamily | dict[str, ModelFamily],
-        task_kind: TaskKind,
+        family: (
+            Literal[
+                "sklearn",
+                "sklearn-like",
+                "pytorch",
+                "cocoonet",
+            ]
+            | dict[
+                str,
+                Literal[
+                    "sklearn",
+                    "sklearn-like",
+                    "pytorch",
+                    "cocoonet",
+                ],
+            ]
+        ),
+        task_kind: Literal["regression", "classification"],
         *,
         suppress_return: bool = False,
         tabular_return: bool = True,
@@ -724,12 +780,14 @@ class EvaluationTask:
         Parameters
         ----------
         models : dict[str, object]
-            Ordered mapping from unique model labels to opaque model inputs.
-        family : ModelFamily | dict[str, ModelFamily]
-            One family for every model, or a mapping whose keys exactly match
-            the model labels.
-        task_kind : TaskKind
-            Shared regression or classification task.
+            Nonempty ordered mapping from unique model labels to in-memory
+            model instances or existing model-file paths.
+        family : {"sklearn", "sklearn-like", "pytorch", "cocoonet"} or dict
+            One family string for every model, or a mapping from every supplied
+            model label to one family string. Mapping keys must exactly match
+            the model keys. ``"cocoonet"`` is reserved and currently rejected.
+        task_kind : {"regression", "classification"}
+            Shared prediction task for every supplied model.
         suppress_return : bool, default=False
             Whether to return no representation of the added models.
         tabular_return : bool, default=True
@@ -781,11 +839,12 @@ class EvaluationTask:
         if isinstance(family, dict):
             if family.keys() != models.keys():
                 raise ValueError("family mapping keys must exactly match model labels.")
-            families = family
-        elif isinstance(family, ModelFamily):
-            families = dict.fromkeys(models, family)
+            families = {model_label: _normalize_model_family(value) for model_label, value in family.items()}
         else:
-            raise TypeError("family must be a ModelFamily or a dictionary of ModelFamily values.")
+            normalized_family = _normalize_model_family(family)
+            families = dict.fromkeys(models, normalized_family)
+
+        normalized_task_kind = _normalize_task_kind(task_kind)
 
         _require_configuration_editable(self._execution_status)
 
@@ -802,7 +861,7 @@ class EvaluationTask:
                     model_input=model_input,
                     model_label=model_label,
                     family=families[model_label],
-                    task_kind=task_kind,
+                    task_kind=normalized_task_kind,
                 ),
                 model_id=ModelId(str(next_model_number)),
                 existing_models=staged_models,

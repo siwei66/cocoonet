@@ -1,0 +1,44 @@
+Read current dev docs `AGENTS.md`, `contracts.md`, `roadmap.md` and the roadmaps in `docs/roadmaps/`, and re-organize the contents according to the following requirements and save the re-organized version to `AGENTS_reorg.md`, `contracts_reorg.md` and `roadmap_reorg.md`:
+
+---
+
+1. `AGENTS.md`should contains only:
+- the basic introduction of the module including the intention, style and philosophy of the module
+- development instructions, including functional programming, unit-wise development style with unit definition, numpy-style docstring and the rule of using intention comment for a complex code block
+- concise rule for the contents of `contracts.md` and `roadmap.md`
+
+`AGENTS.md` must not contain:
+- any code details like name and intention of function, method, class
+- any technical route or requirements
+
+`AGENTS.md` cannot be modified by agents after this re-organization.
+
+The length of `AGENTS.md` must not exceed 900 words and 80 lines.
+
+---
+
+2. `contracts.md` should contains only:
+- Public APIs including typing in code
+- Module working directory file persistence layouts
+
+`contracts.md` must not contain:
+- Any internal APIs of the module
+- Any implementation description, rule, requirement, policy or technical route
+
+`contracts.md` cannot be modified by agents after this re-organization.
+
+---
+
+3. `roadmap.md` should contains only:
+(1) General phase map in a list of numbered phase names for the entire module
+(2) Then for each phase:
+- A concise phase intention description in one short paragraph with no more than 250 words
+- A brief technical route described in one short paragraph with no more than 250 words
+- A unit component map, in which each unit contains the names of its function(s), class or class method(s) and a one-sentence intention description
+- A concise technical tip for a unit with more than one functions or methods
+
+`roadmap.md` must not contain:
+- any implementation instructions
+
+`roadmap.md` is updated with implementation in the development according to the exact contracts set in the conversations.
+`roadmap.md` must not contain any API details. All implementation details like internal APIs must be only self-documented in the audited implemented source files.

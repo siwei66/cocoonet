@@ -40,7 +40,10 @@ class ModelRegistration:
     Parameters
     ----------
     model_input : object
-        In-memory model input retained without inspection or copying.
+        In-memory model candidate or model-file path retained for Phase 3
+        registration. Public APIs reject class definitions. File paths are
+        normalized by the registry boundary; complete model compatibility is
+        validated later by the isolated model adapter.
     model_label : ScalarLabel
         User-provided label that later registry operations require to be
         unique within an evaluation task.
@@ -80,9 +83,11 @@ def validate_model_registration(value: ModelRegistration, /) -> None:
 
     Notes
     -----
-    Any non-``None`` model input is accepted without inspection, copying,
-    serialization, method access, or family-specific validation. Registry
-    uniqueness and task agreement are separate mutation-level checks.
+    An in-memory candidate is retained without inspection, copying,
+    serialization, method access, or family-specific validation. Class
+    definitions are invalid because the public API requires a model instance.
+    Registry uniqueness, task agreement, file normalization, and later
+    family-specific validation belong to their owning boundaries.
     Node usage scope: Root - Validates root-side prospective model input.
     """
     if not isinstance(value, ModelRegistration):
@@ -90,6 +95,11 @@ def validate_model_registration(value: ModelRegistration, /) -> None:
 
     if value.model_input is None:
         raise ValueError("model_input must not be None.")
+    if isinstance(value.model_input, type):
+        raise ValueError(
+            "model_input must be an in-memory model instance or a model-file "
+            "path; class definitions are not accepted."
+        )
 
     validate_label(value.model_label, field="model_label")
     validate_declared_types(value.family, expected_type=ModelFamily, field="family")

@@ -627,9 +627,13 @@ provenance, or experiment lineage. Recording and interpreting that metadata rema
 Construction and training inputs needed to execute the supplied model remain governed by the contracts below;
 using parameters for reconstruction does not establish a separate descriptive metadata catalogue.
 
-The model input associated with a unit task is fixed. Every execution attempt of that unit task uses the same
-supplied model or construction information; an attempt must not substitute or redefine it. Fitting and fold-local
-initialization operate under that input and do not redefine the unit task's model.
+The model input associated with a unit task is fixed. Public registration accepts either an in-memory model instance
+or a path to an existing model-object file. It rejects `None` and class definitions. Public callers declare the family
+with `"sklearn"`, `"sklearn-like"`, `"pytorch"`, or the reserved `"cocoonet"`, and declare the task with
+`"regression"` or `"classification"`; internal structured contract types are not public inputs. Cocoonet-native models
+remain under development, so registration rejects the reserved family. Every execution attempt of that unit task uses
+the same supplied model or construction information; an attempt must not substitute or redefine it. Fitting and
+fold-local initialization operate under that input and do not redefine the unit task's model.
 
 | Model family | Required input contract |
 | --- | --- |
@@ -637,10 +641,11 @@ initialization operate under that input and do not redefine the unit task's mode
 | Scikit-learn-like classifier | `fit`, `predict`, `predict_proba`, and required class information. |
 | PyTorch model | Complete reconstruction/training inputs and the user's initialization choice; see Section 3.3. |
 
-During Phase 3 registration, a user-provided file-backed model is an opaque reference. Accept any existing regular
-file with a nonempty extension, resolve and retain its canonical absolute path, and impose no extension/family
-association. Do not open, read, or deserialize it. After the Phase 5 isolation boundary exists, Phase 6 dispatches an
-available user-input loader from the complete lowercase extension and validates the loaded object against the
+During Phase 3 registration, retain an in-memory candidate without executing or inspecting its model APIs. A
+user-provided file-backed model is an opaque reference: accept any existing regular file with a nonempty extension,
+resolve and retain its canonical absolute path, and impose no extension/family association. Do not open, read, or
+deserialize it. After the Phase 5 isolation boundary exists, Phase 6 validates an in-memory candidate or dispatches an
+available user-input loader from the complete lowercase extension, then validates the resulting object against the
 explicitly declared family and task kind. A referenced file changing after registration is the user's responsibility;
 Cocoonet does not lock it or add a digest or metadata-change check for this risk alone.
 

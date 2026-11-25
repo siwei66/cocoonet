@@ -41,7 +41,7 @@ Phase 3 implements:
 2. construction with a required user-provided root node working directory and `overwrite=False` by default;
 3. explicit fresh `initialize()` using Phase 2 ownership and protected-root checks;
 4. one optional dataset/partition/evaluation slot, initially empty and not publicly populated until Phase 4;
-5. an ordered registry of opaque model inputs and their `ModelReference` metadata;
+5. an ordered registry of in-memory model candidates or model-file paths and their `ModelReference` metadata;
 6. positive sequential model-ID assignment beginning at `1`, with no reuse after removal;
 7. an ordered registry of root-local or online worker configuration records;
 8. requested worker device text and positive requested `n_attempt`, defaulting to `1`;
@@ -222,10 +222,14 @@ source workbook schemas, or artifact carry-forward. Those are Phase 4 decisions.
 
 ### 4.5 Model registry
 
-Model registration stores an opaque prospective input and an immutable Phase 1 `ModelReference`. It does not establish
-that the input can be reconstructed or executed. Registration rules are:
+Model registration stores an in-memory model candidate or an opaque model-file path and an immutable Phase 1
+`ModelReference`. It does not establish that the input can be reconstructed or executed. Public callers use ordinary
+strings; internal contract enums are not accepted as public inputs. Registration rules are:
 
-- the user supplies `model_label`, `ModelFamily`, and `TaskKind` explicitly;
+- `model_label` is a nonempty `str`;
+- `family` is one of `"sklearn"`, `"sklearn-like"`, `"pytorch"`, or `"cocoonet"`; the reserved `"cocoonet"` value is
+  rejected while Cocoonet-native models remain under development;
+- `task_kind` is either `"regression"` or `"classification"`;
 - Cocoonet assigns `ModelId(str(next_model_number))` only on successful commit;
 - the first committed model receives `"1"`; each later committed model consumes the next integer;
 - removal never decrements the counter or frees an ID for reuse;
@@ -242,12 +246,13 @@ and never selects or invokes a loader. Phase 6 selects an available loader from 
 the Phase 5 isolation boundary exists. The user owns the risk of later replacement or mutation of the referenced file;
 Phase 3 adds no lock, digest, or metadata-change check.
 
-Phase 3 stores the exact in-memory `model_input` object reference or the normalized canonical `Path` for a file-backed
-input. It does not call `copy.copy`, `copy.deepcopy`, a model loader, model methods, `repr`, `get_params`, or another
-user-defined hook. Registry metadata and replacement are controlled, but Phase 3 does not claim to make an arbitrary
-caller-owned object deeply immutable. Phase 6 must prepare the fixed executable/declarative model input before Phase 13
-can commit a parent. An already committed parent's prepared input, not a later mutation of the prospective Python
-object or source file, is authoritative for its attempts.
+For an in-memory input, the caller supplies a model instance, not a class definition. Phase 3 stores the exact
+`model_input` object reference. It does not call `copy.copy`, `copy.deepcopy`, a model loader, model methods, `repr`,
+`get_params`, or another user-defined hook. Registry metadata and replacement are controlled, but Phase 3 does not
+claim to make an arbitrary caller-owned object deeply immutable. Phase 6 validates the candidate against its declared
+family and task and must prepare the fixed executable/declarative model input before Phase 13 can commit a parent. An
+already committed parent's prepared input, not a later mutation of the prospective Python object or source file, is
+authoritative for its attempts.
 
 ### 4.6 Worker registry
 
@@ -286,8 +291,9 @@ uses one Cocoonet attempt slot. Phase 3 performs none of those calculations.
 
 ### 4.7 Implemented model bulk atomicity
 
-`add_models()` accepts a nonempty insertion-ordered dictionary from model label to opaque input. `family` is either one
-`ModelFamily` applied to every entry or a dictionary whose key set exactly matches the model dictionary. All
+`add_models()` accepts a nonempty insertion-ordered dictionary from model label to in-memory model instance or
+model-file path. `family` is either one supported family string applied to every entry or a dictionary whose key set
+exactly matches the model dictionary and whose values are supported family strings. All
 registrations are validated against a staged registry and counter before one bounded commit. Assigned IDs follow model
 dictionary order and are consumed only by a successful complete commit; an empty model dictionary is invalid.
 
@@ -520,16 +526,17 @@ class EvaluationTask:
     def add_model(
         self,
         model_input: object,
-        model_label: ScalarLabel,
-        family: ModelFamily,
-        task_kind: TaskKind,
+        model_label: str,
+        family: Literal["sklearn", "sklearn-like", "pytorch", "cocoonet"],
+        task_kind: Literal["regression", "classification"],
     ) -> ModelReference
 
     def add_models(
         self,
         models: dict[str, object],
-        family: ModelFamily | dict[str, ModelFamily],
-        task_kind: TaskKind,
+        family: Literal["sklearn", "sklearn-like", "pytorch", "cocoonet"]
+        | dict[str, Literal["sklearn", "sklearn-like", "pytorch", "cocoonet"]],
+        task_kind: Literal["regression", "classification"],
         *,
         suppress_return: bool = False,
         tabular_return: bool = True,
@@ -571,9 +578,9 @@ expression matching or exact equality. The positive `limit` bounds the result an
 All implemented tabular `limit` controls retain Python's native `bool` relationship: `limit=True` behaves as one,
 while `limit=False` fails positive-limit validation.
 
-`add_models()` uses dictionary order for registration and accepts either one family or a per-model family dictionary
-with the same key set. Its return controls affect only the representation returned after the complete batch is
-committed.
+`add_models()` uses dictionary order for registration and accepts either one supported family string or a per-model
+family-string dictionary with the same key set. Its return controls affect only the representation returned after the
+complete batch is committed.
 
 `remove_model()` uses exact user-facing label equality, returns the removed immutable reference, and returns `None` with
 a zero-match message when the label is absent. `remove_models()` uses the same filters as `list_models()`, requires at
@@ -765,8 +772,8 @@ Test:
 
 - exact `WorkerKind` values;
 - frozen/slotted keyword-only record behavior;
-- valid opaque model registration without input inspection;
-- `None` model input rejection;
+- valid in-memory model-instance registration without model execution or inspection;
+- `None` and model-class input rejection;
 - model label/family/task type validation;
 - valid local/online worker records;
 - default and retained requested `n_attempt`;
@@ -815,7 +822,8 @@ Test:
 - exact public metadata, string dtypes, registry ordering, and safe model-input descriptions from listing;
 - combined exact and regular-expression filtering by label, family, and model-input description;
 - invalid criteria, matching mode, regular expression, and limit rejection, plus truncation warning behavior;
-- duplicate label, mixed task kind, present-evaluation mismatch, invalid enum, and `None` input rejection;
+- duplicate label, mixed task kind, present-evaluation mismatch, unsupported public vocabulary, internal-enum input,
+  model-class input, and `None` input rejection;
 - canonical absolute model paths, relative-path resolution, arbitrary-extension acceptance, case and compound suffix
   preservation, and directory, missing-path, and extensionless-path rejection;
 - invalid model-file bytes accepted without being read, with no loader import or call and no suffix/family association;

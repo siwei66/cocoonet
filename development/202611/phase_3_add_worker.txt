@@ -15,9 +15,13 @@ I find the roadmap of worker management is improperly designed. Please propose r
 ```python
 def add_worker(
     self,
-    worker_id: WorkerId,
+    worker_id: str,
+    worker_label: str,
+    kind: Literal['root-local', 'online'] = 'root-local',
+    host: str | None = None,
+    port: int | None = None,
+    authentication_key: str | None = None,
     *,
-    worker_label: ScalarLabel,
     n_attempt: int | None = None,
     n_cpu_per_attempt: int = 1,
     memory_reserve_pct: float = 20.0,
@@ -27,7 +31,6 @@ def add_workers(
     self,
     worker_id: WorkerId,
     worker_label: ScalarLabel,
-    /,
     *,
     n_attempt: int | None = None,
     n_cpu_per_attempt: int = 1,
@@ -49,7 +52,7 @@ Place all attempt process trees in an aggregate OS memory-containment group whil
 This supports models with different memory requirements without estimating their peak usage. It is a lightweight safeguard, not a guarantee that every active attempt survives aggregate exhaustion.
 ```
 
-- `kind: WorkerKind` and `device: str` are the worker properties and not belongs to part of the root worker adding attributes, they are fixed for the corresponding worker and can be configured at the worker side, instead of in the `add_model` of root node EvaluationTask instance. After root node connected with the worker, the `kind`, `device` and `n_cpu_available` is retrieved from the worker node. For the root local worker, the `kind` is retrieved internally directly.
+- `device: str` belongs to the worker properties and not as a part of the root worker adding attributes, they are fixed for the corresponding worker and can be configured at the worker side, instead of in the `add_model` of root node EvaluationTask instance. After root node connected with the worker, the `device` is retrieved from the worker node. `n_cpu_available` and other potential future worker machine properties should also be retrieved from the worker after connected.
 
 ---
 

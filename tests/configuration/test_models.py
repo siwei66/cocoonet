@@ -22,6 +22,16 @@ from cocoonet._contracts.state import ExecutionStatus
 from cocoonet.evaluation_task import EvaluationTask, _RegisteredModel
 
 
+class _InMemoryModel:
+    """Represent an in-memory model candidate without executing model code."""
+
+    def fit(self, X: object, y: object) -> "_InMemoryModel":
+        return self
+
+    def predict(self, X: object) -> list[float]:
+        return []
+
+
 def test_registered_model_exposes_reference_identity_and_label() -> None:
     """Derive model identity and label from the authoritative reference."""
     reference = ModelReference(
@@ -73,20 +83,20 @@ def test_add_model_assigns_sequential_ids_and_preserves_opaque_inputs(
 ) -> None:
     """Commit models in order without copying their opaque inputs."""
     task = EvaluationTask(tmp_path / "work-dir")
-    first_input = object()
-    second_input = object()
+    first_input = _InMemoryModel()
+    second_input = _InMemoryModel()
 
     first = task.add_model(
         first_input,
         model_label="first",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
     second = task.add_model(
         second_input,
         model_label="second",
-        family=ModelFamily.PYTORCH,
-        task_kind=TaskKind.REGRESSION,
+        family="pytorch",
+        task_kind="regression",
     )
 
     assert first.model_id == ModelId("1")
@@ -102,15 +112,68 @@ def test_singular_model_arguments_accept_keywords(tmp_path: Path) -> None:
     """Accept model inputs and labels by keyword in public APIs."""
     task = EvaluationTask(tmp_path / "work-dir")
     reference = task.add_model(
-        model_input=object(),
+        model_input=_InMemoryModel(),
         model_label="baseline",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
 
     removed = task.remove_model(model_label="baseline")
 
     assert removed is reference
+
+
+@pytest.mark.parametrize(
+    ("family", "task_kind", "message"),
+    [
+        ("unknown", "regression", "family must be one of"),
+        ("cocoonet", "regression", "currently under development"),
+        ("sklearn", "unknown", "task_kind must be either"),
+    ],
+)
+def test_add_model_rejects_invalid_public_vocabulary(
+    tmp_path: Path,
+    family: Any,
+    task_kind: Any,
+    message: str,
+) -> None:
+    """Reject unsupported public family and task vocabulary."""
+    task = EvaluationTask(tmp_path / "work-dir")
+
+    with pytest.raises(ValueError, match=message):
+        task.add_model(
+            _InMemoryModel(),
+            "baseline",
+            family,
+            task_kind,
+        )
+
+
+def test_add_model_rejects_internal_enum_inputs(tmp_path: Path) -> None:
+    """Keep internal structured enums out of the public input contract."""
+    task = EvaluationTask(tmp_path / "work-dir")
+
+    family: Any = ModelFamily.SKLEARN
+    with pytest.raises(TypeError, match="family"):
+        task.add_model(
+            _InMemoryModel(),
+            "baseline",
+            family,
+            "regression",
+        )
+
+
+def test_add_model_rejects_model_class_definition(tmp_path: Path) -> None:
+    """Require an in-memory model instance rather than its class."""
+    task = EvaluationTask(tmp_path / "work-dir")
+
+    with pytest.raises(ValueError, match="class definition"):
+        task.add_model(
+            _InMemoryModel,
+            "baseline",
+            "sklearn-like",
+            "regression",
+        )
 
 
 def test_add_model_changes_consolidated_state_and_preserves_parent(
@@ -122,10 +185,10 @@ def test_add_model_changes_consolidated_state_and_preserves_parent(
     task._parent_id = ParentId("existing-parent")
 
     task.add_model(
-        object(),
+        _InMemoryModel(),
         model_label="baseline",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.CLASSIFICATION,
+        family="sklearn",
+        task_kind="classification",
     )
 
     assert task.state is ConsolidationState.UNCONSOLIDATED
@@ -138,19 +201,19 @@ def test_add_model_rejects_duplicate_label_without_consuming_id(
     """Leave registry, counter, and state unchanged after a collision."""
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_model(
-        object(),
+        _InMemoryModel(),
         model_label="baseline",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
     before = task.__dict__.copy()
 
     with pytest.raises(ValueError, match=r"model_label must be unique"):
         task.add_model(
-            object(),
+            _InMemoryModel(),
             model_label="baseline",
-            family=ModelFamily.PYTORCH,
-            task_kind=TaskKind.REGRESSION,
+            family="pytorch",
+            task_kind="regression",
         )
 
     assert task.__dict__ == before
@@ -163,18 +226,18 @@ def test_add_model_rejects_mixed_task_kind_without_consuming_id(
     """Require one task kind across the active model registry."""
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_model(
-        object(),
+        _InMemoryModel(),
         model_label="regressor",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
 
     with pytest.raises(ValueError, match=r"task_kind must match existing models"):
         task.add_model(
-            object(),
+            _InMemoryModel(),
             model_label="classifier",
-            family=ModelFamily.SKLEARN,
-            task_kind=TaskKind.CLASSIFICATION,
+            family="sklearn",
+            task_kind="classification",
         )
 
     assert tuple(model.model_label for model in task._models) == ("regressor",)
@@ -198,10 +261,10 @@ def test_add_model_rejects_evaluation_task_mismatch(
         match=r"task_kind must match evaluation_config\.task_kind",
     ):
         task.add_model(
-            object(),
+            _InMemoryModel(),
             model_label="regressor",
-            family=ModelFamily.SKLEARN,
-            task_kind=TaskKind.REGRESSION,
+            family="sklearn",
+            task_kind="regression",
         )
 
     assert task._models == []
@@ -218,17 +281,17 @@ def test_add_model_rejects_invalid_registration_without_mutation(
         task.add_model(
             None,
             model_label="missing",
-            family=ModelFamily.SKLEARN,
-            task_kind=TaskKind.REGRESSION,
+            family="sklearn",
+            task_kind="regression",
         )
 
-    invalid_family: Any = "sklearn"
+    invalid_family: Any = ModelFamily.SKLEARN
     with pytest.raises(TypeError, match="family"):
         task.add_model(
-            object(),
+            _InMemoryModel(),
             model_label="invalid-family",
             family=invalid_family,
-            task_kind=TaskKind.REGRESSION,
+            task_kind="regression",
         )
 
     assert task._models == []
@@ -246,8 +309,8 @@ def test_add_model_accepts_arbitrary_compound_file_extension_without_reading(
     reference = task.add_model(
         model_path,
         model_label="opaque",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
 
     assert reference.model_id == ModelId("1")
@@ -268,8 +331,8 @@ def test_add_model_resolves_relative_text_path_from_console_directory(
         task.add_model(
             "relative.unknown",
             model_label="relative",
-            family=ModelFamily.PYTORCH,
-            task_kind=TaskKind.REGRESSION,
+            family="pytorch",
+            task_kind="regression",
         )
     finally:
         os.chdir(previous_directory)
@@ -302,8 +365,8 @@ def test_add_model_rejects_invalid_file_reference(
         task.add_model(
             candidate,
             model_label="invalid-path",
-            family=ModelFamily.SKLEARN,
-            task_kind=TaskKind.REGRESSION,
+            family="sklearn",
+            task_kind="regression",
         )
 
     assert task._models == []
@@ -319,10 +382,10 @@ def test_add_model_rejects_running_before_staging(
 
     with pytest.raises(RuntimeError, match=r"execution is running"):
         task.add_model(
-            object(),
+            _InMemoryModel(),
             model_label="blocked",
-            family=ModelFamily.SKLEARN,
-            task_kind=TaskKind.REGRESSION,
+            family="sklearn",
+            task_kind="regression",
         )
 
     assert task._models == []
@@ -334,18 +397,18 @@ def test_list_models_returns_string_table_in_registry_order(
 ) -> None:
     """Present all registrations without mutating their stored values."""
     task = EvaluationTask(tmp_path / "work-dir")
-    first_input = object()
+    first_input = _InMemoryModel()
     task.add_model(
         first_input,
         model_label="first",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
     task.add_model(
-        [],
+        _InMemoryModel(),
         model_label="second",
-        family=ModelFamily.PYTORCH,
-        task_kind=TaskKind.REGRESSION,
+        family="pytorch",
+        task_kind="regression",
     )
 
     result = task.list_models()
@@ -363,14 +426,14 @@ def test_list_models_returns_string_table_in_registry_order(
             "model_label": "first",
             "family": "sklearn",
             "task_kind": "regression",
-            "model_input": "object",
+            "model_input": "_InMemoryModel",
         },
         {
             "model_id": "2",
             "model_label": "second",
             "family": "pytorch",
             "task_kind": "regression",
-            "model_input": "list",
+            "model_input": "_InMemoryModel",
         },
     ]
     assert all(dtype == pd.StringDtype() for dtype in result.dtypes)
@@ -384,22 +447,22 @@ def test_list_models_combines_exact_criteria(
     """Apply exact criteria together with logical AND semantics."""
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_model(
-        object(),
+        _InMemoryModel(),
         model_label="first",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
     task.add_model(
-        object(),
+        _InMemoryModel(),
         model_label="second",
-        family=ModelFamily.PYTORCH,
-        task_kind=TaskKind.REGRESSION,
+        family="pytorch",
+        task_kind="regression",
     )
 
     result = task.list_models(
         label="second",
         family="pytorch",
-        model_input="object",
+        model_input="_InMemoryModel",
         use_regex=False,
     )
 
@@ -414,10 +477,10 @@ def test_list_models_uses_case_sensitive_regex_fullmatch(
     task = EvaluationTask(tmp_path / "work-dir")
     for label in ("alpha-1", "alpha-12", "Alpha-1"):
         task.add_model(
-            object(),
+            _InMemoryModel(),
             model_label=label,
-            family=ModelFamily.SKLEARN,
-            task_kind=TaskKind.REGRESSION,
+            family="sklearn",
+            task_kind="regression",
         )
 
     result = task.list_models(label=r"alpha-\d")
@@ -435,8 +498,8 @@ def test_list_models_displays_and_filters_canonical_file_path(
     task.add_model(
         model_path,
         model_label="file-model",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
     canonical_path = str(model_path.resolve())
 
@@ -481,10 +544,10 @@ def test_list_models_warns_when_limit_truncates_matches(
     task = EvaluationTask(tmp_path / "work-dir")
     for label in ("first", "second"):
         task.add_model(
-            object(),
+            _InMemoryModel(),
             model_label=label,
-            family=ModelFamily.SKLEARN,
-            task_kind=TaskKind.REGRESSION,
+            family="sklearn",
+            task_kind="regression",
         )
 
     with pytest.warns(UserWarning, match=r"truncated to 1 of 2"):
@@ -500,10 +563,10 @@ def test_list_models_preserves_native_bool_limit_behavior(
     task = EvaluationTask(tmp_path / "work-dir")
     for label in ("first", "second"):
         task.add_model(
-            object(),
+            _InMemoryModel(),
             model_label=label,
-            family=ModelFamily.SKLEARN,
-            task_kind=TaskKind.REGRESSION,
+            family="sklearn",
+            task_kind="regression",
         )
 
     with pytest.warns(UserWarning, match=r"truncated to True of 2"):
@@ -547,10 +610,10 @@ def test_remove_model_returns_reference_and_preserves_survivor_order(
     task = EvaluationTask(tmp_path / "work-dir")
     for label in ("first", "second", "third"):
         task.add_model(
-            object(),
+            _InMemoryModel(),
             model_label=label,
-            family=ModelFamily.SKLEARN,
-            task_kind=TaskKind.REGRESSION,
+            family="sklearn",
+            task_kind="regression",
         )
     removed_reference = task._models[1].reference
 
@@ -571,10 +634,10 @@ def test_remove_model_changes_consolidated_state_and_preserves_parent(
     """Make committed scientific configuration unconsolidated on removal."""
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_model(
-        object(),
+        _InMemoryModel(),
         model_label="baseline",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
     task._consolidation_state = ConsolidationState.CONSOLIDATED
     task._parent_id = ParentId("existing-parent")
@@ -592,10 +655,10 @@ def test_remove_model_no_match_reports_without_mutation(
     """Return none and report an exact-label miss without changing state."""
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_model(
-        object(),
+        _InMemoryModel(),
         model_label="baseline",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
     before = task.__dict__.copy()
 
@@ -635,10 +698,10 @@ def test_remove_model_rejects_running_before_lookup(
     """Reject active-execution removal before searching the registry."""
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_model(
-        object(),
+        _InMemoryModel(),
         model_label="baseline",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
     task._execution_status = ExecutionStatus.RUNNING
     before = task.__dict__.copy()
@@ -655,26 +718,29 @@ def test_add_models_commits_in_order_and_returns_only_new_models(
     """Commit a complete batch and return its detached string table."""
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_model(
-        object(),
+        _InMemoryModel(),
         model_label="existing",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
 
     result = task.add_models(
         {
-            "first": object(),
-            "second": [],
+            "first": _InMemoryModel(),
+            "second": _InMemoryModel(),
         },
-        ModelFamily.PYTORCH,
-        TaskKind.REGRESSION,
+        "pytorch",
+        "regression",
     )
 
     assert isinstance(result, pd.DataFrame)
     assert result["model_id"].tolist() == ["2", "3"]
     assert result["model_label"].tolist() == ["first", "second"]
     assert result["family"].tolist() == ["pytorch", "pytorch"]
-    assert result["model_input"].tolist() == ["object", "list"]
+    assert result["model_input"].tolist() == [
+        "_InMemoryModel",
+        "_InMemoryModel",
+    ]
     assert all(dtype == pd.StringDtype() for dtype in result.dtypes)
     assert [model.model_label for model in task._models] == [
         "existing",
@@ -692,14 +758,14 @@ def test_add_models_supports_per_model_families_and_reference_return(
 
     result = task.add_models(
         {
-            "sklearn-model": object(),
-            "torch-model": object(),
+            "sklearn-model": _InMemoryModel(),
+            "torch-model": _InMemoryModel(),
         },
         {
-            "sklearn-model": ModelFamily.SKLEARN,
-            "torch-model": ModelFamily.PYTORCH,
+            "sklearn-model": "sklearn",
+            "torch-model": "pytorch",
         },
-        TaskKind.REGRESSION,
+        "regression",
         tabular_return=False,
     )
 
@@ -721,9 +787,9 @@ def test_add_models_can_suppress_return(
     task = EvaluationTask(tmp_path / "work-dir")
 
     result = task.add_models(
-        {"baseline": object()},
-        ModelFamily.SKLEARN,
-        TaskKind.REGRESSION,
+        {"baseline": _InMemoryModel()},
+        "sklearn",
+        "regression",
         suppress_return=True,
     )
 
@@ -737,10 +803,10 @@ def test_add_models_failure_is_atomic(
     """Leave live state unchanged when a later staged member fails."""
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_model(
-        object(),
+        _InMemoryModel(),
         model_label="existing",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
     task._consolidation_state = ConsolidationState.CONSOLIDATED
     before = task.__dict__.copy()
@@ -748,11 +814,11 @@ def test_add_models_failure_is_atomic(
     with pytest.raises(ValueError, match=r"model_input must not be None"):
         task.add_models(
             {
-                "valid": object(),
+                "valid": _InMemoryModel(),
                 "invalid": None,
             },
-            ModelFamily.SKLEARN,
-            TaskKind.REGRESSION,
+            "sklearn",
+            "regression",
         )
 
     assert task.__dict__ == before
@@ -761,16 +827,16 @@ def test_add_models_failure_is_atomic(
 @pytest.mark.parametrize(
     ("models", "family", "error_type", "message"),
     [
-        ({}, ModelFamily.SKLEARN, ValueError, "at least one"),
+        ({}, "sklearn", ValueError, "at least one"),
         (
-            {"model": object()},
+            {"model": _InMemoryModel()},
             {},
             ValueError,
             "keys must exactly match",
         ),
         (
-            {"": object()},
-            ModelFamily.SKLEARN,
+            {"": _InMemoryModel()},
+            "sklearn",
             ValueError,
             "nonempty",
         ),
@@ -779,7 +845,7 @@ def test_add_models_failure_is_atomic(
 def test_add_models_rejects_invalid_batch_without_mutation(
     tmp_path: Path,
     models: dict[str, object],
-    family: ModelFamily | dict[str, ModelFamily],
+    family: Any,
     error_type: type[Exception],
     message: str,
 ) -> None:
@@ -788,7 +854,7 @@ def test_add_models_rejects_invalid_batch_without_mutation(
     before = task.__dict__.copy()
 
     with pytest.raises(error_type, match=message):
-        task.add_models(models, family, TaskKind.REGRESSION)
+        task.add_models(models, family, "regression")
 
     assert task.__dict__ == before
 
@@ -802,11 +868,11 @@ def test_add_models_truncates_only_tabular_return(
     with pytest.warns(UserWarning, match=r"truncated to 1 of 2"):
         result = task.add_models(
             {
-                "first": object(),
-                "second": object(),
+                "first": _InMemoryModel(),
+                "second": _InMemoryModel(),
             },
-            ModelFamily.SKLEARN,
-            TaskKind.REGRESSION,
+            "sklearn",
+            "regression",
             limit=1,
         )
 
@@ -841,9 +907,9 @@ def test_add_models_rejects_invalid_return_options(
 
     with pytest.raises(error_type, match=message):
         add_models(
-            {"baseline": object()},
-            ModelFamily.SKLEARN,
-            TaskKind.REGRESSION,
+            {"baseline": _InMemoryModel()},
+            "sklearn",
+            "regression",
             **{keyword: value},
         )
 
@@ -861,9 +927,9 @@ def test_add_models_rejects_running_without_partial_commit(
 
     with pytest.raises(RuntimeError, match=r"execution is running"):
         task.add_models(
-            {"baseline": object()},
-            ModelFamily.SKLEARN,
-            TaskKind.REGRESSION,
+            {"baseline": _InMemoryModel()},
+            "sklearn",
+            "regression",
         )
 
     assert task.__dict__ == before
@@ -876,12 +942,12 @@ def test_remove_models_filters_and_removes_all_matches(
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_models(
         {
-            "alpha-1": object(),
-            "alpha-2": object(),
-            "beta": object(),
+            "alpha-1": _InMemoryModel(),
+            "alpha-2": _InMemoryModel(),
+            "beta": _InMemoryModel(),
         },
-        ModelFamily.SKLEARN,
-        TaskKind.REGRESSION,
+        "sklearn",
+        "regression",
         suppress_return=True,
     )
 
@@ -904,21 +970,21 @@ def test_remove_models_combines_exact_criteria(
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_models(
         {
-            "sklearn-model": object(),
-            "torch-model": object(),
+            "sklearn-model": _InMemoryModel(),
+            "torch-model": _InMemoryModel(),
         },
         {
-            "sklearn-model": ModelFamily.SKLEARN,
-            "torch-model": ModelFamily.PYTORCH,
+            "sklearn-model": "sklearn",
+            "torch-model": "pytorch",
         },
-        TaskKind.REGRESSION,
+        "regression",
         suppress_return=True,
     )
 
     result = task.remove_models(
         label="torch-model",
         family="pytorch",
-        model_input="object",
+        model_input="_InMemoryModel",
         use_regex=False,
     )
 
@@ -934,10 +1000,10 @@ def test_remove_models_no_match_reports_without_mutation(
     """Report an empty search result without changing configuration."""
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_model(
-        object(),
+        _InMemoryModel(),
         model_label="baseline",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
     before = task.__dict__.copy()
 
@@ -954,10 +1020,10 @@ def test_remove_models_requires_a_criterion(
     """Prevent accidental unfiltered removal of the entire registry."""
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_model(
-        object(),
+        _InMemoryModel(),
         model_label="baseline",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
     before = task.__dict__.copy()
 
@@ -974,11 +1040,11 @@ def test_remove_models_returns_references_and_changes_lifecycle(
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_models(
         {
-            "first": object(),
-            "second": object(),
+            "first": _InMemoryModel(),
+            "second": _InMemoryModel(),
         },
-        ModelFamily.SKLEARN,
-        TaskKind.REGRESSION,
+        "sklearn",
+        "regression",
         suppress_return=True,
     )
     expected = tuple(model.reference for model in task._models)
@@ -1004,10 +1070,10 @@ def test_remove_models_can_suppress_return(
     """Remove matching models without constructing a return value."""
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_model(
-        object(),
+        _InMemoryModel(),
         model_label="baseline",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
 
     result = task.remove_models(
@@ -1027,19 +1093,18 @@ def test_remove_models_truncates_only_tabular_return(
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_models(
         {
-            "first": object(),
-            "second": object(),
-            "survivor": [],
+            "first": _InMemoryModel(),
+            "second": _InMemoryModel(),
+            "survivor": _InMemoryModel(),
         },
-        ModelFamily.SKLEARN,
-        TaskKind.REGRESSION,
+        "sklearn",
+        "regression",
         suppress_return=True,
     )
 
     with pytest.warns(UserWarning, match=r"truncated to 1 of 2"):
         result = task.remove_models(
-            model_input="object",
-            use_regex=False,
+            label="first|second",
             limit=1,
         )
 
@@ -1055,10 +1120,10 @@ def test_remove_models_invalid_regex_is_atomic(
     """Reject an invalid expression before changing the registry."""
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_model(
-        object(),
+        _InMemoryModel(),
         model_label="baseline",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
     before = task.__dict__.copy()
 
@@ -1088,10 +1153,10 @@ def test_remove_models_rejects_invalid_controls(
     """Reject invalid controls without changing configuration."""
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_model(
-        object(),
+        _InMemoryModel(),
         model_label="baseline",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
     before = task.__dict__.copy()
     remove_models: Any = task.remove_models
@@ -1108,10 +1173,10 @@ def test_remove_models_rejects_running_before_filtering(
     """Reject bulk removal while execution is active."""
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_model(
-        object(),
+        _InMemoryModel(),
         model_label="baseline",
-        family=ModelFamily.SKLEARN,
-        task_kind=TaskKind.REGRESSION,
+        family="sklearn",
+        task_kind="regression",
     )
     task._execution_status = ExecutionStatus.RUNNING
     before = task.__dict__.copy()

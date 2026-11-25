@@ -354,7 +354,7 @@ Note:
 Revise to:
 ```python
 def add_model(
-    model: object,
+    model_input: object,
     model_label: str,
     family : Literal['sklearn', 'sklearn-like', 'pytorch', 'cocoonet'],
     task_kind: Literal['regression', 'classification'],
@@ -372,7 +372,7 @@ def add_models(
 
 def list_models(
     label: str | None = None,
-    family: str | None = None,
+    family: Literal['sklearn', 'sklearn-like', 'pytorch', 'cocoonet'] | None = None,
     model_input: str | None = None,
     *,
     use_regex: bool = True,
@@ -385,7 +385,7 @@ def remove_model(
 
 def remove_models(
     label: str | None = None,
-    family: str | None = None,
+    family: Literal['sklearn', 'sklearn-like', 'pytorch', 'cocoonet'] | None = None,
     model_input: str | None = None,
     *,
     use_regex: bool = True,
