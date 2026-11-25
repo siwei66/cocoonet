@@ -7,7 +7,9 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from cocoonet._contracts.identity import WorkerId
+from cocoonet._contracts.execution import ConsolidationState
+from cocoonet._contracts.identity import ParentId, WorkerId
+from cocoonet._contracts.state import ExecutionStatus
 from cocoonet.configuration import WorkerConfiguration, WorkerKind
 from cocoonet.evaluation_task import EvaluationTask, _stage_worker_configuration
 
@@ -225,5 +227,91 @@ def test_list_workers_rejects_invalid_arguments(
     list_workers: Any = task.list_workers
     with pytest.raises(error_type, match=message):
         list_workers(**kwargs)
+
+    assert tuple(task._workers) == before
+
+
+def test_remove_worker_removes_exact_id_without_scientific_edit(
+    tmp_path: Path,
+) -> None:
+    """Remove only the selected worker while preserving parent reuse state."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    retained = _worker(
+        "abc123",
+        kind=WorkerKind.ROOT_LOCAL,
+    )
+    removed = _worker("xyz789", worker_label="online-worker")
+    task._workers.extend((retained, removed))
+    task._consolidation_state = ConsolidationState.CONSOLIDATED
+    task._parent_id = ParentId("existing-parent")
+
+    result = task.remove_worker("xyz789")
+
+    assert result is removed
+    assert task._workers == [retained]
+    assert task.state is ConsolidationState.CONSOLIDATED
+    assert task.parent_id == ParentId("existing-parent")
+
+
+def test_remove_worker_defaults_to_root_local_worker(
+    tmp_path: Path,
+) -> None:
+    """Use an omitted worker ID to select the current root-local worker."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    local_worker = _worker(
+        "abc123",
+        kind=WorkerKind.ROOT_LOCAL,
+    )
+    online_worker = _worker("xyz789")
+    task._workers.extend((online_worker, local_worker))
+
+    result = task.remove_worker()
+
+    assert result is local_worker
+    assert task._workers == [online_worker]
+
+
+def test_remove_worker_reports_no_match_without_mutation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Return none and preserve the registry when no worker ID matches."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task._workers.append(_worker("abc123"))
+    before = task.__dict__.copy()
+
+    result = task.remove_worker("def456")
+
+    assert result is None
+    assert capsys.readouterr().out == ("Found 0 matched workers, no worker is removed.\n")
+    assert task.__dict__ == before
+
+
+def test_remove_worker_rejects_invalid_id_type_without_mutation(
+    tmp_path: Path,
+) -> None:
+    """Reject an invalid selector type before changing the registry."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task._workers.append(_worker("abc123"))
+    before = tuple(task._workers)
+    remove_worker: Any = task.remove_worker
+
+    with pytest.raises(TypeError, match=r"worker_id"):
+        remove_worker(1)
+
+    assert tuple(task._workers) == before
+
+
+def test_remove_worker_rejects_running_execution_without_mutation(
+    tmp_path: Path,
+) -> None:
+    """Prevent allocation-membership edits during active execution."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task._workers.append(_worker("abc123"))
+    task._execution_status = ExecutionStatus.RUNNING
+    before = tuple(task._workers)
+
+    with pytest.raises(RuntimeError, match=r"execution is running"):
+        task.remove_worker("abc123")
 
     assert tuple(task._workers) == before

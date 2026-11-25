@@ -29,6 +29,7 @@ from cocoonet._type_validation import validate_args, validate_declared_types
 from cocoonet.configuration import (
     ModelRegistration,
     WorkerConfiguration,
+    WorkerKind,
     validate_model_registration,
     validate_worker_configuration,
 )
@@ -919,6 +920,59 @@ class EvaluationTask:
                 stacklevel=2,
             )
         return _workers_to_dataframe(matches[:limit])
+
+    @validate_args
+    def remove_worker(
+        self,
+        worker_id: str | None = None,
+    ) -> WorkerConfiguration | None:
+        """Remove one worker from this task's allocation registry.
+
+        Parameters
+        ----------
+        worker_id : str | None, default=None
+            Exact worker-generated identity to remove. ``None`` selects the
+            root-local worker configured for the current root machine.
+
+        Returns
+        -------
+        WorkerConfiguration | None
+            Removed immutable worker configuration, or ``None`` when no
+            matching worker is registered.
+
+        Raises
+        ------
+        RuntimeError
+            If execution is currently running.
+        TypeError
+            If ``worker_id`` is neither a string nor ``None``.
+
+        Notes
+        -----
+        Removal changes only this task's attempt-allocation membership. It
+        does not disconnect an online worker, stop a root-local worker, alter
+        scientific consolidation, or invalidate the retained parent identity.
+        Node usage scope: Root - Removes one worker from prospective task
+        allocation.
+        """
+        _require_configuration_editable(self._execution_status)
+
+        matches = _filter_workers(
+            self._workers,
+            worker_id=worker_id,
+            worker_label=None,
+            cpu_capacity=None,
+            kind=WorkerKind.ROOT_LOCAL.value if worker_id is None else None,
+            device=None,
+            use_regex=False,
+        )
+        if not matches:
+            print("Found 0 matched workers, no worker is removed.")
+            return None
+
+        removed = matches[0]
+        self._workers = [worker for worker in self._workers if worker.worker_id != removed.worker_id]
+        return removed
 
     def remove_model(
         self,
