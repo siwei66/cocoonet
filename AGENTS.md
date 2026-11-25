@@ -36,6 +36,9 @@ The project values scientific auditability, human interpretability, transparency
 - Use the repository's configured typing, formatting, linting, and test checks. Test real behavior with representative inputs. Test doubles are limited to necessary network-boundary simulations. Report unavailable checks accurately.
 - Do not commit automatically. Suggest a commit message with scope after implementation.
 
+### Protected files
+- Never modify `AGENTS.md` or `contracts.md`; report any necessary updates in your response instead.
+
 ## 4 Development documentation boundaries and ownership
 
 - [contracts.md](contracts_reorg.md) contains only public API declarations with code-level typing and managed working-directory persistence layouts. It excludes internal interfaces, behavioral policies, algorithms, and technical routes.

@@ -173,7 +173,7 @@ class EvaluationTask:
         suppress_return: bool = False,
         tabular_return: bool = True,
         limit: int = 1000,
-        ) -> WorkerConfiguration: ...
+        ) -> tuple[WorkerConfiguration] | pd.DataFrame | None: ...
 
     def available_workers(
         self,

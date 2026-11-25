@@ -485,6 +485,15 @@ class EvaluationTask:
         Whether an existing nonempty root node working directory may be
         cleared for fresh use.
 
+    Attributes
+    ----------
+    _available_workers : list[WorkerConfiguration]
+        Reserved snapshot of workers detected through future root-directed
+        connection, heartbeat, and handshake handling. The network phase will
+        initialize this list during root-node task construction and refresh it
+        before attempt allocation. Phase 3 neither initializes nor reads this
+        reserved state.
+
     Raises
     ------
     TypeError
@@ -511,6 +520,7 @@ class EvaluationTask:
     _evaluation_config: EvaluationReference | None
     _dataset_sources: tuple[Path, ...]
     _models: list[_RegisteredModel]
+    _available_workers: list[WorkerConfiguration]
     _workers: list[WorkerConfiguration]
     _next_model_number: int
 
