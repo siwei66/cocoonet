@@ -974,6 +974,117 @@ class EvaluationTask:
         self._workers = [worker for worker in self._workers if worker.worker_id != removed.worker_id]
         return removed
 
+    @validate_args
+    def remove_workers(
+        self,
+        worker_id: str | None = None,
+        worker_label: str | None = None,
+        cpu_capacity: int | str | None = None,
+        kind: str | None = None,
+        device: str | None = None,
+        *,
+        use_regex: bool = True,
+        suppress_return: bool = False,
+        tabular_return: bool = True,
+        limit: int = 1000,
+    ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None:
+        """Atomically remove all workers matching supplied criteria.
+
+        Parameters
+        ----------
+        worker_id : str | None, default=None
+            Worker-ID pattern or exact value. ``None`` ignores this field.
+        worker_label : str | None, default=None
+            Worker-label pattern or exact value. Labels need not be unique.
+        cpu_capacity : int | str | None, default=None
+            Logical-CPU-capacity pattern or exact display value.
+        kind : str | None, default=None
+            Worker-kind pattern or exact value.
+        device : str | None, default=None
+            Worker-device pattern or exact value.
+        use_regex : bool, default=True
+            Whether criteria use case-sensitive full regular-expression
+            matching instead of exact string equality.
+        suppress_return : bool, default=False
+            Whether to return no representation of removed workers.
+        tabular_return : bool, default=True
+            Whether to return a detached string-typed table instead of an
+            immutable tuple of worker configurations.
+        limit : int, default=1000
+            Maximum positive number of rows in a tabular return.
+
+        Returns
+        -------
+        tuple[WorkerConfiguration, ...] | pandas.DataFrame | None
+            Removed workers in registry order, or ``None`` when return is
+            suppressed or no worker matches.
+
+        Raises
+        ------
+        RuntimeError
+            If execution is currently running.
+        TypeError
+            If a criterion or control has an incorrect runtime type.
+        ValueError
+            If no criterion is supplied, a regular expression is invalid, or
+            ``limit`` is not positive.
+
+        Warns
+        -----
+        UserWarning
+            If the tabular return is truncated by ``limit``.
+
+        Notes
+        -----
+        Filtering and removal are not limited by the presentation-row limit.
+        Successful removal preserves survivor order and does not disconnect,
+        stop, or otherwise control a worker. Scientific consolidation and the
+        retained parent identity remain unchanged.
+        Node usage scope: Root - Removes matching workers from prospective
+        task allocation.
+        """
+        if limit < 1:
+            raise ValueError("limit must be positive.")
+        if (
+            worker_id,
+            worker_label,
+            cpu_capacity,
+            kind,
+            device,
+        ) == (None, None, None, None, None):
+            raise ValueError("At least one worker-removal criterion must be provided.")
+
+        _require_configuration_editable(self._execution_status)
+
+        matches = _filter_workers(
+            self._workers,
+            worker_id=worker_id,
+            worker_label=worker_label,
+            cpu_capacity=cpu_capacity,
+            kind=kind,
+            device=device,
+            use_regex=use_regex,
+        )
+        if not matches:
+            print("Found 0 matched workers, no worker is removed.")
+            return None
+
+        removed_ids = {worker.worker_id for worker in matches}
+        self._workers = [worker for worker in self._workers if worker.worker_id not in removed_ids]
+
+        if suppress_return:
+            return None
+        if not tabular_return:
+            return matches
+
+        if len(matches) > limit:
+            warnings.warn(
+                "Bulk worker-removal return truncated to " f"{limit} of {len(matches)} removed workers.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return _workers_to_dataframe(matches[:limit])
+
     def remove_model(
         self,
         model_label: str,

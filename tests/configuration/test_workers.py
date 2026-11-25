@@ -315,3 +315,148 @@ def test_remove_worker_rejects_running_execution_without_mutation(
         task.remove_worker("abc123")
 
     assert tuple(task._workers) == before
+
+
+def test_remove_workers_removes_all_matches_without_scientific_edit(
+    tmp_path: Path,
+) -> None:
+    """Remove duplicate-label matches while retaining scientific state."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    first = _worker("abc123", worker_label="batch")
+    second = _worker("xyz789", worker_label="batch")
+    survivor = _worker("def456", worker_label="retained")
+    task._workers.extend((first, second, survivor))
+    task._consolidation_state = ConsolidationState.CONSOLIDATED
+    task._parent_id = ParentId("existing-parent")
+
+    result = task.remove_workers(
+        worker_label="batch",
+        use_regex=False,
+        tabular_return=False,
+    )
+
+    assert result == (first, second)
+    assert task._workers == [survivor]
+    assert task.state is ConsolidationState.CONSOLIDATED
+    assert task.parent_id == ParentId("existing-parent")
+
+
+def test_remove_workers_requires_a_criterion(
+    tmp_path: Path,
+) -> None:
+    """Prevent accidental unfiltered removal of the complete registry."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task._workers.append(_worker("abc123"))
+    before = task.__dict__.copy()
+
+    with pytest.raises(ValueError, match=r"criterion must be provided"):
+        task.remove_workers()
+
+    assert task.__dict__ == before
+
+
+def test_remove_workers_reports_no_match_without_mutation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Return none and report an empty worker selection."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task._workers.append(_worker("abc123"))
+    before = task.__dict__.copy()
+
+    result = task.remove_workers(worker_id="def456", use_regex=False)
+
+    assert result is None
+    assert capsys.readouterr().out == ("Found 0 matched workers, no worker is removed.\n")
+    assert task.__dict__ == before
+
+
+def test_remove_workers_can_suppress_return(
+    tmp_path: Path,
+) -> None:
+    """Remove matching workers without constructing a return value."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task._workers.append(_worker("abc123", worker_label="batch"))
+
+    result = task.remove_workers(
+        worker_label="batch",
+        use_regex=False,
+        suppress_return=True,
+    )
+
+    assert result is None
+    assert task._workers == []
+
+
+def test_remove_workers_truncates_only_tabular_return(
+    tmp_path: Path,
+) -> None:
+    """Remove every match while limiting only its presentation table."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task._workers.extend(
+        (
+            _worker("abc123", device="cpu"),
+            _worker("xyz789", device="cpu"),
+            _worker("def456", device="cuda:0"),
+        )
+    )
+
+    with pytest.warns(UserWarning, match=r"truncated to 1 of 2"):
+        result = task.remove_workers(
+            device="cpu",
+            use_regex=False,
+            limit=1,
+        )
+
+    assert isinstance(result, pd.DataFrame)
+    assert result["worker_id"].tolist() == ["abc123"]
+    assert [worker.worker_id for worker in task._workers] == ["def456"]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error_type", "message"),
+    [
+        ({"worker_id": 1}, TypeError, "worker_id"),
+        ({"worker_label": 1}, TypeError, "worker_label"),
+        ({"cpu_capacity": True}, TypeError, "cpu_capacity"),
+        ({"kind": 1}, TypeError, "kind"),
+        ({"device": 1}, TypeError, "device"),
+        ({"use_regex": 1}, TypeError, "use_regex"),
+        ({"suppress_return": 1}, TypeError, "suppress_return"),
+        ({"tabular_return": 1}, TypeError, "tabular_return"),
+        ({"limit": True}, TypeError, "limit"),
+        ({"limit": 0}, ValueError, "positive"),
+        ({"worker_id": "["}, ValueError, "worker_id"),
+    ],
+)
+def test_remove_workers_rejects_invalid_arguments_without_mutation(
+    tmp_path: Path,
+    kwargs: dict[str, object],
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    """Reject invalid criteria and controls before registry mutation."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task._workers.append(_worker("abc123"))
+    before = tuple(task._workers)
+    remove_workers: Any = task.remove_workers
+
+    with pytest.raises(error_type, match=message):
+        remove_workers(**kwargs)
+
+    assert tuple(task._workers) == before
+
+
+def test_remove_workers_rejects_running_execution_without_mutation(
+    tmp_path: Path,
+) -> None:
+    """Prevent bulk allocation-membership edits during active execution."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    task._workers.append(_worker("abc123"))
+    task._execution_status = ExecutionStatus.RUNNING
+    before = tuple(task._workers)
+
+    with pytest.raises(RuntimeError, match=r"execution is running"):
+        task.remove_workers(worker_id="abc123", use_regex=False)
+
+    assert tuple(task._workers) == before
