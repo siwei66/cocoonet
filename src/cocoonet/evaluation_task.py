@@ -29,6 +29,7 @@ from cocoonet.configuration import (
     ModelRegistration,
     WorkerConfiguration,
     validate_model_registration,
+    validate_worker_configuration,
 )
 
 
@@ -173,6 +174,21 @@ def _stage_model_registration(
         ),
         model_input=model_input,
     )
+
+
+def _stage_worker_configuration(
+    configuration: WorkerConfiguration,
+    /,
+    *,
+    existing_workers: list[WorkerConfiguration],
+) -> WorkerConfiguration:
+    """Validate one worker configuration without mutating the registry."""
+    validate_worker_configuration(configuration)
+
+    if any(existing.worker_id == configuration.worker_id for existing in existing_workers):
+        raise ValueError("worker_id must be unique; " f"duplicate worker ID: {configuration.worker_id!r}.")
+
+    return configuration
 
 
 _MODEL_TABLE_COLUMNS = (
