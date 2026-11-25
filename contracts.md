@@ -163,19 +163,22 @@ class EvaluationTask:
 
     def add_workers(
         self,
-        worker_id: tuple[str] | None = None,
-        worker_label: tuple[str] | None = None,
-        kind: Literal['root-local', 'online'] = 'root-local',
+        worker_id: str | Sequence[str] | None = None,
+        worker_label: str | None = None,
+        cpu_capacity: int | str | None = None,
+        kind: str | None = None,
+        device: str | None = None,
         *,
-        n_attempt: int | None = None,
-        n_cpu_per_attempt: int = 1,
-        memory_reserve_pct: float = 20.0,
+        n_attempt: int | dict[str, int] | None = None,
+        n_cpu_per_attempt: int | dict[str, int] = 1,
+        memory_reserve_pct: float | dict[str, float] = 20.0,
+        use_regex: bool = True,
         suppress_return: bool = False,
         tabular_return: bool = True,
         limit: int = 1000,
-        ) -> tuple[WorkerConfiguration] | pd.DataFrame | None: ...
+        ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None: ...
 
-    def available_workers(
+    def list_available_workers(
         self,
         worker_id: str | None = None,
         worker_label: str | None = None,
@@ -187,7 +190,7 @@ class EvaluationTask:
         suppress_return: bool = False,
         tabular_return: bool = True,
         limit: int = 1000,
-    ) -> tuple[WorkerConfiguration] | pd.DataFrame | None: ...
+    ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None: ...
 
     def list_workers(
         self,

@@ -2,6 +2,7 @@
 
 import re
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -832,6 +833,392 @@ class EvaluationTask:
                 stacklevel=2,
             )
         return _models_to_dataframe(matches[:limit])
+
+    @validate_args
+    def add_worker(
+        self,
+        worker_id: str | None = None,
+        kind: Literal["root-local", "online"] = "root-local",
+        *,
+        n_attempt: int | None = None,
+        n_cpu_per_attempt: int = 1,
+        memory_reserve_pct: float = 20.0,
+    ) -> WorkerConfiguration:
+        """Add one currently available worker to task allocation.
+
+        Parameters
+        ----------
+        worker_id : str | None, default=None
+            Worker-generated identity to add. ``None`` selects the first
+            available root-local worker for the current root machine.
+        kind : {"root-local", "online"}, default="root-local"
+            Required topology of the available worker.
+        n_attempt : int | None, default=None
+            Positive maximum parallel attempts for this task. ``None`` retains
+            the available worker's current/default attempt count.
+        n_cpu_per_attempt : int, default=1
+            Positive logical CPU cores requested for each attempt.
+        memory_reserve_pct : float, default=20.0
+            Worker-memory percentage reserved when admitting another attempt.
+
+        Returns
+        -------
+        WorkerConfiguration
+            Immutable task configuration committed to the worker registry.
+
+        Raises
+        ------
+        RuntimeError
+            If execution is currently running.
+        TypeError
+            If an argument has an incorrect runtime type or unsupported
+            literal value.
+        ValueError
+            If no available worker matches ``worker_id`` and ``kind``, the
+            worker ID is already registered, or an execution property is
+            outside its valid range.
+
+        Notes
+        -----
+        This method does not discover workers, test heartbeats, establish
+        handshakes, or initialize the future availability snapshot. It copies
+        worker-owned identity and machine properties from the latest received
+        snapshot and combines them with task-selected execution properties.
+        Adding a worker changes allocation membership only and does not alter
+        scientific consolidation or retained parent identity.
+        Node usage scope: Root - Admits one available worker to prospective
+        task allocation.
+        """
+        _require_configuration_editable(self._execution_status)
+
+        available_workers: list[WorkerConfiguration] = getattr(
+            self,
+            "_available_workers",
+            [],
+        )
+        matches = _filter_workers(
+            available_workers,
+            worker_id=worker_id,
+            worker_label=None,
+            cpu_capacity=None,
+            kind=kind,
+            device=None,
+            use_regex=False,
+        )
+        if not matches:
+            raise ValueError("No available worker matches the requested worker_id and kind.")
+
+        available = matches[0]
+
+        # Combine worker-owned properties with task-selected execution settings.
+        configured = _stage_worker_configuration(
+            WorkerConfiguration(
+                worker_id=available.worker_id,
+                worker_label=available.worker_label,
+                kind=WorkerKind(kind),
+                device=available.device,
+                cpu_capacity=available.cpu_capacity,
+                n_attempt=(available.n_attempt if n_attempt is None else n_attempt),
+                n_cpu_per_attempt=n_cpu_per_attempt,
+                memory_reserve_pct=memory_reserve_pct,
+            ),
+            existing_workers=self._workers,
+        )
+
+        self._workers.append(configured)
+        return configured
+
+    @validate_args
+    def add_workers(  # noqa: C901
+        self,
+        worker_id: str | Sequence[str] | None = None,
+        worker_label: str | None = None,
+        cpu_capacity: int | str | None = None,
+        kind: str | None = None,
+        device: str | None = None,
+        *,
+        n_attempt: int | dict[str, int] | None = None,
+        n_cpu_per_attempt: int | dict[str, int] = 1,
+        memory_reserve_pct: float | dict[str, float] = 20.0,
+        use_regex: bool = True,
+        suppress_return: bool = False,
+        tabular_return: bool = True,
+        limit: int = 1000,
+    ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None:
+        """Atomically add matching available workers to task allocation.
+
+        Parameters
+        ----------
+        worker_id : str | Sequence[str] | None, default=None
+            Exact worker identity or identities to select. Worker IDs never
+            use regular-expression matching. ``None`` ignores this field.
+        worker_label : str | None, default=None
+            Worker-label pattern or exact value. ``None`` ignores this field.
+        cpu_capacity : int | str | None, default=None
+            Logical-CPU-capacity pattern or exact display value.
+        kind : str | None, default=None
+            Worker-kind pattern or exact value.
+        device : str | None, default=None
+            Worker-device pattern or exact value.
+        n_attempt : int | dict[str, int] | None, default=None
+            Positive maximum parallel attempts. A dictionary configures values
+            by worker ID. ``None`` retains each available worker's current or
+            default value.
+        n_cpu_per_attempt : int | dict[str, int], default=1
+            Positive logical CPU cores requested per attempt, either shared by
+            all selected workers or configured by worker ID.
+        memory_reserve_pct : float | dict[str, float], default=20.0
+            Reserved worker-memory percentage, either shared by all selected
+            workers or configured by worker ID.
+        use_regex : bool, default=True
+            Whether non-ID search criteria use case-sensitive full
+            regular-expression matching instead of exact equality.
+        suppress_return : bool, default=False
+            Whether to return no representation of added workers.
+        tabular_return : bool, default=True
+            Whether to return a detached string-typed table instead of an
+            immutable tuple of worker configurations.
+        limit : int, default=1000
+            Maximum positive number of rows in a tabular return.
+
+        Returns
+        -------
+        tuple[WorkerConfiguration, ...] | pandas.DataFrame | None
+            Added workers in availability-snapshot order using the selected
+            representation. Suppressed returns are ``None``.
+
+        Raises
+        ------
+        RuntimeError
+            If execution is currently running.
+        TypeError
+            If a search criterion, execution setting, or return control has an
+            incorrect runtime type.
+        ValueError
+            If no available worker matches, a regular expression is invalid,
+            a configuration mapping does not exactly cover the selected
+            worker IDs, an execution setting is invalid, or ``limit`` is not
+            positive.
+
+        Warns
+        -----
+        UserWarning
+            If the tabular return is truncated by ``limit``.
+
+        Notes
+        -----
+        Worker IDs always use exact matching. Other worker properties follow
+        ``use_regex``. Every configuration is staged before one bounded commit,
+        so failure leaves task membership unchanged. This method neither
+        discovers workers nor modifies the availability snapshot, scientific
+        consolidation, or retained parent identity.
+        Node usage scope: Root - Atomically admits matching available workers
+        to prospective task allocation.
+        """
+        if limit < 1:
+            raise ValueError("limit must be positive.")
+
+        _require_configuration_editable(self._execution_status)
+
+        selected_ids: set[str] | None
+        if worker_id is None:
+            selected_ids = None
+        elif isinstance(worker_id, str):
+            selected_ids = {worker_id}
+        else:
+            selected_ids = set(worker_id)
+
+        available_workers: list[WorkerConfiguration] = getattr(
+            self,
+            "_available_workers",
+            [],
+        )
+        matches = _filter_workers(
+            available_workers,
+            worker_id=None,
+            worker_label=worker_label,
+            cpu_capacity=cpu_capacity,
+            kind=kind,
+            device=device,
+            use_regex=use_regex,
+        )
+        if selected_ids is not None:
+            matches = tuple(worker for worker in matches if str(worker.worker_id) in selected_ids)
+        if not matches:
+            raise ValueError("No available worker matches the supplied criteria.")
+
+        matched_ids = {str(worker.worker_id) for worker in matches}
+        for field, settings in (
+            ("n_attempt", n_attempt),
+            ("n_cpu_per_attempt", n_cpu_per_attempt),
+            ("memory_reserve_pct", memory_reserve_pct),
+        ):
+            if isinstance(settings, dict) and set(settings) != matched_ids:
+                raise ValueError(f"{field} mapping keys must exactly match filtered " "worker IDs.")
+
+        attempts_by_id: dict[str, int | None]
+        if isinstance(n_attempt, dict):
+            attempts_by_id = dict(n_attempt)
+        else:
+            attempts_by_id = dict.fromkeys(matched_ids, n_attempt)
+
+        if isinstance(n_cpu_per_attempt, dict):
+            cpus_by_id = dict(n_cpu_per_attempt)
+        else:
+            cpus_by_id = dict.fromkeys(
+                matched_ids,
+                n_cpu_per_attempt,
+            )
+
+        if isinstance(memory_reserve_pct, dict):
+            memory_by_id = dict(memory_reserve_pct)
+        else:
+            memory_by_id = dict.fromkeys(
+                matched_ids,
+                memory_reserve_pct,
+            )
+
+        staged_workers = list(self._workers)
+        added_workers: list[WorkerConfiguration] = []
+
+        # Stage every selected worker before committing task membership.
+        for available in matches:
+            available_id = str(available.worker_id)
+            configured_attempts = attempts_by_id[available_id]
+            configured = _stage_worker_configuration(
+                WorkerConfiguration(
+                    worker_id=available.worker_id,
+                    worker_label=available.worker_label,
+                    kind=available.kind,
+                    device=available.device,
+                    cpu_capacity=available.cpu_capacity,
+                    n_attempt=(available.n_attempt if configured_attempts is None else configured_attempts),
+                    n_cpu_per_attempt=cpus_by_id[available_id],
+                    memory_reserve_pct=memory_by_id[available_id],
+                ),
+                existing_workers=staged_workers,
+            )
+            staged_workers.append(configured)
+            added_workers.append(configured)
+
+        self._workers = staged_workers
+
+        if suppress_return:
+            return None
+        if not tabular_return:
+            return tuple(added_workers)
+
+        if len(added_workers) > limit:
+            warnings.warn(
+                "Bulk worker-addition return truncated to " f"{limit} of {len(added_workers)} added workers.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return _workers_to_dataframe(tuple(added_workers[:limit]))
+
+    @validate_args
+    def list_available_workers(
+        self,
+        worker_id: str | None = None,
+        worker_label: str | None = None,
+        cpu_capacity: int | str | None = None,
+        kind: str | None = None,
+        device: str | None = None,
+        *,
+        use_regex: bool = True,
+        suppress_return: bool = False,
+        tabular_return: bool = True,
+        limit: int = 1000,
+    ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None:
+        """Return available workers matching supplied criteria.
+
+        Parameters
+        ----------
+        worker_id : str | None, default=None
+            Worker-ID pattern or exact value. ``None`` ignores this field.
+        worker_label : str | None, default=None
+            Worker-label pattern or exact value. Labels need not be unique.
+        cpu_capacity : int | str | None, default=None
+            Logical-CPU-capacity pattern or exact display value.
+        kind : str | None, default=None
+            Worker-kind pattern or exact value.
+        device : str | None, default=None
+            Worker-device pattern or exact value.
+        use_regex : bool, default=True
+            Whether criteria use case-sensitive full regular-expression
+            matching instead of exact string equality.
+        suppress_return : bool, default=False
+            Whether to return no representation of matching workers.
+        tabular_return : bool, default=True
+            Whether to return a detached string-typed table instead of an
+            immutable tuple of worker configurations.
+        limit : int, default=1000
+            Maximum positive number of rows in a tabular return.
+
+        Returns
+        -------
+        tuple[WorkerConfiguration, ...] | pandas.DataFrame | None
+            Matching available workers in snapshot order. Tabular mode returns
+            an empty DataFrame when no worker matches. Configuration mode
+            returns ``None`` when no worker matches. Suppressed returns are
+            always ``None``.
+
+        Raises
+        ------
+        TypeError
+            If a criterion, matching mode, return control, or limit has an
+            invalid type.
+        ValueError
+            If a regular expression is invalid or ``limit`` is not positive.
+
+        Warns
+        -----
+        UserWarning
+            If a tabular result is truncated by ``limit``.
+
+        Notes
+        -----
+        This Phase 3 method presents the latest received availability snapshot
+        without discovering workers, testing heartbeats, establishing
+        handshakes, or accepting connections. It does not add a worker to task
+        allocation or read the task registry. The future network phase owns
+        initialization and refresh of ``_available_workers``.
+        Node usage scope: Root - Presents currently available workers before
+        explicit task admission.
+        """
+        if limit < 1:
+            raise ValueError("limit must be positive.")
+
+        available_workers: list[WorkerConfiguration] = getattr(
+            self,
+            "_available_workers",
+            [],
+        )
+        matches = _filter_workers(
+            available_workers,
+            worker_id=worker_id,
+            worker_label=worker_label,
+            cpu_capacity=cpu_capacity,
+            kind=kind,
+            device=device,
+            use_regex=use_regex,
+        )
+
+        # Keep authoritative matches independent from the selected presentation.
+        if suppress_return:
+            return None
+        if not tabular_return:
+            if not matches:
+                return None
+            return matches
+
+        if len(matches) > limit:
+            warnings.warn(
+                "Available-worker listing truncated to " f"{limit} of {len(matches)} matching workers.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return _workers_to_dataframe(matches[:limit])
 
     @validate_args
     def list_workers(
