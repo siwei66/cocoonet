@@ -12,6 +12,7 @@ from cocoonet._storage.metadata import (
 )
 from cocoonet._storage.publication import staged_file_path
 from cocoonet._storage.work_directory import (
+    _clone_work_directory,
     open_work_directory,
     prepare_work_directory,
 )
@@ -371,3 +372,66 @@ def test_open_work_directory_validates_dataset_ownership_without_mutation(
 
     assert prepared.metadata_csv.read_bytes() == metadata_bytes
     assert not conflicting_source.exists()
+
+
+def test_clone_work_directory_rejects_nonempty_destination(
+    tmp_path: Path,
+) -> None:
+    """Preserve an existing nonempty clone destination."""
+    source = prepare_work_directory(tmp_path / "source")
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    retained = destination / "retained.txt"
+    retained.write_text("retained", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"Clone destination must be empty"):
+        _clone_work_directory(
+            source.work_dir,
+            destination,
+            dataset_sources=(),
+        )
+
+    assert retained.read_text(encoding="utf-8") == "retained"
+
+
+def test_clone_work_directory_rejects_nested_destination(
+    tmp_path: Path,
+) -> None:
+    """Reject recursive cloning into the source working directory."""
+    source = prepare_work_directory(tmp_path / "source")
+    destination = source.work_dir / "nested-clone"
+
+    with pytest.raises(ValueError, match=r"separate non-nested"):
+        _clone_work_directory(
+            source.work_dir,
+            destination,
+            dataset_sources=(),
+        )
+
+    assert not destination.exists()
+
+
+def test_clone_work_directory_rejects_source_link(
+    tmp_path: Path,
+) -> None:
+    """Reject links that could retain external or original ownership."""
+    source = prepare_work_directory(tmp_path / "source")
+    external = tmp_path / "external.txt"
+    external.write_text("external", encoding="utf-8")
+    linked = source.logs / "linked.txt"
+
+    try:
+        linked.symlink_to(external)
+    except OSError as error:
+        pytest.skip(f"Symlink creation is unavailable: {error}")
+
+    destination = tmp_path / "destination"
+    with pytest.raises(ValueError, match=r"must not contain symlinks or junctions"):
+        _clone_work_directory(
+            source.work_dir,
+            destination,
+            dataset_sources=(),
+        )
+
+    assert not destination.exists()
+    assert external.read_text(encoding="utf-8") == "external"

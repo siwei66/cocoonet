@@ -1,5 +1,6 @@
 """Tests for reusable evaluation-task configuration."""
 
+import copy
 import os
 from dataclasses import is_dataclass
 from pathlib import Path
@@ -46,6 +47,7 @@ def test_evaluation_task_declares_exact_owned_fields() -> None:
         "_evaluation_config": EvaluationReference | None,
         "_dataset_sources": tuple[Path, ...],
         "_models": list[_RegisteredModel],
+        "_available_workers": list[WorkerConfiguration],
         "_workers": list[WorkerConfiguration],
         "_next_model_number": int,
     }
@@ -394,3 +396,223 @@ def test_evaluation_task_initialize_rejects_running_before_filesystem_work(
 
     assert task.work_dir == (tmp_path / "current-work-dir").resolve()
     assert not target.exists()
+
+
+def test_evaluation_task_rejects_shallow_copy_without_mutation(
+    tmp_path: Path,
+) -> None:
+    """Reject shallow copying without changing task state or storage."""
+    task = EvaluationTask(tmp_path / "work-dir")
+    fields_before = task.__dict__.copy()
+    entries_before = tuple(sorted(task.work_dir.iterdir()))
+
+    with pytest.raises(TypeError) as error:
+        copy.copy(task)
+
+    assert str(error.value) == (
+        "EvaluationTask does not support shallow copying; use "
+        "clone_configuration(new_work_dir) for a new independent execution "
+        "using cloned configuration or clone(new_work_dir) for a new "
+        "independent execution using cloned configuration and persisted files"
+    )
+    assert task.__dict__ == fields_before
+    assert tuple(sorted(task.work_dir.iterdir())) == entries_before
+
+
+def test_clone_configuration_reuses_configuration_in_fresh_storage(
+    tmp_path: Path,
+) -> None:
+    """Clone prospective configuration without persisted execution progress."""
+    source = tmp_path / "dataset-source.csv"
+    source.write_text("sample_label,y\nsample,1\n", encoding="utf-8")
+    task = EvaluationTask(tmp_path / "source-work-dir")
+
+    managed_model = task.work_dir / "models_for_transfer" / "model.pkl"
+    managed_model.write_bytes(b"model")
+    partition = PartitionReference(
+        partition_id=PartitionId("partition-a"),
+        dataset_id=DatasetId("dataset-a"),
+    )
+    evaluation = EvaluationReference(
+        configuration_id=EvaluationConfigId("evaluation-a"),
+        task_kind=TaskKind.REGRESSION,
+        class_labels=(),
+        influence_requested=False,
+    )
+    registered = _RegisteredModel(
+        reference=ModelReference(
+            model_id=ModelId("1"),
+            model_label="baseline",
+            family=ModelFamily.SKLEARN,
+            task_kind=TaskKind.REGRESSION,
+        ),
+        model_input=managed_model,
+    )
+    worker = WorkerConfiguration(
+        worker_id=WorkerId("abc123"),
+        worker_label="local",
+        kind=WorkerKind.ROOT_LOCAL,
+    )
+
+    task._data_partition = partition
+    task._evaluation_config = evaluation
+    task._dataset_sources = (source,)
+    task._models.append(registered)
+    task._workers.append(worker)
+    task._available_workers = [worker]
+    task._next_model_number = 2
+    task._consolidation_state = ConsolidationState.CONSOLIDATED
+    task._parent_id = ParentId("parent-a")
+    task._execution_status = ExecutionStatus.RUNNING
+
+    cloned = task.clone_configuration(tmp_path / "cloned-work-dir")
+
+    assert cloned is not task
+    assert cloned.work_dir == (tmp_path / "cloned-work-dir").resolve()
+    assert cloned.state is ConsolidationState.INITIALIZED
+    assert cloned.parent_id is None
+    assert cloned._execution_status is ExecutionStatus.NOT_STARTED
+    assert cloned._data_partition is partition
+    assert cloned._evaluation_config is evaluation
+    assert cloned._dataset_sources == (source,)
+    assert cloned._models == [registered]
+    assert cloned._models is not task._models
+    assert cloned._workers == [worker]
+    assert cloned._workers is not task._workers
+    assert cloned._next_model_number == 2
+    assert cloned._models[0].model_input == managed_model
+    assert cloned.list_available_workers(tabular_return=False) is None
+    assert not (cloned.work_dir / "models_for_transfer" / "model.pkl").exists()
+    assert {entry.name for entry in cloned.work_dir.iterdir()} == {
+        "cocoonet_metadata.csv",
+        "models_for_transfer",
+        "attempt_results",
+        "logs",
+    }
+
+    cloned._models.clear()
+    cloned._workers.clear()
+    assert task._models == [registered]
+    assert task._workers == [worker]
+    assert task._execution_status is ExecutionStatus.RUNNING
+    assert managed_model.read_bytes() == b"model"
+
+
+def test_clone_configuration_failure_preserves_source_and_destination(
+    tmp_path: Path,
+) -> None:
+    """Preserve both tasks when fresh destination preparation is rejected."""
+    task = EvaluationTask(tmp_path / "source-work-dir")
+    source_fields = task.__dict__.copy()
+
+    destination = tmp_path / "nonempty-destination"
+    destination.mkdir()
+    retained = destination / "retained.txt"
+    retained.write_text("retained", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"must be empty when overwrite=False"):
+        task.clone_configuration(destination)
+
+    assert task.__dict__ == source_fields
+    assert retained.read_text(encoding="utf-8") == "retained"
+    assert {entry.name for entry in destination.iterdir()} == {"retained.txt"}
+
+
+def test_clone_copies_inactive_progress_and_rebases_managed_model_paths(
+    tmp_path: Path,
+) -> None:
+    """Copy persisted progress and rebase only root-managed model paths."""
+    dataset_source = tmp_path / "dataset-source.csv"
+    dataset_source.write_text("sample_label,y\nsample,1\n", encoding="utf-8")
+    external_model = tmp_path / "external-model.pkl"
+    external_model.write_bytes(b"external")
+
+    task = EvaluationTask(tmp_path / "source-work-dir")
+    managed_model = task.work_dir / "models_for_transfer" / "managed.pkl"
+    managed_model.write_bytes(b"managed")
+    execution_state = task.work_dir / "execution_state.csv"
+    execution_state.write_bytes(b"execution-progress")
+    partial_log = task.work_dir / "logs" / "root_running.log.partial"
+    partial_log.write_bytes(b"partial-log")
+    attempt_directory = task.work_dir / "attempt_results" / "attempt-1"
+    attempt_directory.mkdir()
+    (attempt_directory / "result.bin").write_bytes(b"result")
+
+    managed_registration = _RegisteredModel(
+        reference=ModelReference(
+            model_id=ModelId("1"),
+            model_label="managed",
+            family=ModelFamily.SKLEARN,
+            task_kind=TaskKind.REGRESSION,
+        ),
+        model_input=managed_model,
+    )
+    external_registration = _RegisteredModel(
+        reference=ModelReference(
+            model_id=ModelId("2"),
+            model_label="external",
+            family=ModelFamily.SKLEARN,
+            task_kind=TaskKind.REGRESSION,
+        ),
+        model_input=external_model,
+    )
+    worker = WorkerConfiguration(
+        worker_id=WorkerId("abc123"),
+        worker_label="local",
+        kind=WorkerKind.ROOT_LOCAL,
+    )
+    task._dataset_sources = (dataset_source,)
+    task._models.extend((managed_registration, external_registration))
+    task._workers.append(worker)
+    task._available_workers = [worker]
+    task._next_model_number = 3
+    task._consolidation_state = ConsolidationState.CONSOLIDATED
+    task._parent_id = ParentId("parent-a")
+    task._execution_status = ExecutionStatus.SETTLED
+
+    source_files = {
+        path.relative_to(task.work_dir): path.read_bytes() for path in task.work_dir.rglob("*") if path.is_file()
+    }
+    destination = tmp_path / "cloned-work-dir"
+    destination.mkdir()
+
+    cloned = task.clone(destination)
+
+    cloned_files = {
+        path.relative_to(cloned.work_dir): path.read_bytes() for path in cloned.work_dir.rglob("*") if path.is_file()
+    }
+    assert cloned_files == source_files
+    assert cloned.work_dir == destination.resolve()
+    assert cloned.state is ConsolidationState.CONSOLIDATED
+    assert cloned.parent_id == ParentId("parent-a")
+    assert cloned._execution_status is ExecutionStatus.SETTLED
+    assert cloned._dataset_sources == (dataset_source,)
+    assert cloned._models is not task._models
+    assert cloned._workers is not task._workers
+    assert cloned._workers == [worker]
+    assert cloned._next_model_number == 3
+    assert cloned._models[0].model_input == (cloned.work_dir / "models_for_transfer" / "managed.pkl")
+    assert cloned._models[1].model_input == external_model
+    assert cloned.list_available_workers(tabular_return=False) is None
+
+    cloned._models.clear()
+    cloned._workers.clear()
+    assert task._models == [managed_registration, external_registration]
+    assert task._workers == [worker]
+
+
+def test_clone_rejects_running_before_destination_mutation(
+    tmp_path: Path,
+) -> None:
+    """Reject cloning while persisted execution state can still change."""
+    task = EvaluationTask(tmp_path / "source-work-dir")
+    task._execution_status = ExecutionStatus.RUNNING
+    destination = tmp_path / "unused-destination"
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"cannot be cloned while execution is running",
+    ):
+        task.clone(destination)
+
+    assert not destination.exists()

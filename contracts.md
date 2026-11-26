@@ -226,6 +226,16 @@ class EvaluationTask:
     ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None: ...
 
     def __copy__(self) -> EvaluationTask: ...
+
+    def clone_configuration(
+        self,
+        new_work_dir: PathInput,
+    ) -> EvaluationTask: ...
+
+    def clone(
+        self,
+        new_work_dir: PathInput,
+    ) -> EvaluationTask: ...
 ```
 
 Public model-table return layout:

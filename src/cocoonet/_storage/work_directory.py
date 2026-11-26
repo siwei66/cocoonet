@@ -2,6 +2,7 @@
 
 import shutil
 from collections.abc import Iterable
+from pathlib import Path
 
 from cocoonet._storage.metadata import (
     CocoonetMetadata,
@@ -13,6 +14,8 @@ from cocoonet._storage.metadata import (
 from cocoonet._storage.paths import (
     PathInput,
     RootStorageLayout,
+    _is_path_within,
+    _paths_equal,
     build_root_storage_layout,
     validate_managed_work_dir,
     validate_work_dir_ownership,
@@ -219,3 +222,99 @@ def open_work_directory(
         raise ValueError("Root metadata must declare node_role 'root'; " f"got {metadata.node_role.value!r}.")
 
     return layout, metadata
+
+
+def _discard_incomplete_clone(
+    work_dir: Path,
+    /,
+    *,
+    retain_directory: bool,
+) -> None:
+    """Remove entries created by an unsuccessful work-directory clone."""
+    if not work_dir.exists():
+        return
+
+    if not retain_directory:
+        shutil.rmtree(work_dir)
+        return
+
+    for entry in work_dir.iterdir():
+        if entry.is_symlink() or entry.is_junction():
+            entry.unlink()
+        elif entry.is_dir():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+
+
+def _clone_work_directory(  # noqa: C901
+    source_work_dir: Path,
+    target_work_dir: PathInput,
+    /,
+    *,
+    dataset_sources: tuple[Path, ...],
+) -> RootStorageLayout:
+    """Copy validated root-managed storage into a missing or empty destination."""
+    source_layout, _ = open_work_directory(
+        source_work_dir,
+        dataset_sources=dataset_sources,
+    )
+    canonical_target, _ = validate_work_dir_ownership(
+        target_work_dir,
+        dataset_sources,
+    )
+    canonical_target = validate_managed_work_dir(canonical_target)
+
+    if (
+        _paths_equal(source_layout.work_dir, canonical_target)
+        or _is_path_within(canonical_target, source_layout.work_dir)
+        or _is_path_within(source_layout.work_dir, canonical_target)
+    ):
+        raise ValueError("Clone source and destination must be separate non-nested " "working directories.")
+
+    try:
+        target_preexisted = canonical_target.exists()
+        if target_preexisted and (
+            canonical_target.is_symlink() or canonical_target.is_junction() or not canonical_target.is_dir()
+        ):
+            raise ValueError(
+                "Clone destination must be a missing or empty real directory; " f"got {str(canonical_target)!r}."
+            )
+        if target_preexisted and any(canonical_target.iterdir()):
+            raise ValueError("Clone destination must be empty; " f"got nonempty directory {str(canonical_target)!r}.")
+
+        # Links could preserve external ownership or retain the source path.
+        for directory, directory_names, file_names in source_layout.work_dir.walk():
+            for entry_name in (*directory_names, *file_names):
+                entry = directory / entry_name
+                if entry.is_symlink() or entry.is_junction():
+                    raise ValueError("Clone source must not contain symlinks or junctions; " f"got {str(entry)!r}.")
+    except ValueError:
+        raise
+    except OSError as error:
+        raise StorageError("Failed to inspect work-directory clone boundaries.") from error
+
+    try:
+        shutil.copytree(
+            source_layout.work_dir,
+            canonical_target,
+            symlinks=True,
+            copy_function=shutil.copy2,
+            dirs_exist_ok=target_preexisted,
+        )
+    except OSError as error:
+        try:
+            _discard_incomplete_clone(
+                canonical_target,
+                retain_directory=target_preexisted,
+            )
+        except OSError as cleanup_error:
+            raise StorageError(
+                "Failed to copy the work directory and remove the incomplete " f"destination {str(canonical_target)!r}."
+            ) from cleanup_error
+        raise StorageError(
+            "Failed to clone root node working directory "
+            f"{str(source_layout.work_dir)!r} to {str(canonical_target)!r}."
+        ) from error
+
+    return build_root_storage_layout(canonical_target)

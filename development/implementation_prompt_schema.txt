@@ -41,6 +41,7 @@ Propose only. The proposal requirements are:
 - Deliver the proposal in python code block with filename and the number of the line in the file to add the block.
 - Read only the relevant `AGENTS.md` rules, the relevant `contracts.md` design, and the applicable section of `roadmap.md`, and the directly affected code/tests.
 - Do not perform a broad repository audit unless required by a detected dependency.
+- Do not propose any ignorance of mypy, black or ruff error.
 - Propose the exact change only.
 - Do not modify files for next unit.
 ```

@@ -25,7 +25,10 @@ from cocoonet._contracts.execution import (
 from cocoonet._contracts.identity import ModelId, ParentId, ScalarLabel
 from cocoonet._contracts.state import ExecutionStatus
 from cocoonet._storage.paths import PathInput, resolve_physical_path
-from cocoonet._storage.work_directory import prepare_work_directory
+from cocoonet._storage.work_directory import (
+    _clone_work_directory,
+    prepare_work_directory,
+)
 from cocoonet._type_validation import validate_args, validate_declared_types
 from cocoonet.configuration import (
     ModelRegistration,
@@ -615,6 +618,173 @@ class EvaluationTask:
         )
         validate_modeling_snapshot(snapshot)
         return snapshot
+
+    def __copy__(self) -> "EvaluationTask":
+        """Reject shallow copying of evaluation-task ownership.
+
+        Raises
+        ------
+        TypeError
+            Always, because shallow copying cannot establish independent
+            persistence and lifecycle ownership.
+
+        Notes
+        -----
+        Use ``clone_configuration()`` for an independent execution using cloned
+        configuration, or ``clone()`` to additionally clone persisted files.
+        Node usage scope: Root - Prevents ambiguous duplication of root-owned
+        persistence and lifecycle state.
+        """
+        raise TypeError(
+            "EvaluationTask does not support shallow copying; use "
+            "clone_configuration(new_work_dir) for a new independent execution "
+            "using cloned configuration or clone(new_work_dir) for a new "
+            "independent execution using cloned configuration and persisted files"
+        )
+
+    def clone_configuration(
+        self,
+        new_work_dir: PathInput,
+    ) -> "EvaluationTask":
+        """Create an independent task with the same prospective configuration.
+
+        Parameters
+        ----------
+        new_work_dir : PathInput
+            Missing or empty directory to prepare as fresh Cocoonet-managed
+            root storage.
+
+        Returns
+        -------
+        EvaluationTask
+            New task retaining the dataset, evaluation, model, worker, source,
+            ordering, and model-counter configuration without execution
+            progress.
+
+        Raises
+        ------
+        TypeError
+            If ``new_work_dir`` has an incorrect runtime type.
+        ValueError
+            If the destination is unsafe, conflicts with a retained dataset
+            source, is an existing non-directory, or is nonempty.
+        StorageError
+            If destination preparation fails.
+
+        Notes
+        -----
+        Parent identity, consolidation state, execution status, persisted
+        progress, and transient worker availability are not cloned. Registry
+        containers are independent, while immutable records and opaque model
+        inputs remain shared references.
+
+        File-backed model inputs retain their original paths, including paths
+        inside the source work directory, because this operation copies no
+        managed files.
+
+        Node usage scope: Root - Reuses prospective configuration in fresh
+        independently owned root storage.
+        """
+        layout = prepare_work_directory(
+            new_work_dir,
+            dataset_sources=self._dataset_sources,
+        )
+
+        cloned = object.__new__(EvaluationTask)
+        cloned._work_dir = layout.work_dir
+        cloned._consolidation_state = ConsolidationState.INITIALIZED
+        cloned._parent_id = None
+        cloned._execution_status = ExecutionStatus.NOT_STARTED
+        cloned._data_partition = self._data_partition
+        cloned._evaluation_config = self._evaluation_config
+        cloned._dataset_sources = self._dataset_sources
+        cloned._models = list(self._models)
+        cloned._workers = list(self._workers)
+        cloned._next_model_number = self._next_model_number
+        return cloned
+
+    def clone(
+        self,
+        new_work_dir: PathInput,
+    ) -> "EvaluationTask":
+        """Clone inactive configuration and persisted execution progress.
+
+        Parameters
+        ----------
+        new_work_dir : PathInput
+            Missing or empty directory that will receive the complete managed
+            working-directory contents.
+
+        Returns
+        -------
+        EvaluationTask
+            Independent task preserving configuration, parent identity,
+            consolidation state, execution status, registry ordering, and
+            persisted progress.
+
+        Raises
+        ------
+        RuntimeError
+            If execution is currently running.
+        TypeError
+            If ``new_work_dir`` has an incorrect runtime type.
+        ValueError
+            If a storage boundary is invalid, the destination is nonempty or
+            nested with the source, or the source contains links.
+        StorageError
+            If inspection, copying, or incomplete-copy cleanup fails.
+
+        Notes
+        -----
+        Transient worker availability and live connections are not cloned.
+        Mutable registry containers are independent, while immutable records
+        and opaque in-memory model inputs remain shared references.
+
+        File-backed model inputs inside the original managed directory are
+        rebound to corresponding copied paths. Dataset sources and other
+        external model paths remain unchanged.
+
+        Persisted files currently contain no absolute managed path fields.
+        Future persistence codecs introducing such fields must implement
+        schema-aware rebasing during this operation.
+
+        Node usage scope: Root - Duplicates inactive root persistence and its
+        corresponding in-memory execution progress.
+        """
+        if self._execution_status is ExecutionStatus.RUNNING:
+            raise RuntimeError("EvaluationTask cannot be cloned while execution is running.")
+
+        layout = _clone_work_directory(
+            self._work_dir,
+            new_work_dir,
+            dataset_sources=self._dataset_sources,
+        )
+
+        # Rebind explicit managed paths without inspecting opaque model objects.
+        cloned_models: list[_RegisteredModel] = []
+        for registered in self._models:
+            model_input = registered.model_input
+            if isinstance(model_input, Path) and model_input.is_relative_to(self._work_dir):
+                model_input = layout.work_dir / model_input.relative_to(self._work_dir)
+            cloned_models.append(
+                _RegisteredModel(
+                    reference=registered.reference,
+                    model_input=model_input,
+                )
+            )
+
+        cloned = object.__new__(EvaluationTask)
+        cloned._work_dir = layout.work_dir
+        cloned._consolidation_state = self._consolidation_state
+        cloned._parent_id = self._parent_id
+        cloned._execution_status = self._execution_status
+        cloned._data_partition = self._data_partition
+        cloned._evaluation_config = self._evaluation_config
+        cloned._dataset_sources = self._dataset_sources
+        cloned._models = cloned_models
+        cloned._workers = list(self._workers)
+        cloned._next_model_number = self._next_model_number
+        return cloned
 
     def initialize(
         self,
