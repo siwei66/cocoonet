@@ -2,11 +2,11 @@
 
 import sys
 from dataclasses import FrozenInstanceError, fields
+from importlib.metadata import version as _version
 from typing import Any
 
 import pytest
 
-from cocoonet import get_version
 from cocoonet._contracts.compatibility import CompatibilityMetadata
 from cocoonet._storage.metadata import (
     CocoonetMetadata,
@@ -159,7 +159,7 @@ def test_current_compatibility_metadata_captures_runtime() -> None:
     """Capture the installed package and complete current Python version."""
     metadata = current_compatibility_metadata()
 
-    assert metadata.cocoonet_version == get_version()
+    assert metadata.cocoonet_version == _version("cocoonet")
     assert metadata.python_version == (
         sys.version_info.major,
         sys.version_info.minor,

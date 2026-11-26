@@ -5,9 +5,9 @@ import io
 import sys
 from dataclasses import dataclass
 from enum import StrEnum
+from importlib.metadata import version as _version
 from typing import Literal
 
-from cocoonet import get_version
 from cocoonet._contracts.compatibility import (
     CompatibilityMetadata,
     validate_compatibility_metadata,
@@ -132,7 +132,7 @@ def current_compatibility_metadata() -> CompatibilityMetadata:
     Node usage scope: Shared - Used by both root and worker storage.
     """
     metadata = CompatibilityMetadata(
-        cocoonet_version=get_version(),
+        cocoonet_version=_version("cocoonet"),
         python_version=(
             sys.version_info.major,
             sys.version_info.minor,

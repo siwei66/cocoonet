@@ -1,8 +1,10 @@
-"""Public interface for the CocooNet release scaffold."""
+"""Public interface for Cocoonet."""
 
 from importlib.metadata import version as _version
 
-__all__ = ["get_version"]
+from cocoonet.evaluation_task import EvaluationTask
+
+__all__ = ["EvaluationTask", "get_version"]
 
 
 def get_version() -> str:
@@ -20,7 +22,7 @@ def get_version() -> str:
 
     Notes
     -----
-    Node usage scope: Shared - Used by both root and worker nodes.
+    Node usage scope: Shared - Provides version inspection to external users.
     """
     # Read distribution metadata to keep pyproject.toml as the version source.
     return _version("cocoonet")
