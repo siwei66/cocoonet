@@ -7,56 +7,9 @@ FOR AGENTS: DO NOT MODIFY THIS FILE WITHOUT EXPLICIT USER APPROVAL. DO NOT AUTOM
 ### 1.1 Declaration set
 
 ```python
-from __future__ import annotations
-
-from collections.abc import Iterable
-from dataclasses import dataclass
-from enum import StrEnum
-from pathlib import Path
-from typing import TYPE_CHECKING, Literal
-
-import pandas as pd
-
-if TYPE_CHECKING:
-    from cocoonet._contracts.execution import ModelingSnapshot
-    from cocoonet._contracts.identity import ModelId, ParentId, ScalarLabel, WorkerId
-    from cocoonet._storage.paths import PathInput
-
-
-class ConsolidationState(StrEnum):
-    INITIALIZED = "initialized"
-    CONSOLIDATED = "consolidated"
-    UNCONSOLIDATED = "unconsolidated"
-
-
-class ModelFamily(StrEnum):
-    SKLEARN = "sklearn"
-    SKLEARN_LIKE = "sklearn-like"
-    PYTORCH = "pytorch"
-    COCOONET = "cocoonet"
-
-
-class TaskKind(StrEnum):
-    REGRESSION = "regression"
-    CLASSIFICATION = "classification"
-
-
-class WorkerKind(StrEnum):
-    ROOT_LOCAL = "root-local"
-    ONLINE = "online"
-
-
 @dataclass(frozen=True, kw_only=True, slots=True)
 class ModelReference:
     model_id: ModelId
-    model_label: ScalarLabel
-    family: ModelFamily
-    task_kind: TaskKind
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class ModelRegistration:
-    model_input: object
     model_label: ScalarLabel
     family: ModelFamily
     task_kind: TaskKind

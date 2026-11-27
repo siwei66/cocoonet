@@ -9,7 +9,7 @@ from dataclasses import fields, is_dataclass
 from functools import lru_cache, wraps
 from importlib import import_module
 from itertools import islice
-from types import ModuleType, NoneType, UnionType
+from types import ModuleType, NoneType, SimpleNamespace, UnionType
 from typing import (
     Annotated,
     Any,
@@ -1687,8 +1687,8 @@ def validate_args(
 ) -> collections_abc.Callable[_Parameters, _ReturnType]:
     """Validate a callable's annotated input arguments at runtime.
 
-    The callable signature, resolved type hints, and annotated parameter plan
-    are cached when the decorator is applied. Each annotated input is
+    The callable signature, resolved parameter type hints, and annotated
+    parameter plan are cached when the decorator is applied. Each annotated input is
     delegated to ``validate_declared_types`` before the wrapped body executes.
     The decorator performs no independent type matching and does not validate
     the return value.
@@ -1720,7 +1720,20 @@ def validate_args(
     Node usage scope: Shared - Used by both root and worker nodes.
     """
     signature = inspect.signature(func)
-    type_hints = get_type_hints(func, include_extras=True)
+
+    # Resolve only annotations consumed by argument validation so deferred return
+    # types cannot import optional presentation dependencies.
+    parameter_annotations = {
+        name: parameter.annotation
+        for name, parameter in signature.parameters.items()
+        if parameter.annotation is not inspect.Parameter.empty
+    }
+    annotation_source = SimpleNamespace(__annotations__=parameter_annotations)
+    type_hints = get_type_hints(
+        annotation_source,
+        globalns=getattr(func, "__globals__", {}),
+        include_extras=True,
+    )
     validation_plan = tuple(
         (
             name,

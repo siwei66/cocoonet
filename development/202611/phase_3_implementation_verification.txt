@@ -1,0 +1,247 @@
+No files were modified, and the worktree remained clean.
+
+## Closing verdict
+
+Phase 3 is substantially implemented, but I would **not mark it complete yet**. The scientific and persistence foundations are strong, but four issues block a clean closure:
+
+1. The complete pytest suite has four failures caused by eager package imports.
+2. `contracts.md`, `roadmap.md`, and the accepted public-export policy conflict.
+3. The current inspection-property implementation no longer reflects the previously approved string-return design.
+4. Worker availability is represented by a declared but deliberately uninitialized field, leaving public worker-addition methods unusable through ordinary public APIs.
+
+## Validation evidence
+
+| Check | Result |
+|---|---:|
+| Pytest | **1376 passed, 4 failed, 8 skipped** |
+| mypy | Passed: 43 files |
+| Black | Passed: 43 files |
+| Ruff | Passed |
+| Worktree | Clean |
+
+The eight skips are environment-dependent symlink tests. The four failures are substantive, not missing-platform skips.
+
+## Primary findings
+
+### 1. Eager root import violates the lightweight-import design — high priority
+
+[__init__.py](E:/swectral_new/cocoonet/src/cocoonet/__init__.py:5) eagerly imports `EvaluationTask`, which imports pandas and indirectly NumPy. Consequently, even this:
+
+```python
+import cocoonet._type_validation
+```
+
+loads both NumPy and pandas.
+
+Fresh-process measurement:
+
+- `import cocoonet`: approximately 0.67 seconds
+- `import cocoonet.types`: approximately 0.67 seconds
+- `import cocoonet._type_validation`: approximately 0.66 seconds
+- All three load NumPy and pandas.
+
+This causes the four failures in [test_type_validation.py](E:/swectral_new/cocoonet/tests/test_type_validation.py:74), whose documented invariant is that ordinary validation does not load scientific frameworks.
+
+For a lightweight module, the tests express the better design. The package-root `EvaluationTask` export should eventually be made lazy while preserving:
+
+```python
+from cocoonet import EvaluationTask
+```
+
+This is the most immediate closing defect.
+
+### 2. Public-export documentation conflicts — high priority
+
+The roadmap says:
+
+- The package root exports only `EvaluationTask` and `get_version`.
+- `cocoonet.types` exposes only output records.
+- Lifecycle/selection enums and staging records remain internal.
+
+That appears in [roadmap.md](E:/swectral_new/cocoonet/roadmap.md:110), and the implementation follows it:
+
+- [types.py](E:/swectral_new/cocoonet/src/cocoonet/types.py:1) exports only `ModelReference` and `WorkerConfiguration`.
+- [__init__.py](E:/swectral_new/cocoonet/src/cocoonet/__init__.py:7) keeps the root surface minimal.
+
+However, [contracts.md](E:/swectral_new/cocoonet/contracts.md:26) still declares these as public:
+
+- `ConsolidationState`
+- `ModelFamily`
+- `TaskKind`
+- `WorkerKind`
+- `ModelRegistration`
+- `ModelReference`
+- `WorkerConfiguration`
+
+Therefore, implementation and roadmap agree with each other but not with the public contract. The contract should distinguish optional public output records from internal enums and staging records before Phase 3 closes.
+
+There is also a declaration error: [contracts.md](E:/swectral_new/cocoonet/contracts.md:166) uses `Sequence`, but the declaration block imports only `Iterable` at line 12.
+
+### 3. Inspection properties have reverted to typed values — high priority decision
+
+The current contract declares:
+
+- `work_dir -> Path`
+- `state -> ConsolidationState`
+- `parent_id -> ParentId | None`
+
+at [contracts.md](E:/swectral_new/cocoonet/contracts.md:88).
+
+The current implementation matches that contract at [evaluation_task.py](E:/swectral_new/cocoonet/src/cocoonet/evaluation_task.py:555).
+
+So current source-to-contract compliance is correct. However, this does not reflect the previously approved design in which these read-only inspection properties returned strings. The roadmap inspection row has also reverted to its earlier generic wording at [roadmap.md](E:/swectral_new/cocoonet/roadmap.md:102).
+
+This is version/design drift rather than an implementation bug. One representation must be chosen as authoritative before closure.
+
+### 4. Worker availability has partial-state semantics — medium-high risk
+
+`_available_workers` is annotated at [evaluation_task.py](E:/swectral_new/cocoonet/src/cocoonet/evaluation_task.py:527), but it is not initialized by `__init__` at lines 531–553.
+
+The class docstring says Phase 3 neither initializes nor reads it at [evaluation_task.py](E:/swectral_new/cocoonet/src/cocoonet/evaluation_task.py:494), but Phase 3 methods do read it through defensive `getattr` calls:
+
+- `add_worker`
+- `add_workers`
+- `list_available_workers`
+
+Tests make those APIs functional by directly assigning the private field at [test_workers.py](E:/swectral_new/cocoonet/tests/configuration/test_workers.py:101).
+
+Consequences:
+
+- `list_available_workers()` on a normal Phase 3 task behaves like an empty snapshot.
+- `add_worker()` and `add_workers()` cannot succeed through the current public workflow.
+- The implementation depends on partial object initialization and repeated defensive fallbacks.
+
+Deferring network refresh is reasonable. Deferring the existence of the list itself provides little benefit and complicates invariants. At minimum, the class docstring is factually inconsistent with the methods.
+
+## AGENTS.md compliance
+
+| Requirement | Assessment |
+|---|---|
+| Scientific auditability and reproducibility | Strong |
+| Explicit state ownership | Strong |
+| Functional style | Mostly compliant |
+| Unit-wise implementation | Strong |
+| Avoid speculative abstraction | Mixed |
+| Decorator-first type validation | Mostly compliant in Phase 3 |
+| Public NumPy docstrings | Mostly compliant |
+| Required node-usage statements | Incomplete |
+| Configured validation checks | Not currently compliant because pytest fails |
+| Protected-file handling | Compliant |
+
+The missing node-usage statements affect several public Phase 3 methods, including:
+
+- `work_dir`, `state`, `parent_id`
+- `snapshot`
+- `initialize`
+- `add_model`, `remove_model`
+- `add_models`, `remove_models`
+
+For example, [snapshot](E:/swectral_new/cocoonet/src/cocoonet/evaluation_task.py:589) has a Notes section but does not end it with the required node-usage statement from [AGENTS.md](E:/swectral_new/cocoonet/AGENTS.md:30).
+
+## Implemented-phase risk review
+
+| Phase | Implemented areas | Risk assessment |
+|---|---|---|
+| Phase 1 | Identities, scientific records, failures, predictions, complete results, runtime observations, compatibility | **High complexity risk**. Scientific records are well tested, but many runtime and operation records precede any execution implementation. |
+| Phase 2 | Path ownership, layouts, publication, metadata, work-directory handling, attempt state, structured logs | **Medium risk**. Filesystem safety and atomic publication are justified; state/logging machinery is comparatively elaborate before a working evaluation exists. |
+| Phase 3 | Task ownership, models, workers, lifecycle, inspection, cloning, public surface | **Medium-high risk**. Core configuration behavior is coherent, but the class is large, worker availability is incomplete, and public-document alignment is unresolved. |
+
+## Over-engineering assessment
+
+### Runtime type validator — high risk
+
+[_type_validation.py](E:/swectral_new/cocoonet/src/cocoonet/_type_validation.py:1) is approximately 1,780 physical lines and implements broad support for Python typing structures plus NumPy, pandas, and PyTorch behavior.
+
+The current user-facing configuration API mostly requires ordinary scalars, mappings, sequences, literals, and a few records. The validator’s scope is disproportionate to that need.
+
+Recommendation: retain it for stability, but freeze its feature scope. Do not add support for more annotation constructs without an actual consumer.
+
+### EvaluationTask concentration — medium-high risk
+
+[evaluation_task.py](E:/swectral_new/cocoonet/src/cocoonet/evaluation_task.py:1) is approximately 1,955 physical lines. It combines:
+
+- lifecycle ownership;
+- filesystem initialization;
+- cloning;
+- model staging/filtering/presentation/mutations;
+- worker staging/filtering/presentation/mutations;
+- parent preparation.
+
+The class itself is a meaningful owner, but its module now contains too many independently testable procedures. `add_models` and `add_workers` already require local `C901` suppressions.
+
+A broad refactor is not justified now. Future phases should avoid adding dataset and execution logic to this same file.
+
+### Return-control combinations — medium risk
+
+Repeated combinations of:
+
+- `suppress_return`
+- `tabular_return`
+- `limit`
+- `use_regex`
+
+produce substantial branching and repetitive tests across model and worker methods. They are usable, but they enlarge the behavioral matrix for a lightweight API.
+
+No immediate removal is warranted because these behaviors are contracted. Future APIs should not automatically copy this pattern unless both table and record returns are demonstrably needed.
+
+### Mandatory dependencies — high lightweight-module risk
+
+[pyproject.toml](E:/swectral_new/cocoonet/pyproject.toml:31) makes all of these mandatory:
+
+- NumPy
+- pandas
+- PyTorch
+- dill
+- aiofiles
+
+Current source does not import `dill`, and PyTorch is only used through an optional validation boundary. PyTorch is particularly heavy for users who need only scikit-learn/local CPU evaluation.
+
+Long term:
+
+- PyTorch should be an optional extra until PyTorch functionality is selected.
+- `dill` should not be mandatory until executable serialization actually uses it.
+- Scientific-family dependencies should follow selected capabilities where practical.
+
+### Contracts document ownership — medium risk
+
+[AGENTS.md](E:/swectral_new/cocoonet/AGENTS.md:44) says `contracts.md` contains only public declarations and persistence layouts and excludes algorithms.
+
+But [contracts.md](E:/swectral_new/cocoonet/contracts.md:493) contains mathematical formulas and exact NumPy/SciPy implementation expressions. This directly violates the documented ownership boundary.
+
+Those formulas may be scientifically valuable, but they belong in a scientific specification or the audited implementation/docstrings, not in the current contract document under its stated rules.
+
+## Entire-roadmap risk
+
+The 21-phase roadmap is coherent as a possible complete platform, but it should not be treated as a mandatory indivisible product.
+
+Core path:
+
+1. Dataset preparation
+2. Model boundary and execution
+3. Baseline evaluation
+4. Result persistence
+5. One root-local end-to-end workflow
+
+That vertical slice should be demonstrated before committing to:
+
+- mixed online scheduling;
+- duplicate-attempt arbitration;
+- public-worker service integration;
+- multi-round reconnection policy;
+- extensive retention and public cleanup semantics.
+
+In particular, public-worker service integration at [roadmap.md](E:/swectral_new/cocoonet/roadmap.md:424) is closer to a separate service adapter/product layer than a basic lightweight scientific Python module.
+
+Sample influence, PyTorch, online workers, and public workers are valid optional capabilities, but they should remain gated by demonstrated use rather than assumed inevitable requirements.
+
+## Final phase status
+
+Phase 3 functionality is broadly present and heavily tested, but closure should wait for these bounded decisions or repairs:
+
+1. Fix the eager-import regression so the complete test suite passes.
+2. Reconcile the public declaration set in `contracts.md` with `cocoonet.types`.
+3. Confirm whether inspection properties are typed objects or strings.
+4. Resolve or explicitly accept the partially initialized `_available_workers` invariant.
+5. Complete the missing Phase 3 node-usage docstring statements.
+
+The overall design is scientifically rigorous, but its current risk is **medium-high over-engineering**, driven mainly by premature runtime contracts, the custom validation subsystem, mandatory heavyweight dependencies, and planning far beyond the first local end-to-end evaluation.

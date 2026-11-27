@@ -411,7 +411,7 @@ def test_list_models_returns_string_table_in_registry_order(
         task_kind="regression",
     )
 
-    result = task.list_models()
+    result = task.list_models(tabular_return=True)
 
     assert isinstance(result, pd.DataFrame)
     assert list(result.columns) == [
@@ -465,6 +465,7 @@ def test_list_models_combines_exact_criteria(
         family="pytorch",
         model_input="_InMemoryModel",
         use_regex=False,
+        tabular_return=True,
     )
 
     assert isinstance(result, pd.DataFrame)
@@ -473,6 +474,7 @@ def test_list_models_combines_exact_criteria(
         label="second",
         family="sklearn",
         use_regex=False,
+        tabular_return=True,
     )
     assert isinstance(no_match, pd.DataFrame)
     assert no_match.empty
@@ -491,7 +493,7 @@ def test_list_models_uses_case_sensitive_regex_fullmatch(
             task_kind="regression",
         )
 
-    result = task.list_models(label=r"alpha-\d")
+    result = task.list_models(label=r"alpha-\d", tabular_return=True)
 
     assert isinstance(result, pd.DataFrame)
     assert result["model_label"].tolist() == ["alpha-1"]
@@ -512,7 +514,10 @@ def test_list_models_displays_and_filters_canonical_file_path(
     )
     canonical_path = str(model_path.resolve())
 
-    result = task.list_models(model_input=re.escape(canonical_path))
+    result = task.list_models(
+        model_input=re.escape(canonical_path),
+        tabular_return=True,
+    )
 
     assert isinstance(result, pd.DataFrame)
     assert result["model_input"].tolist() == [canonical_path]
@@ -524,7 +529,11 @@ def test_list_models_empty_result_retains_public_schema(
     """Retain string columns and a zero-based index for no matches."""
     task = EvaluationTask(tmp_path / "work-dir")
 
-    result = task.list_models(label="missing", use_regex=False)
+    result = task.list_models(
+        label="missing",
+        use_regex=False,
+        tabular_return=True,
+    )
 
     assert isinstance(result, pd.DataFrame)
     assert list(result.columns) == [
@@ -562,7 +571,7 @@ def test_list_models_warns_when_limit_truncates_matches(
         )
 
     with pytest.warns(UserWarning, match=r"truncated to 1 of 2"):
-        result = task.list_models(limit=1)
+        result = task.list_models(limit=1, tabular_return=True)
 
     assert isinstance(result, pd.DataFrame)
     assert result["model_label"].tolist() == ["first"]
@@ -608,10 +617,10 @@ def test_list_models_rejects_invalid_search_arguments(
         list_models(**{keyword: value})
 
 
-def test_list_models_returns_matching_references_when_tabular_disabled(
+def test_list_models_returns_matching_references_by_default(
     tmp_path: Path,
 ) -> None:
-    """Return every matching immutable reference without tabular limiting."""
+    """Return every matching immutable reference by default without tabular limiting."""
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_model(
         _InMemoryModel(),
@@ -636,7 +645,6 @@ def test_list_models_returns_matching_references_when_tabular_disabled(
     result = task.list_models(
         family="sklearn",
         use_regex=False,
-        tabular_return=False,
         limit=1,
     )
 
@@ -660,7 +668,6 @@ def test_list_models_returns_none_for_empty_reference_result(
     result = task.list_models(
         label="missing",
         use_regex=False,
-        tabular_return=False,
     )
 
     assert result is None
@@ -817,6 +824,7 @@ def test_add_models_commits_in_order_and_returns_only_new_models(
         },
         "pytorch",
         "regression",
+        tabular_return=True,
     )
 
     assert isinstance(result, pd.DataFrame)
@@ -839,7 +847,7 @@ def test_add_models_commits_in_order_and_returns_only_new_models(
 def test_add_models_supports_per_model_families_and_reference_return(
     tmp_path: Path,
 ) -> None:
-    """Return every newly added immutable reference when requested."""
+    """Return every newly added immutable reference by default."""
     task = EvaluationTask(tmp_path / "work-dir")
 
     result = task.add_models(
@@ -852,7 +860,6 @@ def test_add_models_supports_per_model_families_and_reference_return(
             "torch-model": "pytorch",
         },
         "regression",
-        tabular_return=False,
     )
 
     assert isinstance(result, tuple)
@@ -959,6 +966,7 @@ def test_add_models_truncates_only_tabular_return(
             },
             "sklearn",
             "regression",
+            tabular_return=True,
             limit=1,
         )
 
@@ -1041,6 +1049,7 @@ def test_remove_models_filters_and_removes_all_matches(
     result = task.remove_models(
         label=r"alpha-\d",
         family="sklearn",
+        tabular_return=True,
     )
 
     assert isinstance(result, pd.DataFrame)
@@ -1073,6 +1082,7 @@ def test_remove_models_combines_exact_criteria(
         family="pytorch",
         model_input="_InMemoryModel",
         use_regex=False,
+        tabular_return=True,
     )
 
     assert isinstance(result, pd.DataFrame)
@@ -1123,7 +1133,7 @@ def test_remove_models_requires_a_criterion(
 def test_remove_models_returns_references_and_changes_lifecycle(
     tmp_path: Path,
 ) -> None:
-    """Return all removed references and apply one evaluation edit."""
+    """Return all removed references by default and apply one evaluation edit."""
     task = EvaluationTask(tmp_path / "work-dir")
     task.add_models(
         {
@@ -1141,7 +1151,6 @@ def test_remove_models_returns_references_and_changes_lifecycle(
     result = task.remove_models(
         family="sklearn",
         use_regex=False,
-        tabular_return=False,
     )
 
     assert result == expected
@@ -1192,6 +1201,7 @@ def test_remove_models_truncates_only_tabular_return(
     with pytest.warns(UserWarning, match=r"truncated to 1 of 2"):
         result = task.remove_models(
             label="first|second",
+            tabular_return=True,
             limit=1,
         )
 

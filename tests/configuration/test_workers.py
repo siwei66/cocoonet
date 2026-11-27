@@ -297,7 +297,6 @@ def test_add_workers_filters_available_workers_in_snapshot_order(
         cpu_capacity=r"8|16",
         kind=r"online",
         device=r"cpu",
-        tabular_return=False,
     )
 
     expected = (
@@ -323,7 +322,6 @@ def test_add_workers_uses_heterogeneous_execution_settings(
         n_attempt={"abc123": 1, "xyz789": 3},
         n_cpu_per_attempt={"abc123": 2, "xyz789": 4},
         memory_reserve_pct={"abc123": 10.0, "xyz789": 25.0},
-        tabular_return=False,
     )
 
     expected = (
@@ -417,7 +415,7 @@ def test_add_workers_truncates_only_tabular_return(
     ]
 
     with pytest.warns(UserWarning, match=r"truncated to 1 of 2"):
-        result = task.add_workers(limit=1)
+        result = task.add_workers(limit=1, tabular_return=True)
 
     assert isinstance(result, pd.DataFrame)
     assert result["worker_id"].tolist() == ["abc123"]
@@ -515,7 +513,7 @@ def test_list_available_workers_returns_only_availability_snapshot(
     task._available_workers = list(available)
     task._workers.append(_worker("def456", worker_label="registered-only"))
 
-    result = task.list_available_workers()
+    result = task.list_available_workers(tabular_return=True)
 
     assert isinstance(result, pd.DataFrame)
     assert result.columns.tolist() == [
@@ -563,22 +561,20 @@ def test_list_available_workers_combines_regex_criteria(
         cpu_capacity=r"8",
         kind=r"online",
         device=r"cpu",
-        tabular_return=False,
     )
 
     assert result == (expected,)
 
 
-def test_list_available_workers_reference_return_is_not_limited(
+def test_list_available_workers_default_return_is_not_limited(
     tmp_path: Path,
 ) -> None:
-    """Apply the presentation limit only to tabular returns."""
+    """Return all configurations by default despite the presentation limit."""
     task = EvaluationTask(tmp_path / "work-dir")
     expected = (_worker("abc123"), _worker("xyz789"))
     task._available_workers = list(expected)
 
     result = task.list_available_workers(
-        tabular_return=False,
         limit=1,
     )
 
@@ -591,8 +587,8 @@ def test_list_available_workers_handles_absent_and_suppressed_snapshot(
     """Treat an uninitialized snapshot as empty and support suppression."""
     task = EvaluationTask(tmp_path / "work-dir")
 
-    table = task.list_available_workers()
-    configurations = task.list_available_workers(tabular_return=False)
+    table = task.list_available_workers(tabular_return=True)
+    configurations = task.list_available_workers()
     suppressed = task.list_available_workers(suppress_return=True)
 
     assert isinstance(table, pd.DataFrame)
@@ -612,7 +608,7 @@ def test_list_available_workers_warns_when_limit_truncates(
     ]
 
     with pytest.warns(UserWarning, match=r"truncated to 1 of 2"):
-        result = task.list_available_workers(limit=1)
+        result = task.list_available_workers(limit=1, tabular_return=True)
 
     assert isinstance(result, pd.DataFrame)
     assert result["worker_id"].tolist() == ["abc123"]
@@ -672,7 +668,7 @@ def test_list_workers_returns_public_table_in_registry_order(
         )
     )
 
-    result = task.list_workers()
+    result = task.list_workers(tabular_return=True)
 
     assert isinstance(result, pd.DataFrame)
     assert result.columns.tolist() == [
@@ -723,22 +719,20 @@ def test_list_workers_combines_regex_criteria(
         cpu_capacity=r"8",
         kind=r"online",
         device=r"cpu",
-        tabular_return=False,
     )
 
     assert result == (expected,)
 
 
-def test_list_workers_reference_return_is_not_limited(
+def test_list_workers_default_return_is_not_limited(
     tmp_path: Path,
 ) -> None:
-    """Apply the presentation limit only to tabular returns."""
+    """Return all configurations by default despite the presentation limit."""
     task = EvaluationTask(tmp_path / "work-dir")
     expected = (_worker("abc123"), _worker("xyz789"))
     task._workers.extend(expected)
 
     result = task.list_workers(
-        tabular_return=False,
         limit=1,
     )
 
@@ -752,11 +746,14 @@ def test_list_workers_handles_empty_and_suppressed_returns(
     task = EvaluationTask(tmp_path / "work-dir")
     task._workers.append(_worker("abc123"))
 
-    table = task.list_workers(worker_id="missing", use_regex=False)
+    table = task.list_workers(
+        worker_id="missing",
+        use_regex=False,
+        tabular_return=True,
+    )
     references = task.list_workers(
         worker_id="missing",
         use_regex=False,
-        tabular_return=False,
     )
     suppressed = task.list_workers(suppress_return=True)
 
@@ -901,7 +898,6 @@ def test_remove_workers_removes_all_matches_without_scientific_edit(
     result = task.remove_workers(
         worker_label="batch",
         use_regex=False,
-        tabular_return=False,
     )
 
     assert result == (first, second)
@@ -974,6 +970,7 @@ def test_remove_workers_truncates_only_tabular_return(
         result = task.remove_workers(
             device="cpu",
             use_regex=False,
+            tabular_return=True,
             limit=1,
         )
 

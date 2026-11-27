@@ -6,9 +6,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-import pandas as pd
+if TYPE_CHECKING:
+    import pandas as pd
 
 from cocoonet._contracts.data import PartitionReference
 from cocoonet._contracts.execution import (
@@ -259,8 +260,10 @@ def _filter_registered_models(
 def _models_to_dataframe(
     models: tuple[_RegisteredModel, ...],
     /,
-) -> pd.DataFrame:
+) -> "pd.DataFrame":
     """Build the public string-typed model registry table."""
+    import pandas as pd
+
     rows = (
         (
             str(registered.model_id),
@@ -345,8 +348,10 @@ def _filter_workers(
 def _workers_to_dataframe(
     workers: tuple[WorkerConfiguration, ...],
     /,
-) -> pd.DataFrame:
+) -> "pd.DataFrame":
     """Build the public string-typed worker registry table."""
+    import pandas as pd
+
     rows = (
         (
             str(worker.worker_id),
@@ -912,9 +917,9 @@ class EvaluationTask:
         *,
         use_regex: bool = True,
         suppress_return: bool = False,
-        tabular_return: bool = True,
+        tabular_return: bool = False,
         limit: int = 1000,
-    ) -> tuple[ModelReference, ...] | pd.DataFrame | None:
+    ) -> "tuple[ModelReference, ...] | pd.DataFrame | None":
         """Return registered models matching all supplied criteria.
 
         Parameters
@@ -931,7 +936,7 @@ class EvaluationTask:
             matching instead of exact string equality.
         suppress_return : bool, default=False
             Whether to return no representation of matching models.
-        tabular_return : bool, default=True
+        tabular_return : bool, default=False
             Whether to return a detached string-typed table instead of
             immutable model references.
         limit : int, default=1000
@@ -1112,9 +1117,9 @@ class EvaluationTask:
         memory_reserve_pct: float | dict[str, float] = 20.0,
         use_regex: bool = True,
         suppress_return: bool = False,
-        tabular_return: bool = True,
+        tabular_return: bool = False,
         limit: int = 1000,
-    ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None:
+    ) -> "tuple[WorkerConfiguration, ...] | pd.DataFrame | None":
         """Atomically add matching available workers to task allocation.
 
         Parameters
@@ -1145,7 +1150,7 @@ class EvaluationTask:
             regular-expression matching instead of exact equality.
         suppress_return : bool, default=False
             Whether to return no representation of added workers.
-        tabular_return : bool, default=True
+        tabular_return : bool, default=False
             Whether to return a detached string-typed table instead of an
             immutable tuple of worker configurations.
         limit : int, default=1000
@@ -1297,9 +1302,9 @@ class EvaluationTask:
         *,
         use_regex: bool = True,
         suppress_return: bool = False,
-        tabular_return: bool = True,
+        tabular_return: bool = False,
         limit: int = 1000,
-    ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None:
+    ) -> "tuple[WorkerConfiguration, ...] | pd.DataFrame | None":
         """Return available workers matching supplied criteria.
 
         Parameters
@@ -1319,7 +1324,7 @@ class EvaluationTask:
             matching instead of exact string equality.
         suppress_return : bool, default=False
             Whether to return no representation of matching workers.
-        tabular_return : bool, default=True
+        tabular_return : bool, default=False
             Whether to return a detached string-typed table instead of an
             immutable tuple of worker configurations.
         limit : int, default=1000
@@ -1401,9 +1406,9 @@ class EvaluationTask:
         *,
         use_regex: bool = True,
         suppress_return: bool = False,
-        tabular_return: bool = True,
+        tabular_return: bool = False,
         limit: int = 1000,
-    ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None:
+    ) -> "tuple[WorkerConfiguration, ...] | pd.DataFrame | None":
         """Return task-registered workers matching supplied criteria.
 
         Parameters
@@ -1423,7 +1428,7 @@ class EvaluationTask:
             matching instead of exact string equality.
         suppress_return : bool, default=False
             Whether to return no representation of matching workers.
-        tabular_return : bool, default=True
+        tabular_return : bool, default=False
             Whether to return a detached string-typed table instead of an
             immutable tuple of worker configurations.
         limit : int, default=1000
@@ -1552,9 +1557,9 @@ class EvaluationTask:
         *,
         use_regex: bool = True,
         suppress_return: bool = False,
-        tabular_return: bool = True,
+        tabular_return: bool = False,
         limit: int = 1000,
-    ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None:
+    ) -> "tuple[WorkerConfiguration, ...] | pd.DataFrame | None":
         """Atomically remove all workers matching supplied criteria.
 
         Parameters
@@ -1574,7 +1579,7 @@ class EvaluationTask:
             matching instead of exact string equality.
         suppress_return : bool, default=False
             Whether to return no representation of removed workers.
-        tabular_return : bool, default=True
+        tabular_return : bool, default=False
             Whether to return a detached string-typed table instead of an
             immutable tuple of worker configurations.
         limit : int, default=1000
@@ -1733,9 +1738,9 @@ class EvaluationTask:
         task_kind: Literal["regression", "classification"],
         *,
         suppress_return: bool = False,
-        tabular_return: bool = True,
+        tabular_return: bool = False,
         limit: int = 1000,
-    ) -> tuple[ModelReference, ...] | pd.DataFrame | None:
+    ) -> "tuple[ModelReference, ...] | pd.DataFrame | None":
         """Atomically add multiple opaque models in supplied order.
 
         Parameters
@@ -1751,7 +1756,7 @@ class EvaluationTask:
             Shared prediction task for every supplied model.
         suppress_return : bool, default=False
             Whether to return no representation of the added models.
-        tabular_return : bool, default=True
+        tabular_return : bool, default=False
             Whether to return a detached string-typed table instead of
             immutable model references.
         limit : int, default=1000
@@ -1864,9 +1869,9 @@ class EvaluationTask:
         *,
         use_regex: bool = True,
         suppress_return: bool = False,
-        tabular_return: bool = True,
+        tabular_return: bool = False,
         limit: int = 1000,
-    ) -> tuple[ModelReference, ...] | pd.DataFrame | None:
+    ) -> "tuple[ModelReference, ...] | pd.DataFrame | None":
         """Atomically remove all models matching the supplied criteria.
 
         Parameters
@@ -1883,7 +1888,7 @@ class EvaluationTask:
             matching instead of exact string equality.
         suppress_return : bool, default=False
             Whether to return no representation of removed models.
-        tabular_return : bool, default=True
+        tabular_return : bool, default=False
             Whether to return a detached string-typed table instead of
             immutable model references.
         limit : int, default=1000

@@ -9,6 +9,7 @@ import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import (
     Annotated,
     Any,
@@ -38,6 +39,8 @@ from cocoonet._type_validation import (
     validate_torch_dtype,
 )
 
+_TYPE_VALIDATION_PATH = Path(type_validation.__file__).resolve()
+
 type TextValues = list[str]
 type RecursiveValues = list[int | RecursiveValues]
 
@@ -54,10 +57,12 @@ class Color(Enum):
 
 
 def _probe_scientific_imports(statements: str) -> dict[str, bool]:
-    """Run statements in a fresh process and report loaded frameworks."""
+    """Run isolated validator statements and report loaded frameworks."""
     script = (
         "import json\n"
+        "import runpy\n"
         "import sys\n"
+        f"type_validation = runpy.run_path({str(_TYPE_VALIDATION_PATH)!r})\n"
         f"{statements}\n"
         "print(json.dumps({name: name in sys.modules "
         "for name in ('numpy', 'pandas', 'torch')}))\n"
@@ -73,7 +78,7 @@ def _probe_scientific_imports(statements: str) -> dict[str, bool]:
 
 def test_type_validation_import_keeps_scientific_dependencies_unloaded() -> None:
     """Import the validator without importing scientific frameworks."""
-    assert _probe_scientific_imports("import cocoonet._type_validation") == {
+    assert _probe_scientific_imports("") == {
         "numpy": False,
         "pandas": False,
         "torch": False,
@@ -82,10 +87,7 @@ def test_type_validation_import_keeps_scientific_dependencies_unloaded() -> None
 
 def test_ordinary_validation_keeps_scientific_dependencies_unloaded() -> None:
     """Validate an ordinary Python value without scientific imports."""
-    assert _probe_scientific_imports(
-        "from cocoonet._type_validation import validate_declared_types\n"
-        "validate_declared_types(1, expected_type=int)"
-    ) == {
+    assert _probe_scientific_imports("type_validation['validate_declared_types'](1, expected_type=int)") == {
         "numpy": False,
         "pandas": False,
         "torch": False,
@@ -95,9 +97,8 @@ def test_ordinary_validation_keeps_scientific_dependencies_unloaded() -> None:
 def test_numpy_dtype_boundary_loads_only_numpy() -> None:
     """Load NumPy without loading pandas or PyTorch."""
     assert _probe_scientific_imports(
-        "from cocoonet._type_validation import validate_numpy_dtype\n"
         "try:\n"
-        "    validate_numpy_dtype([], expected_dtype='float64')\n"
+        "    type_validation['validate_numpy_dtype']([], expected_dtype='float64')\n"
         "except TypeError:\n"
         "    pass"
     ) == {
@@ -110,9 +111,8 @@ def test_numpy_dtype_boundary_loads_only_numpy() -> None:
 def test_pandas_dtype_boundary_does_not_load_torch() -> None:
     """Load pandas without loading PyTorch."""
     loaded = _probe_scientific_imports(
-        "from cocoonet._type_validation import validate_pandas_dtype\n"
         "try:\n"
-        "    validate_pandas_dtype([], expected_dtype='float64')\n"
+        "    type_validation['validate_pandas_dtype']([], expected_dtype='float64')\n"
         "except TypeError:\n"
         "    pass"
     )
@@ -124,9 +124,8 @@ def test_pandas_dtype_boundary_does_not_load_torch() -> None:
 def test_torch_dtype_boundary_does_not_load_pandas() -> None:
     """Load PyTorch without loading pandas."""
     loaded = _probe_scientific_imports(
-        "from cocoonet._type_validation import validate_torch_dtype\n"
         "try:\n"
-        "    validate_torch_dtype([], expected_dtype=None)\n"
+        "    type_validation['validate_torch_dtype']([], expected_dtype=None)\n"
         "except TypeError:\n"
         "    pass"
     )
@@ -1145,6 +1144,7 @@ def test_validate_args_caches_signature_and_type_hints(
     """Resolve the signature and annotations once when decorating."""
     signature_calls = 0
     type_hint_calls = 0
+    resolved_annotation_names: set[str] | None = None
     original_signature = inspect.signature
     original_get_type_hints = type_validation.get_type_hints
 
@@ -1156,14 +1156,17 @@ def test_validate_args_caches_signature_and_type_hints(
 
     def counted_get_type_hints(
         target: object,
+        globalns: dict[str, object] | None = None,
         *,
         include_extras: bool = False,
     ) -> dict[str, object]:
-        """Count and delegate one annotation resolution."""
-        nonlocal type_hint_calls
+        """Count and delegate one parameter-annotation resolution."""
+        nonlocal type_hint_calls, resolved_annotation_names
         type_hint_calls += 1
+        resolved_annotation_names = set(getattr(target, "__annotations__", {}))
         return original_get_type_hints(
             target,
+            globalns=globalns,
             include_extras=include_extras,
         )
 
@@ -1187,6 +1190,7 @@ def test_validate_args_caches_signature_and_type_hints(
     assert identity(2) == 2
     assert signature_calls == 1
     assert type_hint_calls == 1
+    assert resolved_annotation_names == {"value"}
 
 
 def test_validate_args_preserves_callable_metadata_and_signature() -> None:
