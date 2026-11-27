@@ -500,8 +500,8 @@ class EvaluationTask:
         Reserved snapshot of workers detected through future root-directed
         connection, heartbeat, and handshake handling. The network phase will
         initialize this list during root-node task construction and refresh it
-        before attempt allocation. Phase 3 neither initializes nor reads this
-        reserved state.
+        before attempt allocation. Phase 3 reads an existing snapshot for
+        presentation and task admission but does not initialize or refresh it.
 
     Raises
     ------
@@ -518,7 +518,8 @@ class EvaluationTask:
     Construction always performs fresh preparation and never opens or recovers
     an existing execution. The task initially has no dataset, models, workers,
     parent, or runtime activity.
-    Node usage scope: Root - Owns reusable root-side evaluation configuration.
+    Node usage scope: Root - The class and all its methods are used only on the
+    root node.
     """
 
     _work_dir: Path

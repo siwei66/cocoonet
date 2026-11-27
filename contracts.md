@@ -6,6 +6,8 @@ FOR AGENTS: DO NOT MODIFY THIS FILE WITHOUT EXPLICIT USER APPROVAL. DO NOT AUTOM
 
 ### 1.1 Declaration set
 
+The declarations below are typed API excerpts rather than standalone executable modules. Referenced record, enum, path, typing, and pandas names use their audited runtime definitions; imports are intentionally omitted.
+
 ```python
 @dataclass(frozen=True, kw_only=True, slots=True)
 class ModelReference:
@@ -71,7 +73,7 @@ class EvaluationTask:
         task_kind: Literal["regression", "classification"],
         *,
         suppress_return: bool = False,
-        tabular_return: bool = True,
+        tabular_return: bool = False,
         limit: int = 1000,
     ) -> tuple[ModelReference, ...] | pd.DataFrame | None: ...
 
@@ -83,7 +85,7 @@ class EvaluationTask:
         *,
         use_regex: bool = True,
         suppress_return: bool = False,
-        tabular_return: bool = True,
+        tabular_return: bool = False,
         limit: int = 1000,
     ) -> tuple[ModelReference, ...] | pd.DataFrame | None: ...
 
@@ -100,7 +102,7 @@ class EvaluationTask:
         *,
         use_regex: bool = True,
         suppress_return: bool = False,
-        tabular_return: bool = True,
+        tabular_return: bool = False,
         limit: int = 1000,
     ) -> tuple[ModelReference, ...] | pd.DataFrame | None: ...
 
@@ -127,7 +129,7 @@ class EvaluationTask:
         memory_reserve_pct: float | dict[str, float] = 20.0,
         use_regex: bool = True,
         suppress_return: bool = False,
-        tabular_return: bool = True,
+        tabular_return: bool = False,
         limit: int = 1000,
         ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None: ...
 
@@ -141,7 +143,7 @@ class EvaluationTask:
         *,
         use_regex: bool = True,
         suppress_return: bool = False,
-        tabular_return: bool = True,
+        tabular_return: bool = False,
         limit: int = 1000,
     ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None: ...
 
@@ -155,7 +157,7 @@ class EvaluationTask:
         *,
         use_regex: bool = True,
         suppress_return: bool = False,
-        tabular_return: bool = True,
+        tabular_return: bool = False,
         limit: int = 1000,
     ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None: ...
 
@@ -174,7 +176,7 @@ class EvaluationTask:
         *,
         use_regex: bool = True,
         suppress_return: bool = False,
-        tabular_return: bool = True,
+        tabular_return: bool = False,
         limit: int = 1000,
     ) -> tuple[WorkerConfiguration, ...] | pd.DataFrame | None: ...
 
